@@ -231,9 +231,6 @@ fn parse_user_input_questions(payload: &serde_json::Map<String, Value>) -> Vec<U
                     })
                 })
                 .collect();
-            if options.is_empty() {
-                return None;
-            }
             Some(UserInputQuestion {
                 id: id.to_string(),
                 header: header.to_string(),
@@ -523,6 +520,19 @@ mod tests {
             json!({"requestId": "r1", "questions": [{"id": "q1"}]}),
         )];
         assert!(derive_pending_user_inputs(&activities).is_empty());
+    }
+
+    #[test]
+    fn free_text_question_without_choices_stays_pending() {
+        let activities = vec![activity(
+            "a1",
+            "user-input.requested",
+            "2026-01-01T00:00:00.000Z",
+            json!({"requestId": "r1", "questions": [{"id": "resource_path", "header": "Resources", "question": "Where are the files?", "options": []}]}),
+        )];
+        let pending = derive_pending_user_inputs(&activities);
+        assert_eq!(pending.len(), 1);
+        assert!(pending[0].questions[0].options.is_empty());
     }
 
     #[test]

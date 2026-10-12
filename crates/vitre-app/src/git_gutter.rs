@@ -33,7 +33,7 @@ struct Baseline {
 /// arrives, which is also what a file outside a repository stays.
 #[derive(Debug, Default)]
 pub(crate) struct GitGutterState {
-    baseline: Option<Baseline>,
+    baseline: Option<std::sync::Arc<Baseline>>,
     /// The document the chunks and specs below were computed from.
     doc: DiffText,
     chunks: Vec<DiffChunk>,
@@ -73,6 +73,21 @@ impl GitGutterState {
         self.debounce == generation
     }
 
+    /// Share immutable baselines with a worker without copying the previous diff.
+    pub(crate) fn worker(&self) -> Self {
+        Self {
+            baseline: self.baseline.clone(),
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn accept(&mut self, result: Self) {
+        self.doc = result.doc;
+        self.chunks = result.chunks;
+        self.specs = result.specs;
+        self.peek = None;
+    }
+
     /// Adopt a `vcs.getFileBaseline` result.
     ///
     /// Returns whether anything changed. The oids are the cache key, so a
@@ -90,10 +105,12 @@ impl GitGutterState {
         if self.baseline.as_ref().map(|baseline| baseline.key.as_str()) == key.as_deref() {
             return false;
         }
-        self.baseline = key.zip(blobs).map(|(key, (_, head, _, index))| Baseline {
-            key,
-            head: DiffText::new(head),
-            index: index.map(DiffText::new),
+        self.baseline = key.zip(blobs).map(|(key, (_, head, _, index))| {
+            std::sync::Arc::new(Baseline {
+                key,
+                head: DiffText::new(head),
+                index: index.map(DiffText::new),
+            })
         });
         self.peek = None;
         true

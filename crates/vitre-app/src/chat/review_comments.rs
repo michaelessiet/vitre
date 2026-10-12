@@ -17,7 +17,7 @@ use vitre_state::review_comments::{
 
 use crate::assets::VitreIcon;
 
-use super::ChatApp;
+use super::{ChatApp, chat_text};
 
 impl ChatApp {
     /// `composerDraftStore.addReviewComment`: same-id entries are replaced,
@@ -122,17 +122,22 @@ impl ChatApp {
             return None;
         }
         let mut column = v_flex().gap_3();
-        for segment in segments {
+        for (index, segment) in segments.into_iter().enumerate() {
             match segment {
                 ReviewCommentMessageSegment::Text { text, .. } => {
                     let trimmed = text.trim().to_string();
                     if trimmed.is_empty() {
                         continue;
                     }
-                    column = column.child(div().child(SharedString::from(trimmed)));
+                    column =
+                        column.child(div().id(("review-text", index)).child(chat_text(trimmed)));
                 }
                 ReviewCommentMessageSegment::ReviewComment { comment } => {
-                    column = column.child(review_comment_card(comment, cx));
+                    column = column.child(
+                        div()
+                            .id(("review-card", index))
+                            .child(review_comment_card(comment, cx)),
+                    );
                 }
             }
         }
@@ -161,13 +166,13 @@ fn review_comment_card(comment: ReviewCommentContext, cx: &mut Context<ChatApp>)
                         .text_xs()
                         .font_medium()
                         .text_color(cx.theme().foreground)
-                        .child(SharedString::from(comment.file_path.clone())),
+                        .child(chat_text(comment.file_path.clone())),
                 )
                 .child(
                     div()
                         .text_size(px(11.))
                         .text_color(cx.theme().muted_foreground)
-                        .child(SharedString::from(format!(
+                        .child(chat_text(format!(
                             "{} · {}",
                             comment.section_title, comment.range_label
                         ))),
@@ -178,7 +183,7 @@ fn review_comment_card(comment: ReviewCommentContext, cx: &mut Context<ChatApp>)
             div()
                 .text_sm()
                 .text_color(cx.theme().foreground)
-                .child(SharedString::from(comment.text.clone())),
+                .child(chat_text(comment.text.clone())),
         );
     }
     if fence_language != "diff" && !comment.diff.trim().is_empty() {
@@ -190,8 +195,12 @@ fn review_comment_card(comment: ReviewCommentContext, cx: &mut Context<ChatApp>)
         if files.is_empty() {
             card = card.child(code_block(renderable.trim(), cx));
         } else {
-            for file in &files {
-                card = card.child(mini_unified_diff(file, cx));
+            for (index, file) in files.iter().enumerate() {
+                card = card.child(
+                    div()
+                        .id(("review-diff", index))
+                        .child(mini_unified_diff(file, cx)),
+                );
             }
         }
     }
@@ -207,7 +216,7 @@ fn code_block(text: &str, cx: &mut Context<ChatApp>) -> AnyElement {
         .font_family(cx.theme().mono_font_family.clone())
         .text_size(px(11.))
         .text_color(cx.theme().foreground)
-        .child(SharedString::from(text.to_string()))
+        .child(chat_text(text.to_string()))
         .into_any_element()
 }
 
@@ -227,8 +236,8 @@ fn mini_unified_diff(file: &PatchFile, cx: &mut Context<ChatApp>) -> AnyElement 
         .border_1()
         .border_color(cx.theme().border.opacity(0.6))
         .overflow_hidden();
-    for hunk in &file.hunks {
-        for line in &hunk.lines {
+    for (hunk_index, hunk) in file.hunks.iter().enumerate() {
+        for (line_index, line) in hunk.lines.iter().enumerate() {
             let (row_bg, number_bg, marker) = match line.kind {
                 PatchLineKind::Add => (success.opacity(0.08), success.opacity(0.12), "+"),
                 PatchLineKind::Del => (danger.opacity(0.08), danger.opacity(0.12), "-"),
@@ -248,6 +257,9 @@ fn mini_unified_diff(file: &PatchFile, cx: &mut Context<ChatApp>) -> AnyElement 
             };
             column = column.child(
                 h_flex()
+                    .id(SharedString::from(format!(
+                        "diff-line-{hunk_index}-{line_index}"
+                    )))
                     .w_full()
                     .items_stretch()
                     .bg(row_bg)
@@ -270,7 +282,7 @@ fn mini_unified_diff(file: &PatchFile, cx: &mut Context<ChatApp>) -> AnyElement 
                             .min_w_0()
                             .pr_2()
                             .text_color(foreground)
-                            .child(SharedString::from(line.content.clone())),
+                            .child(chat_text(line.content.clone())),
                     ),
             );
         }

@@ -1,0 +1,28 @@
+{
+  "method": "Three release launches, normal application home, no cache deletion, production backend bundle, VITRE_PROFILE diagnostics enabled. Different clocks: client shell time does not begin at app spawn. No CPU profiler attached.",
+  "binary_sha256": "8b144be7219fcdc0597b0a1994303d763aca8957aec1801b29d42dd39d60176d",
+  "server_sha256": "6719c86429fa21bee70e0c75679bca686892c518a9e9bd90263da82b7ca23557",
+  "runs": [
+    {
+      "run": 1,
+      "backend_launch_to_ready_ms": 983,
+      "client_start_to_shell_snapshot_ms": 972,
+      "app_spawn_to_signal_ms": 1926,
+      "probe_waits_ms": [0, 0, 0, 0, 0, 0, 0, 0, 0, 42]
+    },
+    {
+      "run": 2,
+      "backend_launch_to_ready_ms": 503,
+      "client_start_to_shell_snapshot_ms": 481,
+      "app_spawn_to_signal_ms": 495,
+      "probe_waits_ms": [0, 0, 0, 0, 82]
+    },
+    {
+      "run": 3,
+      "backend_launch_to_ready_ms": 503,
+      "client_start_to_shell_snapshot_ms": 476,
+      "app_spawn_to_signal_ms": 506,
+      "probe_waits_ms": [0, 0, 0, 0, 83]
+    }
+  ]
+}

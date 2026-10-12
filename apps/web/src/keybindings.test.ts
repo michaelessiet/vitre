@@ -1081,7 +1081,7 @@ describe("IDE default keybindings (Zed-style docks)", () => {
     );
   });
 
-  it("scopes mod+shift+bracket traversal to the right panel only", () => {
+  it("uses mod+shift+bracket to traverse right-panel tabs from any focus", () => {
     assert.strictEqual(
       resolveShortcutCommand(
         event({ key: "[", metaKey: true, shiftKey: true, code: "BracketLeft" }),
@@ -1098,12 +1098,13 @@ describe("IDE default keybindings (Zed-style docks)", () => {
       ),
       "rightPanel.nextSurface",
     );
-    assert.isNull(
+    assert.strictEqual(
       resolveShortcutCommand(
         event({ key: "[", metaKey: true, shiftKey: true, code: "BracketLeft" }),
         DEFAULT_RESOLVED_KEYBINDINGS,
         { platform: "MacIntel" },
       ),
+      "rightPanel.previousSurface",
     );
   });
 

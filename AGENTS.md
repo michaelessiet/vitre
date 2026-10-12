@@ -1,5 +1,9 @@
 # AGENTS.md
 
+## Default Application Target
+
+- Target Vitre (`crates/vitre-app`) for application changes unless the user explicitly specifies T3 Code Electron. Shared backend changes may be made when required to support Vitre.
+
 ## Task Completion Requirements
 
 - Keep local verification focused on the files and packages changed. Run the smallest relevant test set; do not run the full workspace test suite as a routine completion step.

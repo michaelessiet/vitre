@@ -527,10 +527,7 @@ impl RenderOnce for Button {
             .items_center()
             .justify_center()
             .cursor_default()
-            .when(
-                interactive && (self.variant.is_link() || self.variant.is_text()),
-                |this| this.cursor_pointer(),
-            )
+            .when(interactive, |this| this.cursor_pointer())
             .when(
                 !disabled && cx.theme().shadow && normal_style.shadow,
                 |this| this.shadow_xs(),
@@ -599,6 +596,7 @@ impl RenderOnce for Button {
                         .active(|this| {
                             let active_style = style.active(self.outline, cx);
                             this.bg(active_style.bg)
+                                .opacity(0.82)
                                 .border_color(active_style.border)
                                 .text_color(active_style.fg)
                         })
@@ -1475,7 +1473,7 @@ mod tests {
     }
 
     /// A loading button must be as inert as a disabled one. `interactive` is what
-    /// gates the hover and active styling, the `cursor_pointer` of link buttons and
+    /// gates the hover and active styling, the pointer cursor of enabled buttons and
     /// the `mouse_down` handler, none of which depend on a listener being set.
     #[gpui::test]
     fn test_button_loading_is_not_interactive(_cx: &mut gpui::TestAppContext) {

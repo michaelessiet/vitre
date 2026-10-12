@@ -17,6 +17,7 @@
 //! - A persisted `thread.message-sent` carrying the same characters trims the
 //!   flushed prefix from the overlay (streaming) or drops it (finalized).
 
+use std::sync::Arc;
 use vitre_contracts::{
     MessageId, OrchestrationEvent, OrchestrationMessage, OrchestrationMessageRole,
     OrchestrationSessionStatus, OrchestrationSubscribeThreadInput, OrchestrationThread,
@@ -52,7 +53,7 @@ struct Overlay {
 #[derive(Debug, Default)]
 pub struct ThreadProjection {
     /// The reducer's source of truth; rendered with overlays via [`Self::view`].
-    persisted: Option<OrchestrationThread>,
+    persisted: Option<Arc<OrchestrationThread>>,
     deleted: bool,
     /// Insertion-ordered, keyed by message id (mirrors the TS `Map`).
     overlays: Vec<(MessageId, Overlay)>,
@@ -68,7 +69,7 @@ impl ThreadProjection {
     /// Warm start from a cached snapshot: resume via `afterSequence` instead
     /// of re-downloading the full thread body.
     pub fn seed(&mut self, snapshot: &OrchestrationThreadDetailSnapshot) {
-        self.persisted = Some(snapshot.thread.clone());
+        self.persisted = Some(Arc::new(snapshot.thread.clone()));
         self.deleted = false;
         self.overlays.clear();
         self.last_sequence = snapshot.snapshot_sequence.0;
@@ -109,7 +110,7 @@ impl ThreadProjection {
     /// The persisted (un-overlaid) thread. Only this may be written to a
     /// cache; the overlaid view would replay overlay text twice on resume.
     pub fn persisted(&self) -> Option<&OrchestrationThread> {
-        self.persisted.as_ref()
+        self.persisted.as_deref()
     }
 
     /// Cache snapshot to persist, or `None` while the session is starting or
@@ -126,12 +127,18 @@ impl ThreadProjection {
         }
         Some(OrchestrationThreadDetailSnapshot {
             snapshot_sequence: vitre_contracts::NonNegativeInt(self.last_sequence),
-            thread: thread.clone(),
+            thread: thread.as_ref().clone(),
         })
     }
 
     /// The render view: the persisted thread with ephemeral overlays applied.
     pub fn view(&self) -> Option<OrchestrationThread> {
+        self.shared_view().map(Arc::unwrap_or_clone)
+    }
+
+    /// Share settled history across the projection and its subscribers.
+    /// Only an active text overlay needs a materialized render snapshot.
+    pub fn shared_view(&self) -> Option<Arc<OrchestrationThread>> {
         let thread = self.persisted.as_ref()?;
         if self.deleted {
             return None;
@@ -139,7 +146,7 @@ impl ThreadProjection {
         if self.overlays.is_empty() {
             return Some(thread.clone());
         }
-        let mut result = thread.clone();
+        let mut result = thread.as_ref().clone();
         for (message_id, overlay) in &self.overlays {
             if overlay.text.is_empty() {
                 continue;
@@ -168,7 +175,16 @@ impl ThreadProjection {
                 }),
             }
         }
-        Some(result)
+        Some(Arc::new(result))
+    }
+
+    /// Apply every item in wire order; never short-circuit after the first change.
+    pub fn apply_batch(&mut self, items: &[OrchestrationThreadStreamItem]) -> bool {
+        let mut changed = false;
+        for item in items {
+            changed |= self.apply_item(item) != ThreadApplyOutcome::Unchanged;
+        }
+        changed
     }
 
     pub fn apply_item(&mut self, item: &OrchestrationThreadStreamItem) -> ThreadApplyOutcome {
@@ -184,7 +200,7 @@ impl ThreadProjection {
                 // flush self-heals.
                 self.overlays.clear();
                 self.last_sequence = snapshot.snapshot_sequence.0;
-                self.persisted = Some(snapshot.thread.clone());
+                self.persisted = Some(Arc::new(snapshot.thread.clone()));
                 self.deleted = false;
                 ThreadApplyOutcome::ThreadChanged
             }
@@ -297,7 +313,7 @@ impl ThreadProjection {
         };
         match apply_thread_detail_event(persisted, event) {
             ThreadDetailReducerResult::Updated(thread) => {
-                self.persisted = Some(*thread);
+                self.persisted = Some(Arc::from(thread));
                 ThreadApplyOutcome::ThreadChanged
             }
             ThreadDetailReducerResult::Deleted => {
@@ -387,6 +403,36 @@ mod tests {
             "createdAt": "2026-04-01T00:00:00.000Z",
             "updatedAt": "2026-04-01T00:00:00.000Z",
         })
+    }
+
+    #[test]
+    fn settled_snapshots_share_storage_and_overlay_does_not_mutate_readers() {
+        let mut projection = ThreadProjection::new();
+        projection.apply_item(&snapshot_item(1, json!([streaming_message("m", "hello")])));
+        let first = projection.shared_view().unwrap();
+        let second = projection.shared_view().unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+        projection.apply_item(&delta_item("m", 5, " world"));
+        let streaming = projection.shared_view().unwrap();
+        assert_eq!(first.messages[0].text.0, "hello");
+        assert_eq!(streaming.messages[0].text.0, "hello world");
+    }
+
+    #[test]
+    fn batch_applies_all_deltas_in_order() {
+        let mut projection = ThreadProjection::new();
+        let items = vec![
+            snapshot_item(1, json!([streaming_message("m", "hello")])),
+            delta_item("m", 5, " "),
+            delta_item("m", 6, "world"),
+        ];
+        assert!(projection.apply_batch(&items));
+        assert_eq!(
+            projection.shared_view().unwrap().messages[0].text.0,
+            "hello world"
+        );
+        assert_eq!(projection.last_sequence(), 1);
+        assert!(!projection.apply_batch(&[]));
     }
 
     fn delta_item(message_id: &str, offset: i64, delta: &str) -> OrchestrationThreadStreamItem {

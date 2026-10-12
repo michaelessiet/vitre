@@ -230,8 +230,8 @@ fn transform(text: &str, selection: Range<usize>, path: &str, command: EditLines
                 "html" | "xml" | "svg" | "md" => ("<!--", " -->"),
                 "css" | "scss" | "sass" => ("/*", " */"),
                 "rs" | "ts" | "mts" | "cts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "go" | "c"
-                | "h" | "cpp" | "cc" | "cxx" | "hh" | "hxx" | "hpp" | "java" | "kt" | "swift"
-                | "cs" | "dart" | "jsonc" => ("//", ""),
+                | "h" | "cpp" | "cc" | "cxx" | "hh" | "hxx" | "hpp" | "java" | "kt" | "kts"
+                | "ktm" | "swift" | "cs" | "dart" | "jsonc" => ("//", ""),
                 // Don't introduce invalid comments into JSON or unknown formats.
                 _ => return None,
             };
@@ -524,6 +524,8 @@ mod tests {
     fn comments_use_language_syntax_and_skip_unknown_formats() {
         for (path, expected) in [
             ("a.py", "# value"),
+            ("Main.kt", "// value"),
+            ("build.gradle.kts", "// value"),
             ("a.sql", "-- value"),
             ("a.css", "/* value */"),
             ("a.html", "<!-- value -->"),

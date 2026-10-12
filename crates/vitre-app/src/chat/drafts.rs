@@ -8,6 +8,7 @@ pub(super) struct ComposerDraft {
     text: String,
     model: Option<ModelSelection>,
     mode: Option<ProviderInteractionMode>,
+    ask_mode: bool,
     attachments: Vec<PendingAttachment>,
     review_comments: Vec<ReviewCommentContext>,
     terminal_contexts: Vec<terminal_contexts::PendingTerminalContext>,
@@ -187,6 +188,11 @@ impl ChatApp {
             }
             for (index, item) in menu.items.iter().enumerate() {
                 let (label, description, icon) = match item {
+                    ComposerMenuItem::AskMode => (
+                        "/ask".to_string(),
+                        "Ask questions or request actions using tools, skills and MCP".to_string(),
+                        IconName::MessageSquare,
+                    ),
                     ComposerMenuItem::Model => (
                         "/model".to_string(),
                         "Switch response model for this thread".to_string(),
@@ -304,11 +310,29 @@ impl ChatApp {
         self.draft_restore = self
             .draft_project
             .as_ref()
-            .map(|id| self.drafts.load(&format!("project:{}", id.0)));
+            .map(|id| self.drafts.load(&format!("project:{}", id.0)))
+            .or_else(|| Some(ComposerDraft::default()));
         self.restore_composer_draft(window, cx);
         self.composer.update(cx, |s, cx| s.focus(window, cx));
         cx.notify();
     }
+
+    pub(super) fn draft_model_selection(&self, cx: &Context<Self>) -> Option<ModelSelection> {
+        self.draft_model
+            .clone()
+            .or_else(|| {
+                self.shell
+                    .snapshot
+                    .as_ref()?
+                    .projects
+                    .iter()
+                    .find(|p| Some(&p.id) == self.draft_project.as_ref())?
+                    .default_model_selection
+                    .clone()
+            })
+            .or_else(|| default_model_selection(&self.provider_snapshots, cx))
+    }
+
     pub(super) fn render_draft_landing(
         &self,
         window: &mut Window,
@@ -329,11 +353,7 @@ impl ChatApp {
             .map(|p| p.title.0.clone())
             .unwrap_or_else(|| "Choose a project".into());
         let owner = cx.entity().downgrade();
-        let model = self
-            .draft_model
-            .clone()
-            .or_else(|| selected.and_then(|p| p.default_model_selection.clone()))
-            .or_else(|| default_model_selection(&self.provider_snapshots, cx));
+        let model = self.draft_model_selection(cx);
         let slug = model.as_ref().and_then(|m| m.model.as_str());
         let instance = model
             .as_ref()
@@ -352,6 +372,20 @@ impl ChatApp {
             .or(slug)
             .unwrap_or("Choose model")
             .to_string();
+        let descriptors = model_info
+            .and_then(|(_, m)| m.capabilities.as_ref())
+            .and_then(|c| c.option_descriptors.clone().flatten())
+            .unwrap_or_default();
+        let options = model
+            .as_ref()
+            .and_then(|m| m.options.as_ref())
+            .and_then(|o| o.as_ref())
+            .and_then(|o| o.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|o| Some((o.get("id")?.as_str()?.to_owned(), o.get("value")?.clone())))
+            .collect();
+        let reasoning = self.render_reasoning_picker(descriptors, options, cx);
         let picker = self.model_picker.clone();
         let focus = picker.as_ref().map(|p| p.read(cx).query.focus_handle(cx));
         let picker_owner = cx.weak_entity();
@@ -408,7 +442,7 @@ impl ChatApp {
                     .child(Textarea::new(&self.composer).appearance(false).disabled(self.draft_creating))
                     .children(self.pending_attachments.iter().enumerate().map(|(i,a)| Button::new(("draft-attachment",i)).ghost().small().label(format!("{} ×",a.name))
                         .on_click(cx.listener(move |app,_,_,cx| {app.pending_attachments.remove(i); app.schedule_draft_save(cx); cx.notify();}))))
-                    .child(h_flex().gap_2().flex_wrap().child(model_menu)
+                    .child(h_flex().gap_2().flex_wrap().child(model_menu).children(reasoning)
                         .child(self.render_mode_switch(self.draft_mode == Some(ProviderInteractionMode::Plan),window,cx))
                         .child(Button::new("draft-attach").ghost().small().icon(IconName::Plus).tooltip("Attach files…").on_click(cx.listener(|app,_,w,cx| app.attach_files(w,cx)))))
                     .child(h_flex().justify_between().gap_3()
@@ -423,6 +457,7 @@ impl ChatApp {
             text: self.composer.read(cx).value().to_string(),
             model: self.draft_model.clone(),
             mode: self.draft_mode.clone(),
+            ask_mode: self.ask_mode,
             attachments: self.pending_attachments.clone(),
             review_comments: self.pending_review_comments.clone(),
             terminal_contexts: self.pending_terminal_contexts.clone(),
@@ -516,6 +551,7 @@ impl ChatApp {
         self.pending_terminal_contexts = draft.terminal_contexts;
         self.draft_model = draft.model;
         self.draft_mode = draft.mode;
+        self.ask_mode = draft.ask_mode;
         self.sync_composer_menu(cx);
         self.sync_mention(cx);
     }
@@ -533,6 +569,7 @@ mod tests {
                 "env/thread/one",
                 &ComposerDraft {
                     text: "keep café\n".into(),
+                    ask_mode: true,
                     attachments: vec![PendingAttachment {
                         name: "one.txt".into(),
                         mime_type: "text/plain".into(),
@@ -556,6 +593,8 @@ mod tests {
         store.flush();
         let restored = DraftStore::new(&dir);
         assert_eq!(restored.load("env/thread/one").text, "keep café\n");
+        assert!(restored.load("env/thread/one").ask_mode);
+        assert!(!restored.load("two").ask_mode);
         assert_eq!(restored.load("env/thread/one").attachments.len(), 1);
         assert_eq!(restored.load("two").text, "separate");
         assert!(restored.load("missing").text.is_empty());

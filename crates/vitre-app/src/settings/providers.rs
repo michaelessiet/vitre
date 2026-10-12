@@ -109,7 +109,7 @@ fn provider_name(provider: &ServerProvider) -> String {
 fn provider_summary(provider: &ServerProvider, reveal: bool) -> String {
     let name = provider_name(provider);
     if !provider.enabled {
-        return format!("Disabled – {name} is disabled in T3 Code settings.");
+        return format!("Disabled – {name} is disabled in Vitre settings.");
     }
     let message = provider
         .message

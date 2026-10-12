@@ -310,6 +310,64 @@ mod tests {
         assert_eq!(shortcut_string(&shortcut), expected);
     }
 
+    #[gpui::test]
+    fn global_bracket_shortcut_dispatches_from_text_input(cx: &mut gpui::TestAppContext) {
+        use gpui::{Focusable as _, prelude::*};
+        use gpui_component::input::{Input, InputState};
+        use std::cell::Cell;
+
+        struct Probe {
+            input: gpui::Entity<InputState>,
+            count: Rc<Cell<usize>>,
+        }
+        impl gpui::Render for Probe {
+            fn render(
+                &mut self,
+                _: &mut gpui::Window,
+                _: &mut gpui::Context<Self>,
+            ) -> impl gpui::IntoElement {
+                let count = self.count.clone();
+                gpui::div()
+                    .on_action(move |_: &chat::RightPanelNextSurface, _, _| {
+                        count.set(count.get() + 1)
+                    })
+                    .child(Input::new(&self.input))
+            }
+        }
+
+        let config = serde_json::from_value::<ResolvedKeybindingsConfig>(serde_json::json!([{
+            "command": "rightPanel.nextSurface",
+            "shortcut": {
+                "key": "]",
+                "modKey": true,
+                "metaKey": false,
+                "ctrlKey": false,
+                "shiftKey": true,
+                "altKey": false
+            }
+        }]))
+        .unwrap();
+        let count = Rc::new(Cell::new(0));
+        let observed = count.clone();
+        cx.update(|cx| {
+            gpui_component::init(cx);
+            install(&config, cx);
+        });
+        let (probe, cx) = cx.add_window_view(|window, cx| Probe {
+            input: cx.new(|cx| InputState::new(window, cx)),
+            count: observed,
+        });
+        let input = probe.read_with(cx, |probe, _| probe.input.clone());
+        cx.update(|window, cx| input.read(cx).focus_handle(cx).focus(window, cx));
+        let key = if cfg!(target_os = "macos") {
+            "cmd-shift-]"
+        } else {
+            "ctrl-shift-]"
+        };
+        cx.simulate_keystrokes(key);
+        assert_eq!(count.get(), 1);
+    }
+
     #[test]
     fn when_ast_maps_to_native_focus_contexts() {
         let ast = KeybindingWhenNode::Or {

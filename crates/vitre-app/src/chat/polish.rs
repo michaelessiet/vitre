@@ -11,13 +11,13 @@ pub(super) fn reveal(id: impl Into<gpui::ElementId>, child: impl IntoElement) ->
         .child(child)
         .with_animation(
             id,
-            Animation::new(Duration::from_millis(220))
+            Animation::new(Duration::from_millis(180))
                 .with_easing(gpui_component::animation::ease_out_cubic),
             |element, progress| {
                 element
                     .opacity(progress)
                     .relative()
-                    .top(px(6. * (1. - progress)))
+                    .top(px(4. * (1. - progress)))
             },
         )
         .into_any_element()
@@ -38,15 +38,146 @@ pub(super) fn activity_orb(cx: &mut Context<ChatApp>) -> Entity<Orb> {
 }
 
 impl ChatApp {
+    pub(super) fn render_reasoning_picker(
+        &self,
+        option_descriptors: Vec<ProviderOptionDescriptor>,
+        selected_model_options: HashMap<String, serde_json::Value>,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        if option_descriptors.is_empty() {
+            return None;
+        }
+        Some({
+            let descriptors = option_descriptors;
+            let mut current_options = selected_model_options;
+            if self.composer.read(cx).value().starts_with("Ultrathink:") {
+                for descriptor in &descriptors {
+                    if let ProviderOptionDescriptor::SelectProviderOptionDescriptor(select) =
+                        descriptor
+                        && select
+                            .prompt_injected_values
+                            .as_ref()
+                            .and_then(|v| v.as_ref())
+                            .is_some_and(|values| values.iter().any(|v| v.0 == "ultrathink"))
+                    {
+                        current_options
+                            .insert(select.id.0.clone(), serde_json::json!("ultrathink"));
+                    }
+                }
+            }
+            let chat = cx.entity().downgrade();
+            Button::new("model-traits")
+                .label(reasoning_label(&descriptors, &current_options))
+                .tooltip("Choose model reasoning level")
+                .disabled(self.draft_creating)
+                .icon(Icon::new(VitreIcon::Zap))
+                .ghost()
+                .small()
+                .dropdown_menu(move |mut menu, _, _| {
+                    for descriptor in &descriptors {
+                        match descriptor {
+                            ProviderOptionDescriptor::SelectProviderOptionDescriptor(select) => {
+                                menu = menu.item(PopupMenuItem::label(select.label.0.clone()));
+                                let current = current_options
+                                    .get(&select.id.0)
+                                    .and_then(serde_json::Value::as_str)
+                                    .map(str::to_string)
+                                    .or_else(|| {
+                                        select.current_value.clone().flatten().map(|value| value.0)
+                                    });
+                                for option in &select.options {
+                                    let id = select.id.0.clone();
+                                    let value = option.id.0.clone();
+                                    let prompt_injected = select
+                                        .prompt_injected_values
+                                        .as_ref()
+                                        .and_then(|values| values.as_ref())
+                                        .is_some_and(|values| {
+                                            values.iter().any(|candidate| candidate.0 == value)
+                                        });
+                                    let has_prompt_values = select
+                                        .prompt_injected_values
+                                        .as_ref()
+                                        .and_then(|v| v.as_ref())
+                                        .is_some_and(|v| !v.is_empty());
+                                    let owner = chat.clone();
+                                    menu = menu.item(
+                                        PopupMenuItem::new(option.label.0.clone())
+                                            .checked(current.as_ref() == Some(&value))
+                                            .on_click(move |_, window, cx| {
+                                                let id = id.clone();
+                                                let value = value.clone();
+                                                let _ = owner.update(cx, |this, cx| {
+                                                    if prompt_injected {
+                                                        this.set_prompt_effort(&value, window, cx);
+                                                    } else {
+                                                        if has_prompt_values {
+                                                            this.set_prompt_effort(
+                                                                &value, window, cx,
+                                                            );
+                                                        }
+                                                        this.set_model_option(
+                                                            id,
+                                                            serde_json::Value::String(value),
+                                                            cx,
+                                                        )
+                                                    }
+                                                });
+                                            }),
+                                    );
+                                }
+                            }
+                            ProviderOptionDescriptor::BooleanProviderOptionDescriptor(boolean) => {
+                                let current = current_options
+                                    .get(&boolean.id.0)
+                                    .and_then(serde_json::Value::as_bool)
+                                    .or_else(|| boolean.current_value.flatten())
+                                    .unwrap_or(false);
+                                let id = boolean.id.0.clone();
+                                let owner = chat.clone();
+                                menu = menu.item(
+                                    PopupMenuItem::new(boolean.label.0.clone())
+                                        .checked(current)
+                                        .on_click(move |_, _, cx| {
+                                            let id = id.clone();
+                                            let _ = owner.update(cx, |this, cx| {
+                                                this.set_model_option(
+                                                    id,
+                                                    serde_json::Value::Bool(!current),
+                                                    cx,
+                                                )
+                                            });
+                                        }),
+                                );
+                            }
+                            ProviderOptionDescriptor::Unknown(_) => {}
+                        }
+                    }
+                    menu
+                })
+                .into_any_element()
+        })
+    }
+
     pub(super) fn render_mode_switch(
         &self,
         plan: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let supports_plan = self
+            .selected_provider()
+            .and_then(|provider| provider.show_interaction_mode_toggle.flatten())
+            .unwrap_or(true);
         let offset = gpui_base::motion::spring(
             "composer-mode-thumb",
-            if plan { 3.5f32 } else { 0. },
+            if self.ask_mode {
+                if supports_plan { 7.0f32 } else { 3.5 }
+            } else if plan {
+                3.5
+            } else {
+                0.
+            },
             gpui_base::motion::Spring::new(Duration::from_millis(260)),
             window,
             cx,
@@ -69,10 +200,14 @@ impl ChatApp {
                     .bg(cx.theme().primary.opacity(0.16)),
             )
             .children(
-                [(false, "Build"), (true, "Plan")]
+                [(false, "Build"), (true, "Plan"), (false, "Ask")]
                     .into_iter()
+                    .filter(|(is_plan, _)| !is_plan || supports_plan)
                     .map(|(is_plan, label)| {
-                        Button::new(if is_plan {
+                        let is_ask = label == "Ask";
+                        Button::new(if is_ask {
+                            "composer-ask"
+                        } else if is_plan {
                             "composer-plan"
                         } else {
                             "composer-build"
@@ -81,18 +216,24 @@ impl ChatApp {
                         .small()
                         .w(gpui::rems(3.5))
                         .label(label)
-                        .text_color(if is_plan == plan {
+                        .text_color(if is_ask == self.ask_mode && (is_ask || is_plan == plan) {
                             cx.theme().foreground
                         } else {
                             cx.theme().muted_foreground
                         })
                         .disabled(self.pending_interaction_mode.is_some() || self.draft_creating)
-                        .tooltip(if is_plan {
+                        .tooltip(if is_ask {
+                            "Ask about the codebase or request actions with tools, skills and MCP"
+                        } else if is_plan {
                             "Plan the approach before making changes"
                         } else {
                             "Build and edit with the agent"
                         })
                         .on_click(cx.listener(move |app, _, _, cx| {
+                            if is_ask {
+                                app.set_ask_mode(cx);
+                                return;
+                            }
                             app.set_interaction_mode(
                                 if is_plan {
                                     ProviderInteractionMode::Plan
@@ -258,5 +399,61 @@ impl ChatApp {
             .child(div().text_xs().text_color(cx.theme().muted_foreground.opacity(0.65))
                 .child("@ files    ·    / commands    ·    ⇧↵ new line"))
             .into_any_element()
+    }
+}
+
+fn reasoning_label(
+    descriptors: &[ProviderOptionDescriptor],
+    options: &HashMap<String, serde_json::Value>,
+) -> String {
+    for descriptor in descriptors {
+        if let ProviderOptionDescriptor::SelectProviderOptionDescriptor(select) = descriptor {
+            let id = select.id.0.to_ascii_lowercase();
+            if !id.contains("reasoning") && !id.contains("effort") {
+                continue;
+            }
+            let current = options
+                .get(&select.id.0)
+                .and_then(serde_json::Value::as_str)
+                .or_else(|| {
+                    select
+                        .current_value
+                        .as_ref()
+                        .and_then(|v| v.as_ref())
+                        .map(|v| v.0.as_str())
+                });
+            if let Some(option) = select
+                .options
+                .iter()
+                .find(|o| Some(o.id.0.as_str()) == current)
+            {
+                return format!("Reasoning: {}", option.label.0);
+            }
+        }
+    }
+    "Reasoning".into()
+}
+
+#[cfg(test)]
+mod reasoning_tests {
+    use super::*;
+
+    #[test]
+    fn reasoning_label_uses_selected_effort_and_ignores_other_traits() {
+        let descriptor = |id: &str| {
+            serde_json::from_value(serde_json::json!({
+                "type":"select", "id":id, "label":id, "currentValue":"medium",
+                "options":[{"id":"medium","label":"Medium"},{"id":"high","label":"High"}]
+            }))
+            .unwrap()
+        };
+        let descriptors = vec![descriptor("serviceTier"), descriptor("reasoningEffort")];
+        assert_eq!(
+            reasoning_label(&descriptors, &HashMap::new()),
+            "Reasoning: Medium"
+        );
+        let options = HashMap::from([("reasoningEffort".into(), serde_json::json!("high"))]);
+        assert_eq!(reasoning_label(&descriptors, &options), "Reasoning: High");
+        assert_eq!(reasoning_label(&[], &options), "Reasoning");
     }
 }

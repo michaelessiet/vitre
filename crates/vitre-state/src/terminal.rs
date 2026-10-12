@@ -104,6 +104,54 @@ pub fn apply_attach_event(state: &mut TerminalBufferState, event: &TerminalAttac
     }
 }
 
+/// Playback instructions for a native VT parser. Output must be fed directly:
+/// trimming a retained history buffer is not a terminal reset.
+#[derive(Debug, PartialEq, Eq)]
+pub enum TerminalPlayback<'a> {
+    Append(&'a str),
+    Reset(&'a str),
+    None,
+}
+
+/// Update metadata without retaining a second copy of the terminal's scrollback.
+/// Snapshots always reset, including consecutive snapshots with version 1.
+pub fn apply_playback_event<'a>(
+    state: &mut TerminalBufferState,
+    event: &'a TerminalAttachStreamEvent,
+) -> TerminalPlayback<'a> {
+    match event {
+        TerminalAttachStreamEvent::Snapshot { snapshot }
+        | TerminalAttachStreamEvent::Restarted { snapshot, .. } => {
+            state.status = TerminalClientStatus::from_wire(&snapshot.status);
+            state.error = None;
+            state.updated_at = Some(snapshot.updated_at.0.clone());
+            state.version += 1;
+            let history = &snapshot.history.0;
+            let mut start = history.len().saturating_sub(MAX_TERMINAL_BUFFER_BYTES);
+            while !history.is_char_boundary(start) {
+                start += 1;
+            }
+            TerminalPlayback::Reset(&history[start..])
+        }
+        TerminalAttachStreamEvent::Output { data, .. } => {
+            if state.status == TerminalClientStatus::Closed {
+                state.status = TerminalClientStatus::Running;
+            }
+            state.error = None;
+            state.version += 1;
+            TerminalPlayback::Append(&data.0)
+        }
+        TerminalAttachStreamEvent::Cleared { .. } => {
+            apply_attach_event(state, event);
+            TerminalPlayback::Reset("")
+        }
+        _ => {
+            apply_attach_event(state, event);
+            TerminalPlayback::None
+        }
+    }
+}
+
 /// Front-trim `buffer` to [`MAX_TERMINAL_BUFFER_BYTES`], advancing to a char
 /// boundary so the result stays valid UTF-8.
 fn trim_buffer_to_cap(buffer: &mut String) {
@@ -213,6 +261,39 @@ mod tests {
             sequence: None,
             terminal_id: "term-1".into(),
             thread_id: "t".into(),
+        }
+    }
+
+    #[test]
+    fn playback_never_replays_history_when_output_exceeds_cap() {
+        let mut state = TerminalBufferState::default();
+        let chunk = "\x1b[31mhello é\x1b[0m\r\n".repeat(4096);
+        for _ in 0..32 {
+            let event = output(&chunk);
+            assert_eq!(
+                apply_playback_event(&mut state, &event),
+                TerminalPlayback::Append(chunk.as_str())
+            );
+            assert!(state.buffer.is_empty());
+        }
+        assert_eq!(state.version, 32);
+    }
+
+    #[test]
+    fn playback_reconnect_snapshots_always_reset_on_utf8_boundary() {
+        let mut state = TerminalBufferState::default();
+        let history = "é".repeat(MAX_TERMINAL_BUFFER_BYTES);
+        let event = TerminalAttachStreamEvent::Snapshot {
+            snapshot: snapshot(&history, TerminalSessionStatus::Running),
+        };
+        for version in 1..=2 {
+            let TerminalPlayback::Reset(text) = apply_playback_event(&mut state, &event) else {
+                panic!("snapshot must reset");
+            };
+            assert_eq!(text.len(), MAX_TERMINAL_BUFFER_BYTES);
+            assert!(history.ends_with(text));
+            assert_eq!(state.version, version);
+            assert!(state.buffer.is_empty());
         }
     }
 

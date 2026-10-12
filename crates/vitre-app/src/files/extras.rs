@@ -229,12 +229,7 @@ impl FilesPanel {
                     decoded.height(),
                     bytes.len().div_ceil(1024)
                 );
-                let mut png = std::io::Cursor::new(Vec::new());
-                decoded
-                    .thumbnail(4096, 4096)
-                    .write_to(&mut png, image::ImageFormat::Png)?;
-                let image = gpui::Image::from_bytes(gpui::ImageFormat::Png, png.into_inner())
-                    .to_image_data(gpui::SvgRenderer::new(Arc::new(())))?;
+                let image = crate::image_render::from_dynamic(decoded.thumbnail(4096, 4096));
                 Ok((image, detail))
             })();
             result.map_err(|e| e.to_string())
