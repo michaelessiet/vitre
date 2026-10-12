@@ -9,11 +9,11 @@ use std::time::Duration;
 use tokio::sync::watch;
 
 use crate::spawn::{
-    BackendInfo, SidecarConfig, pick_port, random_hex_token, spawn_backend, wait_until_ready,
+    BackendInfo, SidecarConfig, pick_port, random_hex_token, spawn_backend, terminate,
+    wait_until_ready_or_shutdown,
 };
 
 const READINESS_TIMEOUT: Duration = Duration::from_secs(60);
-const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[cfg(unix)]
 static SIGNAL_CHILD_PGID: AtomicU32 = AtomicU32::new(0);
@@ -45,7 +45,6 @@ pub enum SupervisorStatus {
 pub struct Supervisor {
     status_rx: watch::Receiver<SupervisorStatus>,
     shutting_down: Arc<AtomicBool>,
-    child_pid: Arc<AtomicU32>,
     thread: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
@@ -53,21 +52,19 @@ impl Supervisor {
     pub fn start(config: SidecarConfig) -> Self {
         let (status_tx, status_rx) = watch::channel(SupervisorStatus::Idle);
         let shutting_down = Arc::new(AtomicBool::new(false));
-        let child_pid = Arc::new(AtomicU32::new(0));
 
-        let thread_flags = (shutting_down.clone(), child_pid.clone());
+        let thread_flag = shutting_down.clone();
         #[cfg(unix)]
         install_signal_forwarding();
 
         let thread = std::thread::Builder::new()
             .name("vitre-sidecar-supervisor".into())
-            .spawn(move || run_loop(config, status_tx, thread_flags.0, thread_flags.1))
+            .spawn(move || run_loop(config, status_tx, thread_flag))
             .expect("spawn supervisor thread");
 
         Self {
             status_rx,
             shutting_down,
-            child_pid,
             thread: Mutex::new(Some(thread)),
         }
     }
@@ -78,26 +75,10 @@ impl Supervisor {
         self.status_rx.clone()
     }
 
-    /// Stop supervising and SIGTERM the live child. Without this the Node
-    /// server outlives the shell as an orphan holding the SQLite home open.
+    /// Stop supervising and wait for the worker to terminate/reap its child.
+    /// Keeping teardown with the child owner also covers quitting during spawn.
     pub fn shutdown(&self) {
         self.shutting_down.store(true, Ordering::SeqCst);
-        let pid = self.child_pid.load(Ordering::SeqCst);
-        if pid != 0 {
-            #[cfg(unix)]
-            {
-                signal_process_group(pid, libc::SIGTERM);
-                let deadline = std::time::Instant::now() + SHUTDOWN_TIMEOUT;
-                while self.child_pid.load(Ordering::SeqCst) != 0
-                    && std::time::Instant::now() < deadline
-                {
-                    std::thread::sleep(Duration::from_millis(50));
-                }
-                if self.child_pid.load(Ordering::SeqCst) != 0 {
-                    signal_process_group(pid, libc::SIGKILL);
-                }
-            }
-        }
         if let Some(thread) = self.thread.lock().expect("supervisor thread lock").take() {
             let _ = thread.join();
         }
@@ -110,7 +91,7 @@ impl Drop for Supervisor {
     }
 }
 
-#[cfg(unix)]
+#[cfg(all(test, unix))]
 fn signal_process_group(pgid: u32, signal: i32) {
     if pgid != 0 {
         unsafe {
@@ -159,7 +140,6 @@ fn run_loop(
     config: SidecarConfig,
     status_tx: watch::Sender<SupervisorStatus>,
     shutting_down: Arc<AtomicBool>,
-    child_pid: Arc<AtomicU32>,
 ) {
     let Some(port) = pick_port(config.fixed_port) else {
         let _ = status_tx.send(SupervisorStatus::Stopped {
@@ -205,11 +185,11 @@ fn run_loop(
                 return;
             }
         };
-        child_pid.store(child.id(), Ordering::SeqCst);
         #[cfg(unix)]
         SIGNAL_CHILD_PGID.store(child.id(), Ordering::SeqCst);
 
-        if wait_until_ready(port, &mut child, &ready, READINESS_TIMEOUT) {
+        if wait_until_ready_or_shutdown(port, &mut child, &ready, READINESS_TIMEOUT, &shutting_down)
+        {
             backoff_ms = 500;
             eprintln!(
                 "[vitre] backend ready at http://127.0.0.1:{port} after {} ms",
@@ -220,8 +200,18 @@ fn run_loop(
             eprintln!("[vitre] backend did not become ready within the timeout");
         }
 
-        let status = child.wait();
-        child_pid.store(0, Ordering::SeqCst);
+        // The worker owns the child through spawn, readiness and teardown.
+        // A quit arriving before its PID is published cannot miss termination.
+        let status = loop {
+            if shutting_down.load(Ordering::SeqCst) {
+                terminate(&mut child);
+                break child.try_wait();
+            }
+            match child.try_wait() {
+                Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+                status => break status,
+            }
+        };
         #[cfg(unix)]
         SIGNAL_CHILD_PGID.store(0, Ordering::SeqCst);
         if shutting_down.load(Ordering::SeqCst) {
@@ -291,5 +281,105 @@ mod tests {
         let _ = child.kill();
         let _ = child.wait();
         panic!("process-group leader survived SIGTERM");
+    }
+    #[cfg(unix)]
+    #[test]
+    fn quit_during_startup_reaps_a_backend_that_never_becomes_ready() {
+        let home = std::env::temp_dir().join(format!("vitre-shutdown-{}", random_hex_token()));
+        std::fs::create_dir_all(&home).unwrap();
+        let script = home.join("backend.sh");
+        let marker = home.join("started");
+        std::fs::write(
+            &script,
+            format!(
+                "trap '' TERM\nread envelope\necho $$ > '{}'\nwhile :; do sleep 1; done\n",
+                marker.display(),
+            ),
+        )
+        .unwrap();
+        let supervisor = Supervisor::start(SidecarConfig {
+            node_binary: "sh".into(),
+            server_entry: script,
+            t3_home: home.clone(),
+            fixed_port: None,
+        });
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while !marker.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let started = std::time::Instant::now();
+        supervisor.shutdown();
+        assert!(marker.exists(), "fixture never started");
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(
+            matches!(&*supervisor.status().borrow(), SupervisorStatus::Stopped { reason } if reason == "shutdown")
+        );
+        supervisor.shutdown(); // idempotent, including the subsequent Drop
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn quit_immediately_after_start_does_not_miss_the_spawn() {
+        let home = std::env::temp_dir().join(format!("vitre-shutdown-{}", random_hex_token()));
+        std::fs::create_dir_all(&home).unwrap();
+        let script = home.join("backend.sh");
+        std::fs::write(
+            &script,
+            "trap '' TERM\nread envelope\nwhile :; do sleep 1; done\n",
+        )
+        .unwrap();
+        let supervisor = Supervisor::start(SidecarConfig {
+            node_binary: "sh".into(),
+            server_entry: script,
+            t3_home: home.clone(),
+            fixed_port: None,
+        });
+        let started = std::time::Instant::now();
+        supervisor.shutdown();
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(matches!(
+            &*supervisor.status().borrow(),
+            SupervisorStatus::Stopped { .. }
+        ));
+        std::fs::remove_dir_all(home).unwrap();
+    }
+    #[cfg(unix)]
+    #[test]
+    fn quit_after_readiness_stops_without_restart() {
+        let home = std::env::temp_dir().join(format!("vitre-shutdown-{}", random_hex_token()));
+        std::fs::create_dir_all(&home).unwrap();
+        let script = home.join("backend.sh");
+        std::fs::write(
+            &script,
+            "read envelope\necho VITRE_BACKEND_READY_V1\nexec sleep 30\n",
+        )
+        .unwrap();
+        let supervisor = Supervisor::start(SidecarConfig {
+            node_binary: "sh".into(),
+            server_entry: script,
+            t3_home: home.clone(),
+            fixed_port: None,
+        });
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while !matches!(
+            &*supervisor.status().borrow(),
+            SupervisorStatus::Ready { .. }
+        ) && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let ready = matches!(
+            &*supervisor.status().borrow(),
+            SupervisorStatus::Ready { .. }
+        );
+        let started = std::time::Instant::now();
+        supervisor.shutdown();
+        assert!(ready, "fixture never became ready");
+        assert!(started.elapsed() < Duration::from_millis(500));
+        assert!(
+            matches!(&*supervisor.status().borrow(), SupervisorStatus::Stopped { reason } if reason == "shutdown")
+        );
+        std::fs::remove_dir_all(home).unwrap();
     }
 }

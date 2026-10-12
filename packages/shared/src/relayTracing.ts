@@ -1,5 +1,6 @@
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
@@ -138,6 +139,11 @@ export function makeRelayClientTracingLayer(
       Authorization: `Bearer ${config.tracesToken}`,
       "X-Axiom-Dataset": config.tracesDataset,
     },
+    // Effect's default is 3 seconds, which the desktop app pays on the quit
+    // path whenever any relay span is still buffered — the exporter's finalizer
+    // blocks teardown on a cold round trip to Axiom. Best-effort tracing must
+    // not hold a quit open, so cap the flush and drop whatever misses it.
+    shutdownTimeout: Duration.millis(250),
     resource: {
       serviceName: resource.serviceName,
       serviceVersion: resource.serviceVersion,

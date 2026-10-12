@@ -353,7 +353,10 @@ fn main() {
         // connection arrives. Fixed copies here would survive a user's remove
         // or rebind and silently restore the old chord.
 
-        cx.on_app_quit(move |_| {
+        cx.on_app_quit(move |cx| {
+            // GPUI closes windows only after invoking quit observers. Hide now
+            // so graceful sidecar cleanup does not leave a frozen window visible.
+            cx.hide();
             supervisor.shutdown();
             async {}
         })
