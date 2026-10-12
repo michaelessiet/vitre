@@ -2,7 +2,13 @@ import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { bracketMatching, indentOnInput } from "@codemirror/language";
 import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
-import { Annotation, Compartment, EditorState, type Extension } from "@codemirror/state";
+import {
+  Annotation,
+  Compartment,
+  EditorSelection,
+  EditorState,
+  type Extension,
+} from "@codemirror/state";
 import {
   EditorView,
   crosshairCursor,
@@ -27,6 +33,11 @@ import { languageExtensionForPath } from "./languages";
 import { goToLspDefinitionAtCursor, showLspHoverAtCursor } from "./lspBridge";
 import { revealEditorLine, revealLineExtension } from "./revealLine";
 import { editorTheme } from "./theme";
+import {
+  loadEditorViewState,
+  saveEditorViewState,
+  shouldRestoreEditorViewState,
+} from "./viewStateCache";
 import { useLazyHighlighting } from "./useLazyHighlighting";
 
 // `gh` in vim normal mode shows LSP hover info at the cursor (the VSCode-vim
@@ -61,6 +72,12 @@ export interface CodeMirrorFileEditorProps {
   /** Last line of a highlighted range starting at `revealLine`. */
   revealEndLine?: number | null;
   revealRequestId?: number;
+  /**
+   * When set, cursor/scroll are remembered across unmounts under this key
+   * (see viewStateCache). A fresh explicit reveal still wins over the
+   * remembered position.
+   */
+  viewStateKey?: string;
   /** Additional extensions (e.g. review comments); reconfigured on change. */
   extensions?: Extension;
   className?: string;
@@ -149,6 +166,7 @@ export function CodeMirrorFileEditor({
   revealLine = null,
   revealEndLine = null,
   revealRequestId,
+  viewStateKey,
   extensions,
   className,
   onContentsChange,
@@ -161,10 +179,32 @@ export function CodeMirrorFileEditor({
   /** Contents last applied to or emitted from the document. */
   const syncedContentsRef = useRef<string | null>(null);
 
-  const latestRef = useRef({ contents, wordWrap, vimMode, readOnly, extensions, onContentsChange });
-  useLayoutEffect(() => {
-    latestRef.current = { contents, wordWrap, vimMode, readOnly, extensions, onContentsChange };
+  const latestRef = useRef({
+    contents,
+    wordWrap,
+    vimMode,
+    readOnly,
+    revealLine,
+    revealRequestId,
+    viewStateKey,
+    extensions,
+    onContentsChange,
   });
+  useLayoutEffect(() => {
+    latestRef.current = {
+      contents,
+      wordWrap,
+      vimMode,
+      readOnly,
+      revealLine,
+      revealRequestId,
+      viewStateKey,
+      extensions,
+      onContentsChange,
+    };
+  });
+  /** Set while restoring a remembered position: skips one mount-run reveal. */
+  const suppressNextRevealRef = useRef(false);
 
   const onViewReadyRef = useRef(onViewReady);
   useLayoutEffect(() => {
@@ -181,10 +221,30 @@ export function CodeMirrorFileEditor({
     const vimCompartment = new Compartment();
     const extraCompartment = new Compartment();
 
+    // Remembered cursor/scroll from the last unmount of this file, unless a
+    // fresh explicit reveal is pending (which must win). Contents can change
+    // while the file is closed, so offsets clamp to the current doc.
+    const saved =
+      initial.viewStateKey === undefined ? null : loadEditorViewState(initial.viewStateKey);
+    const restore = shouldRestoreEditorViewState(saved, initial.revealLine, initial.revealRequestId)
+      ? saved
+      : null;
+    const clampOffset = (offset: number) =>
+      Math.max(0, Math.min(Math.trunc(offset), initial.contents.length));
+
     const editorView = new EditorView({
       parent,
+      ...(restore?.scrollSnapshot ? { scrollTo: restore.scrollSnapshot } : {}),
       state: EditorState.create({
         doc: initial.contents,
+        ...(restore === null
+          ? {}
+          : {
+              selection: EditorSelection.single(
+                clampOffset(restore.anchor),
+                clampOffset(restore.head),
+              ),
+            }),
         extensions: [
           // Vim must precede the other keymaps so it can intercept keys first.
           vimCompartment.of(vimModeExtension(initial.vimMode)),
@@ -204,6 +264,19 @@ export function CodeMirrorFileEditor({
       }),
     });
 
+    // Capture scrolling while the view is mounted. React can detach an ancestor
+    // before cleanup, at which point the browser reports scrollTop as zero.
+    let scrollTop = restore?.scrollTop ?? 0;
+    let scrollSnapshot = restore?.scrollSnapshot ?? editorView.scrollSnapshot();
+    const rememberScroll = () => {
+      if (!editorView.scrollDOM.isConnected || editorView.scrollDOM.clientHeight === 0) return;
+      scrollTop = editorView.scrollDOM.scrollTop;
+      scrollSnapshot = editorView.scrollSnapshot();
+    };
+    editorView.scrollDOM.addEventListener("scroll", rememberScroll);
+
+    // A restored viewport suppresses the stale mount-triggered reveal.
+    suppressNextRevealRef.current = restore !== null;
     syncedContentsRef.current = initial.contents;
     setEditor({
       view: editorView,
@@ -215,6 +288,17 @@ export function CodeMirrorFileEditor({
     });
     onViewReadyRef.current?.(editorView);
     return () => {
+      editorView.scrollDOM.removeEventListener("scroll", rememberScroll);
+      const { viewStateKey: latestKey, revealRequestId: latestRevealRequestId } = latestRef.current;
+      if (latestKey !== undefined) {
+        saveEditorViewState(latestKey, {
+          anchor: editorView.state.selection.main.anchor,
+          head: editorView.state.selection.main.head,
+          scrollTop,
+          scrollSnapshot,
+          revealRequestId: latestRevealRequestId,
+        });
+      }
       onViewReadyRef.current?.(null);
       setEditor(null);
       editorView.destroy();
@@ -261,6 +345,13 @@ export function CodeMirrorFileEditor({
 
   useEffect(() => {
     if (view === null || revealRequestId === undefined) return;
+    // One-shot: a restored position suppresses only the mount-triggered run;
+    // later runs (requestId bump, QuickSearch revealLine change) reveal as
+    // usual. The mount layout-effect set the ref before this passive effect.
+    if (suppressNextRevealRef.current) {
+      suppressNextRevealRef.current = false;
+      return;
+    }
     revealEditorLine(view, revealLine, revealEndLine);
   }, [view, revealLine, revealEndLine, revealRequestId]);
 

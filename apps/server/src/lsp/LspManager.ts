@@ -213,8 +213,9 @@ export const make = Effect.gen(function* () {
   // lifecycle (start/dispose) straightforward.
   const servers = new Map<string, ManagedServer>();
 
+  const runFork = Effect.runForkWith(yield* Effect.context());
   const runtimePublish = (change: DiagnosticsChange) =>
-    Effect.runFork(PubSub.publish(diagnosticsPubSub, change));
+    runFork(PubSub.publish(diagnosticsPubSub, change));
 
   const normalizeRoot = (cwd: string, relativePath?: string) =>
     workspacePaths.normalizeWorkspaceRoot(cwd).pipe(
@@ -266,6 +267,13 @@ export const make = Effect.gen(function* () {
           // deleting it here would let the next didChange respawn a
           // crash-looping server at keystroke rate.
           managed.state = "failed";
+          runFork(
+            Effect.logWarning("language server exited unexpectedly", {
+              serverId: config.serverId,
+              workspaceRoot,
+              detail,
+            }),
+          );
           // A dead server's diagnostics are stale; mirror the settings-watcher
           // cleanup so clients drop the squiggles.
           for (const uri of managed.openDocuments.keys()) {
@@ -298,6 +306,14 @@ export const make = Effect.gen(function* () {
           error instanceof LspClientError && error.failure.kind === "not_installed"
             ? "not_installed"
             : "failed";
+        runFork(
+          Effect.logWarning("language server failed to start", {
+            serverId: config.serverId,
+            command: config.command,
+            state: managed.state,
+            failure: error instanceof LspClientError ? error.failure : error,
+          }),
+        );
       },
     );
     servers.set(serverKey(workspaceRoot, config.serverId), managed);
@@ -712,6 +728,12 @@ export const make = Effect.gen(function* () {
     function* (input) {
       const workspaceRoot = yield* normalizeRoot(input.cwd);
       const registry = yield* currentRegistry;
+      const extensionsByServer = new Map<string, Array<string>>();
+      for (const [extension, binding] of Object.entries(registry.bindings)) {
+        const list = extensionsByServer.get(binding.server.serverId) ?? [];
+        list.push(extension);
+        extensionsByServer.set(binding.server.serverId, list);
+      }
       const statuses = [];
       for (const config of registry.servers) {
         const managed = servers.get(serverKey(workspaceRoot, config.serverId));
@@ -720,6 +742,7 @@ export const make = Effect.gen(function* () {
             serverId: config.serverId,
             displayName: config.displayName,
             state: managed.state,
+            extensions: extensionsByServer.get(config.serverId) ?? [],
           });
         }
       }

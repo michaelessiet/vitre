@@ -72,6 +72,7 @@ import {
   remapFileCommentAnnotations,
 } from "./fileCommentAnnotations";
 import { LocalCommentAnnotation } from "./LocalCommentAnnotation";
+import { LspFileServerStatus } from "./LspFileServerStatus";
 import { fileContentRevision, projectFileCacheKey } from "./fileContentRevision";
 import { fileBreadcrumbs } from "./filePath";
 import { isMarkdownPreviewFile, setMarkdownTaskChecked } from "./filePreviewMode";
@@ -1039,6 +1040,7 @@ function EditableFileSurface({
         revealLine={revealLine}
         revealEndLine={revealEndLine}
         revealRequestId={revealRequestId}
+        viewStateKey={`${environmentId}:${cwd}:${relativePath}`}
         extensions={editorExtensions}
         onContentsChange={handleContentsChange}
         onViewReady={handleViewReady}
@@ -1303,6 +1305,11 @@ export default function FilePreviewPanel({
               ))}
             </div>
           </ScrollArea>
+          <LspFileServerStatus
+            environmentId={environmentId}
+            cwd={cwd}
+            relativePath={relativePath}
+          />
           {absolutePath && environmentId === primaryEnvironmentId ? (
             <OpenInPicker
               environmentId={environmentId}

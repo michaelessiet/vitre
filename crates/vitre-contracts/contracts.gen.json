@@ -5077,6 +5077,19 @@
         "displayName": {
           "$ref": "#/$defs/TrimmedNonEmptyString"
         },
+        "extensions": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "serverId": {
           "$ref": "#/$defs/TrimmedNonEmptyString"
         },

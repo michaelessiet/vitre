@@ -3188,6 +3188,12 @@ pub struct LspSemanticTokensResult {
 pub struct LspServerStatus {
     #[serde(rename = "displayName")]
     pub display_name: TrimmedNonEmptyString,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::support::double_option"
+    )]
+    pub extensions: Option<Option<Vec<String>>>,
     #[serde(rename = "serverId")]
     pub server_id: TrimmedNonEmptyString,
     pub state: LspServerStatusState,
