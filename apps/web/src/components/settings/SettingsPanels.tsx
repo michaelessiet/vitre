@@ -23,9 +23,13 @@ import {
 import {
   DEFAULT_UNIFIED_SETTINGS,
   MAX_AUTO_COMPACT_THRESHOLD_TOKENS,
+  MAX_AUTO_SAVE_DELAY_MS,
   MAX_GLASS_OPACITY,
+  MAX_THREAD_REFERENCE_MAX_CHARS,
   MIN_AUTO_COMPACT_THRESHOLD_TOKENS,
+  MIN_AUTO_SAVE_DELAY_MS,
   MIN_GLASS_OPACITY,
+  MIN_THREAD_REFERENCE_MAX_CHARS,
 } from "@t3tools/contracts/settings";
 import { createModelSelection } from "@t3tools/shared/model";
 import * as Arr from "effect/Array";
@@ -57,6 +61,7 @@ import {
   deriveProviderInstanceEntries,
   sortProviderInstanceEntries,
 } from "../../providerInstances";
+import { installClaudeBinary } from "../../claudeBinaryInstallAtoms";
 import { ensureLocalApi, readLocalApi } from "../../localApi";
 import {
   primaryServerObservabilityAtom,
@@ -103,8 +108,8 @@ import {
   SettingsPageContainer,
   SettingsRow,
   SettingsSection,
-  useRelativeTimeTick,
 } from "./settingsLayout";
+import { useNowMinute } from "../../hooks/useNowMinute";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { useAtomCommand } from "../../state/use-atom-command";
 
@@ -131,6 +136,20 @@ const TIMESTAMP_FORMAT_LABELS = {
 
 const DEFAULT_DRIVER_KIND = ProviderDriverKind.make("codex");
 
+const AUTO_SAVE_MODE_LABELS = {
+  afterDelay: "After delay",
+  onFocusChange: "On focus change",
+} as const;
+
+const AUTO_SAVE_DELAY_STEP_MS = 100;
+
+function normalizeAutoSaveDelayMs(value: number | null): number {
+  if (value === null || !Number.isFinite(value)) {
+    return DEFAULT_UNIFIED_SETTINGS.autoSaveDelayMs;
+  }
+  return Math.min(MAX_AUTO_SAVE_DELAY_MS, Math.max(MIN_AUTO_SAVE_DELAY_MS, Math.round(value)));
+}
+
 const AUTO_COMPACT_THRESHOLD_STEP_TOKENS = 10_000;
 
 function normalizeAutoCompactThresholdTokens(value: number | null): number {
@@ -140,6 +159,18 @@ function normalizeAutoCompactThresholdTokens(value: number | null): number {
   return Math.min(
     MAX_AUTO_COMPACT_THRESHOLD_TOKENS,
     Math.max(MIN_AUTO_COMPACT_THRESHOLD_TOKENS, Math.round(value)),
+  );
+}
+
+const THREAD_REFERENCE_MAX_CHARS_STEP = 1_000;
+
+function normalizeThreadReferenceMaxChars(value: number | null): number {
+  if (value === null || !Number.isFinite(value)) {
+    return DEFAULT_UNIFIED_SETTINGS.threadReferenceMaxChars;
+  }
+  return Math.min(
+    MAX_THREAD_REFERENCE_MAX_CHARS,
+    Math.max(MIN_THREAD_REFERENCE_MAX_CHARS, Math.round(value)),
   );
 }
 
@@ -164,7 +195,8 @@ const PROVIDER_SETTINGS = DRIVER_OPTIONS.map((definition) => ({
 }));
 
 function ProviderLastChecked({ lastCheckedAt }: { lastCheckedAt: string | null }) {
-  useRelativeTimeTick();
+  // Minute ticks are enough: the label never renders sub-minute precision.
+  useNowMinute();
   const lastCheckedRelative = getRelativeTimeState(lastCheckedAt);
 
   if (lastCheckedRelative.status === "missing") {
@@ -434,6 +466,18 @@ export function useSettingsRestore(onRestored?: () => void) {
         ? ["Project Grouping"]
         : []),
       ...(settings.wordWrap !== DEFAULT_UNIFIED_SETTINGS.wordWrap ? ["Word wrap"] : []),
+      ...(settings.autoSaveEnabled !== DEFAULT_UNIFIED_SETTINGS.autoSaveEnabled
+        ? ["Auto save"]
+        : []),
+      ...(settings.autoSaveMode !== DEFAULT_UNIFIED_SETTINGS.autoSaveMode
+        ? ["Auto save trigger"]
+        : []),
+      ...(settings.autoSaveDelayMs !== DEFAULT_UNIFIED_SETTINGS.autoSaveDelayMs
+        ? ["Auto save delay"]
+        : []),
+      ...(settings.openFilesInExternalEditor !== DEFAULT_UNIFIED_SETTINGS.openFilesInExternalEditor
+        ? ["Open files in external editor"]
+        : []),
       ...(settings.showFileConflictWarning !== DEFAULT_UNIFIED_SETTINGS.showFileConflictWarning
         ? ["File conflict warning"]
         : []),
@@ -452,6 +496,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.autoCompactThresholdTokens !==
       DEFAULT_UNIFIED_SETTINGS.autoCompactThresholdTokens
         ? ["Auto-compact threshold"]
+        : []),
+      ...(settings.threadReferenceMaxChars !== DEFAULT_UNIFIED_SETTINGS.threadReferenceMaxChars
+        ? ["Chat reference size limit"]
         : []),
       ...(settings.enableProviderUpdateChecks !==
       DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks
@@ -492,12 +539,17 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.automaticGitFetchInterval,
       settings.autoCompactEnabled,
       settings.autoCompactThresholdTokens,
+      settings.threadReferenceMaxChars,
       settings.enableAssistantStreaming,
       settings.enableProviderUpdateChecks,
       settings.sidebarProjectGroupingMode,
       settings.sidebarThreadPreviewCount,
       settings.timestampFormat,
+      settings.openFilesInExternalEditor,
       settings.showFileConflictWarning,
+      settings.autoSaveEnabled,
+      settings.autoSaveMode,
+      settings.autoSaveDelayMs,
       settings.vimMode,
       settings.wordWrap,
       theme,
@@ -519,6 +571,10 @@ export function useSettingsRestore(onRestored?: () => void) {
       timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
       vimMode: DEFAULT_UNIFIED_SETTINGS.vimMode,
       wordWrap: DEFAULT_UNIFIED_SETTINGS.wordWrap,
+      autoSaveEnabled: DEFAULT_UNIFIED_SETTINGS.autoSaveEnabled,
+      autoSaveMode: DEFAULT_UNIFIED_SETTINGS.autoSaveMode,
+      autoSaveDelayMs: DEFAULT_UNIFIED_SETTINGS.autoSaveDelayMs,
+      openFilesInExternalEditor: DEFAULT_UNIFIED_SETTINGS.openFilesInExternalEditor,
       showFileConflictWarning: DEFAULT_UNIFIED_SETTINGS.showFileConflictWarning,
       diffIgnoreWhitespace: DEFAULT_UNIFIED_SETTINGS.diffIgnoreWhitespace,
       glassOpacity: DEFAULT_UNIFIED_SETTINGS.glassOpacity,
@@ -528,6 +584,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       enableAssistantStreaming: DEFAULT_UNIFIED_SETTINGS.enableAssistantStreaming,
       autoCompactEnabled: DEFAULT_UNIFIED_SETTINGS.autoCompactEnabled,
       autoCompactThresholdTokens: DEFAULT_UNIFIED_SETTINGS.autoCompactThresholdTokens,
+      threadReferenceMaxChars: DEFAULT_UNIFIED_SETTINGS.threadReferenceMaxChars,
       enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
       automaticGitFetchInterval: DEFAULT_UNIFIED_SETTINGS.automaticGitFetchInterval,
       defaultThreadEnvMode: DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode,
@@ -801,6 +858,140 @@ export function GeneralSettingsPanel() {
         />
 
         <SettingsRow
+          title="Auto save"
+          description="Automatically save file edits in the built-in editor. When off, save with ⌘S / Ctrl+S."
+          resetAction={
+            settings.autoSaveEnabled !== DEFAULT_UNIFIED_SETTINGS.autoSaveEnabled ? (
+              <SettingResetButton
+                label="auto save"
+                onClick={() =>
+                  updateSettings({
+                    autoSaveEnabled: DEFAULT_UNIFIED_SETTINGS.autoSaveEnabled,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.autoSaveEnabled}
+              onCheckedChange={(checked) => updateSettings({ autoSaveEnabled: Boolean(checked) })}
+              aria-label="Automatically save file edits in the built-in editor"
+            />
+          }
+        />
+
+        <SettingsRow
+          title="Auto save trigger"
+          description="Save after a typing pause, or as soon as the editor or window loses focus."
+          resetAction={
+            settings.autoSaveMode !== DEFAULT_UNIFIED_SETTINGS.autoSaveMode ? (
+              <SettingResetButton
+                label="auto save trigger"
+                onClick={() =>
+                  updateSettings({
+                    autoSaveMode: DEFAULT_UNIFIED_SETTINGS.autoSaveMode,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Select
+              value={settings.autoSaveMode}
+              onValueChange={(value) => {
+                if (value === "afterDelay" || value === "onFocusChange") {
+                  updateSettings({ autoSaveMode: value });
+                }
+              }}
+            >
+              <SelectTrigger
+                className="w-full sm:w-40"
+                aria-label="Auto save trigger"
+                disabled={!settings.autoSaveEnabled}
+              >
+                <SelectValue>{AUTO_SAVE_MODE_LABELS[settings.autoSaveMode]}</SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                <SelectItem hideIndicator value="afterDelay">
+                  {AUTO_SAVE_MODE_LABELS.afterDelay}
+                </SelectItem>
+                <SelectItem hideIndicator value="onFocusChange">
+                  {AUTO_SAVE_MODE_LABELS.onFocusChange}
+                </SelectItem>
+              </SelectPopup>
+            </Select>
+          }
+        />
+
+        <SettingsRow
+          title="Auto save delay"
+          description="How long after you stop typing edits are saved."
+          resetAction={
+            settings.autoSaveDelayMs !== DEFAULT_UNIFIED_SETTINGS.autoSaveDelayMs ? (
+              <SettingResetButton
+                label="auto save delay"
+                onClick={() =>
+                  updateSettings({
+                    autoSaveDelayMs: DEFAULT_UNIFIED_SETTINGS.autoSaveDelayMs,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <div className="flex shrink-0 items-center gap-2">
+              <NumberField
+                value={settings.autoSaveDelayMs}
+                min={MIN_AUTO_SAVE_DELAY_MS}
+                max={MAX_AUTO_SAVE_DELAY_MS}
+                step={AUTO_SAVE_DELAY_STEP_MS}
+                size="sm"
+                className="w-32"
+                disabled={!settings.autoSaveEnabled || settings.autoSaveMode !== "afterDelay"}
+                onValueChange={(value) =>
+                  updateSettings({ autoSaveDelayMs: normalizeAutoSaveDelayMs(value) })
+                }
+              >
+                <NumberFieldGroup>
+                  <NumberFieldDecrement aria-label="Decrease auto save delay" />
+                  <NumberFieldInput aria-label="Auto save delay in milliseconds" />
+                  <NumberFieldIncrement aria-label="Increase auto save delay" />
+                </NumberFieldGroup>
+              </NumberField>
+              <span className="text-xs text-muted-foreground">ms</span>
+            </div>
+          }
+        />
+
+        <SettingsRow
+          title="Open files in external editor"
+          description="Open file links in a third-party code editor (Cursor, VS Code, …) instead of T3 Code's built-in editor."
+          resetAction={
+            settings.openFilesInExternalEditor !==
+            DEFAULT_UNIFIED_SETTINGS.openFilesInExternalEditor ? (
+              <SettingResetButton
+                label="open files in external editor"
+                onClick={() =>
+                  updateSettings({
+                    openFilesInExternalEditor: DEFAULT_UNIFIED_SETTINGS.openFilesInExternalEditor,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.openFilesInExternalEditor}
+              onCheckedChange={(checked) =>
+                updateSettings({ openFilesInExternalEditor: Boolean(checked) })
+              }
+              aria-label="Open file links in a third-party code editor instead of the built-in editor"
+            />
+          }
+        />
+
+        <SettingsRow
           title="File conflict warning"
           description="Warn in the editor when the open file changed on disk while you were editing."
           resetAction={
@@ -945,6 +1136,48 @@ export function GeneralSettingsPanel() {
                 </NumberFieldGroup>
               </NumberField>
               <span className="text-xs text-muted-foreground">tokens</span>
+            </div>
+          }
+        />
+
+        <SettingsRow
+          title="Chat reference size limit"
+          description="Character budget for each conversation inlined via a #chat reference. Roughly 4 characters per token; the default 32,000 is about 8,000 tokens per referenced chat."
+          resetAction={
+            settings.threadReferenceMaxChars !==
+            DEFAULT_UNIFIED_SETTINGS.threadReferenceMaxChars ? (
+              <SettingResetButton
+                label="chat reference size limit"
+                onClick={() =>
+                  updateSettings({
+                    threadReferenceMaxChars: DEFAULT_UNIFIED_SETTINGS.threadReferenceMaxChars,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <div className="flex shrink-0 items-center gap-2">
+              <NumberField
+                value={settings.threadReferenceMaxChars}
+                min={MIN_THREAD_REFERENCE_MAX_CHARS}
+                max={MAX_THREAD_REFERENCE_MAX_CHARS}
+                step={THREAD_REFERENCE_MAX_CHARS_STEP}
+                size="sm"
+                className="w-32"
+                onValueChange={(value) =>
+                  updateSettings({
+                    threadReferenceMaxChars: normalizeThreadReferenceMaxChars(value),
+                  })
+                }
+              >
+                <NumberFieldGroup>
+                  <NumberFieldDecrement aria-label="Decrease chat reference size limit" />
+                  <NumberFieldInput aria-label="Chat reference size limit in characters" />
+                  <NumberFieldIncrement aria-label="Increase chat reference size limit" />
+                </NumberFieldGroup>
+              </NumberField>
+              <span className="text-xs text-muted-foreground">chars</span>
             </div>
           }
         />
@@ -1327,6 +1560,41 @@ export function ProviderSettingsPanel() {
     })();
   }, [primaryEnvironment, refreshServerProviders]);
 
+  const installClaudeBinaryCommand = useAtomCommand(installClaudeBinary, {
+    reportFailure: false,
+  });
+  const [isInstallingClaudeBinary, setIsInstallingClaudeBinary] = useState(false);
+  const runClaudeBinaryInstall = useCallback(async () => {
+    if (!primaryEnvironment || isInstallingClaudeBinary) return;
+    setIsInstallingClaudeBinary(true);
+    const result = await installClaudeBinaryCommand({
+      environmentId: primaryEnvironment.environmentId,
+    });
+    setIsInstallingClaudeBinary(false);
+    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      const error = squashAtomCommandFailure(result);
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Could not install Claude Code",
+          description:
+            error instanceof Error ? error.message : "The Claude Code download did not complete.",
+        }),
+      );
+      return;
+    }
+    // Flip the provider card to healthy without waiting for the next probe.
+    void refreshServerProviders({
+      environmentId: primaryEnvironment.environmentId,
+      input: {},
+    });
+  }, [
+    primaryEnvironment,
+    isInstallingClaudeBinary,
+    installClaudeBinaryCommand,
+    refreshServerProviders,
+  ]);
+
   const runProviderUpdate = useCallback(
     async (candidate: ProviderUpdateCandidate) => {
       if (!primaryEnvironment) return;
@@ -1689,6 +1957,14 @@ export function ProviderSettingsPanel() {
                   : undefined
               }
               isUpdating={showInlineUpdateButton ? isDriverUpdateRunning : undefined}
+              onInstallBinary={
+                row.driver === "claudeAgent" && liveProvider && !liveProvider.installed
+                  ? () => void runClaudeBinaryInstall()
+                  : undefined
+              }
+              isInstallingBinary={
+                row.driver === "claudeAgent" ? isInstallingClaudeBinary : undefined
+              }
             />
           );
         })}

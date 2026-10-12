@@ -1,15 +1,28 @@
+import * as NodeModule from "node:module";
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import * as Option from "effect/Option";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import {
+  BUILDER_HOOKS_FILENAME,
+  BUILDER_HOOKS_SOURCE,
   BuildCommandFailedError,
+  ClaudeSdkPlatformPackagesNotFoundError,
+  isClaudeSdkPlatformPackagePath,
+  isClerkJsPrunableDistChunkPath,
+  isPlaywrightCorePackageDirPath,
+  pruneClaudeSdkPlatformPackages,
+  pruneStagedNodeModules,
+  StagedNodeModulesPruneTargetNotFoundError,
   createStageWorkspaceConfig,
   createStagePatchedDependencies,
   createBuildConfig,
@@ -37,6 +50,7 @@ import {
   resolvePackageManagerUserAgent,
   stageLinuxIconSize,
   STAGE_INSTALL_ARGS,
+  stripStagedSourcemaps,
 } from "./build-desktop-artifact.ts";
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
 import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
@@ -464,10 +478,19 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
   it.effect("adds passkey entitlements and both renderer protocols to signed macOS builds", () =>
     Effect.gen(function* () {
-      const config = yield* createBuildConfig("mac", "dmg", "1.2.3", true, false, undefined, {
-        entitlementsPath: "/tmp/entitlements.mac.plist",
-        provisioningProfilePath: "/tmp/t3code.provisionprofile",
-      });
+      const config = yield* createBuildConfig(
+        "mac",
+        "dmg",
+        "1.2.3",
+        true,
+        false,
+        undefined,
+        {
+          entitlementsPath: "/tmp/entitlements.mac.plist",
+          provisioningProfilePath: "/tmp/t3code.provisionprofile",
+        },
+        "/tmp/stage/electron-builder-hooks.cjs",
+      );
 
       const mac = config.mac as Record<string, unknown>;
       assert.equal(config.appId, "com.t3tools.t3code");
@@ -489,6 +512,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         false,
         undefined,
         undefined,
+        "/tmp/stage/electron-builder-hooks.cjs",
       );
 
       const win = config.win as Record<string, unknown>;
@@ -496,6 +520,547 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.equal(win.signAndEditExecutable, true);
       assert.notProperty(win, "azureSignOptions");
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
+  );
+
+  it.effect("keeps TypeScript's standard-library declarations in packaged builds", () =>
+    Effect.gen(function* () {
+      const config = yield* createBuildConfig(
+        "mac",
+        "dmg",
+        "1.2.3",
+        false,
+        false,
+        undefined,
+        undefined,
+        "/tmp/stage/electron-builder-hooks.cjs",
+      );
+
+      // onNodeModuleFile rescues typescript/lib/*.d.ts from electron-builder's
+      // default *.d.ts exclusion; without it the packaged vtsls loads zero
+      // default libs and flags every ambient global (Error, JSON, ...) as
+      // "Cannot find name". The hook is only honored alongside a files matcher.
+      assert.equal(config.onNodeModuleFile, "/tmp/stage/electron-builder-hooks.cjs");
+      assert.equal(config.afterPack, "/tmp/stage/electron-builder-hooks.cjs");
+      assert.deepStrictEqual(config.files, [{ filter: ["**/*"] }]);
+    }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
+  );
+
+  it.effect("force-includes exactly typescript/lib declaration files", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const hooksDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-builder-hooks-" });
+      const hooksPath = path.join(hooksDir, BUILDER_HOOKS_FILENAME);
+      yield* fs.writeFileString(hooksPath, BUILDER_HOOKS_SOURCE);
+      // The hooks module is loaded exactly the way electron-builder loads it:
+      // a CommonJS require of the staged absolute path.
+      const hooks = NodeModule.createRequire(import.meta.url)(hooksPath) as {
+        onNodeModuleFile: (filePath: string) => boolean;
+      };
+
+      assert.isTrue(hooks.onNodeModuleFile("/stage/node_modules/typescript/lib/lib.es5.d.ts"));
+      assert.isTrue(
+        hooks.onNodeModuleFile(
+          "/stage/node_modules/@vtsls/language-service/node_modules/typescript/lib/lib.dom.d.ts",
+        ),
+      );
+      assert.isTrue(
+        hooks.onNodeModuleFile("C:\\stage\\node_modules\\typescript\\lib\\lib.es2020.d.ts"),
+      );
+      assert.isFalse(hooks.onNodeModuleFile("/stage/node_modules/typescript/lib/tsserver.js"));
+      assert.isFalse(hooks.onNodeModuleFile("/stage/node_modules/effect/dist/index.d.ts"));
+    }).pipe(Effect.scoped),
+  );
+
+  // Satisfies the afterPack existence probes: the SDK metadata the managed
+  // Claude Code installer reads at runtime, plus the vendor files the staged
+  // node_modules prune must keep (clerk.browser.js, playwright coreBundle.js).
+  const stageAfterPackRuntimeFixtures = Effect.fn("stageAfterPackRuntimeFixtures")(function* (
+    unpackedDir: string,
+  ) {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const sdkDir = path.join(unpackedDir, "node_modules", "@anthropic-ai", "claude-agent-sdk");
+    yield* fs.makeDirectory(sdkDir, { recursive: true });
+    yield* fs.writeFileString(path.join(sdkDir, "sdk.mjs"), "export {};");
+    yield* fs.writeFileString(path.join(sdkDir, "manifest.json"), "{}");
+    const clerkDistDir = path.join(unpackedDir, "node_modules", "@clerk", "clerk-js", "dist");
+    yield* fs.makeDirectory(clerkDistDir, { recursive: true });
+    yield* fs.writeFileString(path.join(clerkDistDir, "clerk.browser.js"), "0;");
+    const playwrightDir = path.join(unpackedDir, "node_modules", "playwright-core");
+    yield* fs.makeDirectory(path.join(playwrightDir, "lib"), { recursive: true });
+    yield* fs.writeFileString(path.join(playwrightDir, "package.json"), "{}");
+    yield* fs.writeFileString(path.join(playwrightDir, "lib", "coreBundle.js"), "0;");
+  });
+
+  it.effect("afterPack asserts both packaged TypeScript standard-library copies", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const hooksDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-builder-hooks-" });
+      const hooksPath = path.join(hooksDir, BUILDER_HOOKS_FILENAME);
+      yield* fs.writeFileString(hooksPath, BUILDER_HOOKS_SOURCE);
+      const hooks = NodeModule.createRequire(import.meta.url)(hooksPath) as {
+        afterPack: (context: unknown) => Promise<void>;
+      };
+
+      const appOutDir = path.join(hooksDir, "out");
+      const libDir = path.join(appOutDir, "resources", "app.asar.unpacked", "node_modules");
+      const topLevelLib = path.join(libDir, "typescript", "lib", "lib.es5.d.ts");
+      // The nested copy is the one vtsls actually forks tsserver from at runtime.
+      const nestedLib = path.join(
+        libDir,
+        "@vtsls",
+        "language-service",
+        "node_modules",
+        "typescript",
+        "lib",
+        "lib.es5.d.ts",
+      );
+      const context = { electronPlatformName: "linux", appOutDir };
+
+      yield* fs.makeDirectory(path.dirname(topLevelLib), { recursive: true });
+      yield* fs.writeFileString(topLevelLib, "declare interface Object {}");
+      // Top-level copy alone is not enough: the build must fail while the
+      // nested copy is still missing.
+      const missingNested = yield* Effect.promise(() =>
+        hooks.afterPack(context).then(
+          () => "resolved",
+          (error: unknown) => String(error),
+        ),
+      );
+      assert.include(missingNested, "TypeScript standard library missing");
+      assert.include(missingNested, "@vtsls");
+
+      yield* fs.makeDirectory(path.dirname(nestedLib), { recursive: true });
+      yield* fs.writeFileString(nestedLib, "declare interface Object {}");
+      yield* stageAfterPackRuntimeFixtures(path.join(appOutDir, "resources", "app.asar.unpacked"));
+      yield* Effect.promise(() => hooks.afterPack(context));
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("stripStagedSourcemaps removes only sourcemap files", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const distDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-strip-maps-" });
+      const assetsDir = path.join(distDir, "client", "assets");
+      yield* fs.makeDirectory(assetsDir, { recursive: true });
+      yield* fs.writeFileString(path.join(distDir, "bin.mjs"), "export {};");
+      yield* fs.writeFileString(path.join(distDir, "bin.mjs.map"), "{}");
+      yield* fs.writeFileString(path.join(assetsDir, "index.js"), "0;");
+      yield* fs.writeFileString(path.join(assetsDir, "index.js.map"), "{}");
+      yield* fs.writeFileString(path.join(assetsDir, "index.css.map"), "{}");
+      // Files that merely end in .map without a sourcemap extension must survive.
+      yield* fs.writeFileString(path.join(assetsDir, "regions.map"), "data");
+
+      yield* stripStagedSourcemaps(distDir, "test-dist");
+
+      assert.isTrue(yield* fs.exists(path.join(distDir, "bin.mjs")));
+      assert.isTrue(yield* fs.exists(path.join(assetsDir, "index.js")));
+      assert.isTrue(yield* fs.exists(path.join(assetsDir, "regions.map")));
+      assert.isFalse(yield* fs.exists(path.join(distDir, "bin.mjs.map")));
+      assert.isFalse(yield* fs.exists(path.join(assetsDir, "index.js.map")));
+      assert.isFalse(yield* fs.exists(path.join(assetsDir, "index.css.map")));
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("afterPack rejects shipped sourcemaps", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const hooksDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-builder-hooks-" });
+      const hooksPath = path.join(hooksDir, BUILDER_HOOKS_FILENAME);
+      yield* fs.writeFileString(hooksPath, BUILDER_HOOKS_SOURCE);
+      const hooks = NodeModule.createRequire(import.meta.url)(hooksPath) as {
+        afterPack: (context: unknown) => Promise<void>;
+      };
+
+      const appOutDir = path.join(hooksDir, "out");
+      const unpackedDir = path.join(appOutDir, "resources", "app.asar.unpacked");
+      const context = { electronPlatformName: "linux", appOutDir };
+
+      // Satisfy the TypeScript standard-library probes first.
+      for (const libSegments of [
+        ["node_modules", "typescript", "lib", "lib.es5.d.ts"],
+        [
+          "node_modules",
+          "@vtsls",
+          "language-service",
+          "node_modules",
+          "typescript",
+          "lib",
+          "lib.es5.d.ts",
+        ],
+      ]) {
+        const libPath = path.join(unpackedDir, ...libSegments);
+        yield* fs.makeDirectory(path.dirname(libPath), { recursive: true });
+        yield* fs.writeFileString(libPath, "declare interface Object {}");
+      }
+      yield* stageAfterPackRuntimeFixtures(unpackedDir);
+      yield* Effect.promise(() => hooks.afterPack(context));
+
+      const serverDistMap = path.join(unpackedDir, "apps", "server", "dist", "bin.mjs.map");
+      yield* fs.makeDirectory(path.dirname(serverDistMap), { recursive: true });
+      yield* fs.writeFileString(serverDistMap, "{}");
+      const serverDistFailure = yield* Effect.promise(() =>
+        hooks.afterPack(context).then(
+          () => "resolved",
+          (error: unknown) => String(error),
+        ),
+      );
+      assert.include(serverDistFailure, "Sourcemap shipped");
+      assert.include(serverDistFailure, "bin.mjs.map");
+      yield* fs.remove(serverDistMap);
+
+      const nodeModulesMap = path.join(
+        unpackedDir,
+        "node_modules",
+        "effect",
+        "dist",
+        "index.js.map",
+      );
+      yield* fs.makeDirectory(path.dirname(nodeModulesMap), { recursive: true });
+      yield* fs.writeFileString(nodeModulesMap, "{}");
+      const nodeModulesFailure = yield* Effect.promise(() =>
+        hooks.afterPack(context).then(
+          () => "resolved",
+          (error: unknown) => String(error),
+        ),
+      );
+      assert.include(nodeModulesFailure, "Sourcemap shipped");
+      yield* fs.remove(nodeModulesMap);
+
+      yield* Effect.promise(() => hooks.afterPack(context));
+    }).pipe(Effect.scoped),
+  );
+
+  it("matches Claude SDK platform packages in scope and pnpm-store layouts", () => {
+    assert.isTrue(isClaudeSdkPlatformPackagePath("@anthropic-ai/claude-agent-sdk-darwin-arm64"));
+    assert.isTrue(
+      isClaudeSdkPlatformPackagePath(".pnpm/@anthropic-ai+claude-agent-sdk-darwin-arm64@0.3.170"),
+    );
+    assert.isTrue(
+      isClaudeSdkPlatformPackagePath(
+        ".pnpm/@anthropic-ai+claude-agent-sdk@0.3.170_abc/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64",
+      ),
+    );
+    // The SDK package itself (and its files) must never match.
+    assert.isFalse(isClaudeSdkPlatformPackagePath("@anthropic-ai/claude-agent-sdk"));
+    assert.isFalse(isClaudeSdkPlatformPackagePath("@anthropic-ai/claude-agent-sdk/sdk.mjs"));
+    assert.isFalse(
+      isClaudeSdkPlatformPackagePath(".pnpm/@anthropic-ai+claude-agent-sdk@0.3.170_abc"),
+    );
+    assert.isFalse(isClaudeSdkPlatformPackagePath("@anthropic-ai/sdk"));
+  });
+
+  it.effect("pruneClaudeSdkPlatformPackages removes platform payloads but keeps the SDK", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const stageAppDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-claude-prune-" });
+      const nodeModulesDir = path.join(stageAppDir, "node_modules");
+      const sdkDir = path.join(nodeModulesDir, "@anthropic-ai", "claude-agent-sdk");
+      const scopePlatformDir = path.join(
+        nodeModulesDir,
+        "@anthropic-ai",
+        "claude-agent-sdk-darwin-arm64",
+      );
+      const storePlatformDir = path.join(
+        nodeModulesDir,
+        ".pnpm",
+        "@anthropic-ai+claude-agent-sdk-darwin-arm64@0.3.170",
+        "node_modules",
+        "@anthropic-ai",
+        "claude-agent-sdk-darwin-arm64",
+      );
+      for (const dir of [sdkDir, scopePlatformDir, storePlatformDir]) {
+        yield* fs.makeDirectory(dir, { recursive: true });
+      }
+      yield* fs.writeFileString(path.join(sdkDir, "sdk.mjs"), "export {};");
+      yield* fs.writeFileString(path.join(sdkDir, "manifest.json"), "{}");
+      yield* fs.writeFileString(path.join(scopePlatformDir, "claude"), "binary");
+      yield* fs.writeFileString(path.join(storePlatformDir, "claude"), "binary");
+
+      yield* pruneClaudeSdkPlatformPackages(stageAppDir);
+
+      assert.isTrue(yield* fs.exists(path.join(sdkDir, "sdk.mjs")));
+      assert.isTrue(yield* fs.exists(path.join(sdkDir, "manifest.json")));
+      assert.isFalse(yield* fs.exists(scopePlatformDir));
+      assert.isFalse(
+        yield* fs.exists(
+          path.join(nodeModulesDir, ".pnpm", "@anthropic-ai+claude-agent-sdk-darwin-arm64@0.3.170"),
+        ),
+      );
+
+      // A tree with no platform packages means the SDK layout changed; the
+      // build must fail rather than silently ship the bundled binary again.
+      const failure = yield* pruneClaudeSdkPlatformPackages(stageAppDir).pipe(Effect.flip);
+      assert.instanceOf(failure, ClaudeSdkPlatformPackagesNotFoundError);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("afterPack rejects shipped Claude platform packages and requires SDK metadata", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const hooksDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-builder-hooks-" });
+      const hooksPath = path.join(hooksDir, BUILDER_HOOKS_FILENAME);
+      yield* fs.writeFileString(hooksPath, BUILDER_HOOKS_SOURCE);
+      const hooks = NodeModule.createRequire(import.meta.url)(hooksPath) as {
+        afterPack: (context: unknown) => Promise<void>;
+      };
+
+      const appOutDir = path.join(hooksDir, "out");
+      const unpackedDir = path.join(appOutDir, "resources", "app.asar.unpacked");
+      const context = { electronPlatformName: "linux", appOutDir };
+
+      for (const libSegments of [
+        ["node_modules", "typescript", "lib", "lib.es5.d.ts"],
+        [
+          "node_modules",
+          "@vtsls",
+          "language-service",
+          "node_modules",
+          "typescript",
+          "lib",
+          "lib.es5.d.ts",
+        ],
+      ]) {
+        const libPath = path.join(unpackedDir, ...libSegments);
+        yield* fs.makeDirectory(path.dirname(libPath), { recursive: true });
+        yield* fs.writeFileString(libPath, "declare interface Object {}");
+      }
+
+      // Missing SDK metadata must fail: the managed installer reads it at runtime.
+      const missingMetadata = yield* Effect.promise(() =>
+        hooks.afterPack(context).then(
+          () => "resolved",
+          (error: unknown) => String(error),
+        ),
+      );
+      assert.include(missingMetadata, "Claude Agent SDK runtime file missing");
+
+      yield* stageAfterPackRuntimeFixtures(unpackedDir);
+      yield* Effect.promise(() => hooks.afterPack(context));
+
+      const platformPackageFile = path.join(
+        unpackedDir,
+        "node_modules",
+        "@anthropic-ai",
+        "claude-agent-sdk-darwin-arm64",
+        "claude",
+      );
+      yield* fs.makeDirectory(path.dirname(platformPackageFile), { recursive: true });
+      yield* fs.writeFileString(platformPackageFile, "binary");
+      const shippedPlatformPackage = yield* Effect.promise(() =>
+        hooks.afterPack(context).then(
+          () => "resolved",
+          (error: unknown) => String(error),
+        ),
+      );
+      assert.include(shippedPlatformPackage, "Claude Agent SDK platform binary package shipped");
+      yield* fs.remove(path.dirname(platformPackageFile), { recursive: true });
+
+      yield* Effect.promise(() => hooks.afterPack(context));
+    }).pipe(Effect.scoped),
+  );
+
+  it("matches prunable clerk-js variant chunks and playwright-core package dirs", () => {
+    assert.isTrue(isClerkJsPrunableDistChunkPath("@clerk/clerk-js/dist/clerk.legacy.browser.js"));
+    assert.isTrue(
+      isClerkJsPrunableDistChunkPath(
+        ".pnpm/@clerk+clerk-js@6.25.7_abc/node_modules/@clerk/clerk-js/dist/121_clerk.native_9ac4c7_6.25.7.js",
+      ),
+    );
+    assert.isTrue(
+      isClerkJsPrunableDistChunkPath(
+        "@clerk/clerk-js/dist/vendors_clerk.legacy.browser_dda423_6.25.7.js",
+      ),
+    );
+    // The modern browser bundles and module entries must never match.
+    assert.isFalse(isClerkJsPrunableDistChunkPath("@clerk/clerk-js/dist/clerk.browser.js"));
+    assert.isFalse(isClerkJsPrunableDistChunkPath("@clerk/clerk-js/dist/clerk.mjs"));
+    assert.isFalse(isClerkJsPrunableDistChunkPath("@clerk/clerk-js/dist/clerk.no-rhc.js"));
+    // Same-named files outside clerk-js's dist must never match.
+    assert.isFalse(isClerkJsPrunableDistChunkPath("other-package/dist/clerk.native.js"));
+
+    assert.isTrue(isPlaywrightCorePackageDirPath("playwright-core"));
+    assert.isTrue(
+      isPlaywrightCorePackageDirPath(".pnpm/playwright-core@1.60.0/node_modules/playwright-core"),
+    );
+    assert.isFalse(isPlaywrightCorePackageDirPath(".pnpm/playwright-core@1.60.0"));
+    assert.isFalse(isPlaywrightCorePackageDirPath("playwright-core/lib"));
+    assert.isFalse(isPlaywrightCorePackageDirPath("@scope/playwright-core-helpers"));
+  });
+
+  it.effect("pruneStagedNodeModules trims clerk-js variants and playwright-core", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const stageAppDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-vendor-prune-" });
+      const nodeModulesDir = path.join(stageAppDir, "node_modules");
+
+      // clerk-js lives at its physical pnpm-store path; the browser variant
+      // and module entries must survive while legacy/native variants go.
+      const clerkDistDir = path.join(
+        nodeModulesDir,
+        ".pnpm",
+        "@clerk+clerk-js@6.25.7_abc",
+        "node_modules",
+        "@clerk",
+        "clerk-js",
+        "dist",
+      );
+      yield* fs.makeDirectory(clerkDistDir, { recursive: true });
+      for (const file of [
+        "clerk.browser.js",
+        "clerk.mjs",
+        "clerk.legacy.browser.js",
+        "clerk.native.js",
+        "121_clerk.native_9ac4c7_6.25.7.js",
+        "vendors_clerk.legacy.browser_dda423_6.25.7.js",
+      ]) {
+        yield* fs.writeFileString(path.join(clerkDistDir, file), "0;");
+      }
+
+      // playwright-core: physical pnpm-store dir plus the top-level scope
+      // symlink, which must dedupe to a single trim of the same package.
+      const playwrightDir = path.join(
+        nodeModulesDir,
+        ".pnpm",
+        "playwright-core@1.60.0",
+        "node_modules",
+        "playwright-core",
+      );
+      yield* fs.makeDirectory(path.join(playwrightDir, "lib", "server"), { recursive: true });
+      yield* fs.makeDirectory(path.join(playwrightDir, "types"), { recursive: true });
+      yield* fs.writeFileString(path.join(playwrightDir, "package.json"), "{}");
+      yield* fs.writeFileString(path.join(playwrightDir, "index.js"), "0;");
+      yield* fs.writeFileString(path.join(playwrightDir, "cli.js"), "0;");
+      yield* fs.writeFileString(path.join(playwrightDir, "lib", "coreBundle.js"), "0;");
+      yield* fs.writeFileString(path.join(playwrightDir, "lib", "utilsBundle.js"), "0;");
+      yield* fs.writeFileString(path.join(playwrightDir, "lib", "server", "index.js"), "0;");
+      yield* fs.writeFileString(path.join(playwrightDir, "types", "types.d.ts"), "");
+      yield* fs.symlink(playwrightDir, path.join(nodeModulesDir, "playwright-core"));
+
+      yield* pruneStagedNodeModules(stageAppDir);
+
+      assert.isTrue(yield* fs.exists(path.join(clerkDistDir, "clerk.browser.js")));
+      assert.isTrue(yield* fs.exists(path.join(clerkDistDir, "clerk.mjs")));
+      assert.isFalse(yield* fs.exists(path.join(clerkDistDir, "clerk.legacy.browser.js")));
+      assert.isFalse(yield* fs.exists(path.join(clerkDistDir, "clerk.native.js")));
+      assert.isFalse(
+        yield* fs.exists(path.join(clerkDistDir, "121_clerk.native_9ac4c7_6.25.7.js")),
+      );
+      assert.isFalse(
+        yield* fs.exists(path.join(clerkDistDir, "vendors_clerk.legacy.browser_dda423_6.25.7.js")),
+      );
+
+      assert.isTrue(yield* fs.exists(path.join(playwrightDir, "package.json")));
+      assert.isTrue(yield* fs.exists(path.join(playwrightDir, "lib", "coreBundle.js")));
+      assert.isFalse(yield* fs.exists(path.join(playwrightDir, "index.js")));
+      assert.isFalse(yield* fs.exists(path.join(playwrightDir, "cli.js")));
+      assert.isFalse(yield* fs.exists(path.join(playwrightDir, "types")));
+      assert.isFalse(yield* fs.exists(path.join(playwrightDir, "lib", "utilsBundle.js")));
+      assert.isFalse(yield* fs.exists(path.join(playwrightDir, "lib", "server")));
+      // The scope symlink still resolves to the trimmed package.
+      assert.isTrue(
+        yield* fs.exists(path.join(nodeModulesDir, "playwright-core", "lib", "coreBundle.js")),
+      );
+
+      // An empty tree means the dependency layout changed; the build must fail
+      // rather than silently skip the prune.
+      const emptyStageDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-vendor-prune-empty-" });
+      yield* fs.makeDirectory(path.join(emptyStageDir, "node_modules"), { recursive: true });
+      const failure = yield* pruneStagedNodeModules(emptyStageDir).pipe(Effect.flip);
+      assert.instanceOf(failure, StagedNodeModulesPruneTargetNotFoundError);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("afterPack rejects pruned vendor files and requires the kept bundles", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const hooksDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-builder-hooks-" });
+      const hooksPath = path.join(hooksDir, BUILDER_HOOKS_FILENAME);
+      yield* fs.writeFileString(hooksPath, BUILDER_HOOKS_SOURCE);
+      const hooks = NodeModule.createRequire(import.meta.url)(hooksPath) as {
+        afterPack: (context: unknown) => Promise<void>;
+      };
+
+      const appOutDir = path.join(hooksDir, "out");
+      const unpackedDir = path.join(appOutDir, "resources", "app.asar.unpacked");
+      const context = { electronPlatformName: "linux", appOutDir };
+      const runAfterPack = () =>
+        Effect.promise(() =>
+          hooks.afterPack(context).then(
+            () => "resolved",
+            (error: unknown) => String(error),
+          ),
+        );
+
+      for (const libSegments of [
+        ["node_modules", "typescript", "lib", "lib.es5.d.ts"],
+        [
+          "node_modules",
+          "@vtsls",
+          "language-service",
+          "node_modules",
+          "typescript",
+          "lib",
+          "lib.es5.d.ts",
+        ],
+      ]) {
+        const libPath = path.join(unpackedDir, ...libSegments);
+        yield* fs.makeDirectory(path.dirname(libPath), { recursive: true });
+        yield* fs.writeFileString(libPath, "declare interface Object {}");
+      }
+      yield* stageAfterPackRuntimeFixtures(unpackedDir);
+      assert.equal(yield* runAfterPack(), "resolved");
+
+      const legacyChunk = path.join(
+        unpackedDir,
+        "node_modules",
+        "@clerk",
+        "clerk-js",
+        "dist",
+        "clerk.legacy.browser.js",
+      );
+      yield* fs.writeFileString(legacyChunk, "0;");
+      assert.include(yield* runAfterPack(), "Pruned vendor file shipped");
+      yield* fs.remove(legacyChunk);
+
+      const playwrightExtra = path.join(unpackedDir, "node_modules", "playwright-core", "index.js");
+      yield* fs.writeFileString(playwrightExtra, "0;");
+      assert.include(yield* runAfterPack(), "Pruned vendor file shipped");
+      yield* fs.remove(playwrightExtra);
+
+      const clerkBrowserBundle = path.join(
+        unpackedDir,
+        "node_modules",
+        "@clerk",
+        "clerk-js",
+        "dist",
+        "clerk.browser.js",
+      );
+      yield* fs.remove(clerkBrowserBundle);
+      assert.include(yield* runAfterPack(), "clerk.browser.js missing");
+      yield* fs.writeFileString(clerkBrowserBundle, "0;");
+
+      const coreBundle = path.join(
+        unpackedDir,
+        "node_modules",
+        "playwright-core",
+        "lib",
+        "coreBundle.js",
+      );
+      yield* fs.remove(coreBundle);
+      assert.include(yield* runAfterPack(), "coreBundle.js missing");
+      yield* fs.writeFileString(coreBundle, "0;");
+
+      assert.equal(yield* runAfterPack(), "resolved");
+    }).pipe(Effect.scoped),
   );
 
   it("promotes target fff binaries to direct staged dependencies", () => {

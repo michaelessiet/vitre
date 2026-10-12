@@ -1,19 +1,33 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it, describe, expect } from "@effect/vitest";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as LspManager from "./LspManager.ts";
 import { languageBindingForPath } from "./LanguageServers.ts";
 import { layerTest as serverSettingsLayerTest } from "../serverSettings.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
+import { WorkspaceWatcher } from "../workspace/WorkspaceWatcher.ts";
+
+/**
+ * Silent watcher. LspManager subscribes per workspace to forward didSave; these
+ * tests assert nothing about that, and a real watch would attach filesystem
+ * handles to suites that drive time through TestClock.
+ */
+const WorkspaceWatcherTestLayer = Layer.succeed(
+  WorkspaceWatcher,
+  WorkspaceWatcher.of({ subscribe: () => Stream.never }),
+);
 
 const TestLayer = LspManager.layer.pipe(
   Layer.provide(WorkspacePaths.layer),
+  Layer.provide(WorkspaceWatcherTestLayer),
   Layer.provide(serverSettingsLayerTest()),
   Layer.provideMerge(NodeServices.layer),
 );
@@ -38,6 +52,91 @@ describe("languageBindingForPath", () => {
 
 it.layer(TestLayer, { excludeTestServices: true })("LspManagerLive", (it) => {
   describe("typescript smoke test", () => {
+    it.effect(
+      "provides semantic tokens, quick fixes and cross-file rename edits",
+      () =>
+        Effect.gen(function* () {
+          const manager = yield* LspManager.LspManager;
+          const fs = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const cwd = yield* makeTempDir;
+          const contents =
+            "export function greet(name: string) { return name; }\nconst value = 12;\nvalue = 13;\n";
+          yield* fs.writeFileString(
+            path.join(cwd, "tsconfig.json"),
+            '{"compilerOptions":{"strict":true}}',
+          );
+          yield* fs.writeFileString(path.join(cwd, "main.ts"), contents);
+          yield* fs.writeFileString(
+            path.join(cwd, "caller.ts"),
+            'import { greet } from "./main";\ngreet("world");\n',
+          );
+          const diagnostics = yield* manager.subscribeDiagnostics({ cwd }).pipe(
+            Stream.filter((e) => e.relativePath === "main.ts" && e.diagnostics.length > 0),
+            Stream.take(1),
+            Stream.runCollect,
+            Effect.forkChild,
+          );
+          yield* manager.didOpen({ cwd, relativePath: "main.ts", contents });
+          yield* Fiber.join(diagnostics).pipe(Effect.timeout("60 seconds"));
+          // vtsls negotiates incremental sync. Full-buffer changes without
+          // old-document ranges crashed tsserver when a snippet added lines.
+          yield* manager.didChange({
+            cwd,
+            relativePath: "main.ts",
+            version: 1,
+            contents: `${contents}\nexport const added = "😀";\n\n`,
+          });
+          const added = yield* manager.hover({
+            cwd,
+            relativePath: "main.ts",
+            position: { line: 4, character: 14 },
+          });
+          expect(added?.contents).toContain("added");
+          yield* manager.didChange({ cwd, relativePath: "main.ts", version: 2, contents });
+          const range = { start: { line: 0, character: 0 }, end: { line: 3, character: 0 } };
+          const semantic = yield* manager.semanticTokens({ cwd, relativePath: "main.ts", range });
+          expect(
+            semantic.tokens.some(
+              (token) => token.kind === "function" && token.range.start.line === 0,
+            ),
+          ).toBe(true);
+          const rename = yield* manager.rename({
+            cwd,
+            relativePath: "main.ts",
+            position: { line: 0, character: 18 },
+            newName: "welcome",
+          });
+          expect(rename.files.map((f) => f.relativePath).toSorted()).toEqual([
+            "caller.ts",
+            "main.ts",
+          ]);
+          expect(rename.files.every((f) => f.edits.every((e) => e.newText === "welcome"))).toBe(
+            true,
+          );
+          const actions = yield* manager.codeActions({ cwd, relativePath: "main.ts", range });
+          const first = actions.actions.find(
+            (action) =>
+              action.title.toLowerCase().includes("const") && action.disabledReason === undefined,
+          );
+          expect(
+            first,
+            actions.actions.map((a) => `${a.title}: ${a.disabledReason ?? "enabled"}`).join("\n"),
+          ).toBeDefined();
+          const resolved = yield* manager.resolveCodeAction({
+            cwd,
+            relativePath: "main.ts",
+            resolveData: first!.resolveData,
+          });
+          expect(resolved.title).toBe(first!.title);
+          expect(
+            resolved.files.some((file) => file.edits.some((edit) => edit.newText === "let")),
+          ).toBe(true);
+          yield* manager.didClose({ cwd, relativePath: "main.ts" });
+        }),
+      { timeout: 90_000 },
+    );
+
     it.effect(
       "opens a document, receives diagnostics, and answers hover",
       () =>
@@ -159,6 +258,7 @@ it.layer(TestLayer, { excludeTestServices: true })("LspManagerLive", (it) => {
 // so the not_installed path is exercised deterministically on any machine.
 const CustomServerTestLayer = LspManager.layer.pipe(
   Layer.provide(WorkspacePaths.layer),
+  Layer.provide(WorkspaceWatcherTestLayer),
   Layer.provide(
     serverSettingsLayerTest({
       languageServers: [
@@ -205,6 +305,278 @@ it.layer(CustomServerTestLayer, { excludeTestServices: true })(
         const fake = status.servers.find((server) => server.serverId === "fake-lang");
         expect(fake?.state).toBe("not_installed");
         expect(fake?.extensions).toEqual([".fake"]);
+      }),
+    );
+  },
+);
+
+// A minimal LSP server that completes the initialize handshake, then kills
+// itself on the first didChange — a deterministic post-init crash on any
+// machine. Backoff timing is driven by the TestClock provided per test; the
+// real time the child takes to spawn never touches the retry math.
+const CRASHY_SERVER_SCRIPT = `
+let buffer = Buffer.alloc(0);
+const respond = (id, result) => {
+  const body = JSON.stringify({ jsonrpc: "2.0", id, result });
+  process.stdout.write("Content-Length: " + Buffer.byteLength(body) + "\\r\\n\\r\\n" + body);
+};
+process.stdin.on("data", (chunk) => {
+  buffer = Buffer.concat([buffer, chunk]);
+  for (;;) {
+    const separator = buffer.indexOf("\\r\\n\\r\\n");
+    if (separator === -1) return;
+    const length = Number(/Content-Length: (\\d+)/.exec(buffer.slice(0, separator).toString())[1]);
+    if (buffer.length < separator + 4 + length) return;
+    const message = JSON.parse(buffer.slice(separator + 4, separator + 4 + length).toString());
+    buffer = buffer.slice(separator + 4 + length);
+    if (message.method === "initialize") respond(message.id, { capabilities: {} });
+    else if (message.method === "shutdown") respond(message.id, null);
+    else if (message.method === "exit") process.exit(0);
+    else if (message.method === "textDocument/didChange") process.exit(1);
+  }
+});
+setInterval(() => {}, 1000);
+`.trim();
+
+const CrashServerTestLayer = LspManager.layer.pipe(
+  Layer.provide(WorkspacePaths.layer),
+  Layer.provide(WorkspaceWatcherTestLayer),
+  Layer.provide(
+    serverSettingsLayerTest({
+      languageServers: [
+        {
+          serverId: "crashy",
+          displayName: "crashy-language-server",
+          command: process.execPath,
+          args: ["-e", CRASHY_SERVER_SCRIPT],
+          extensions: [".crashy"],
+          languageId: "crashy",
+        },
+      ],
+    }),
+  ),
+  Layer.provideMerge(NodeServices.layer),
+);
+
+// Real-time sleep for polling on child-process events; Effect.sleep would
+// hang under the TestClock these tests drive.
+const realSleep = (millis: number) =>
+  // @effect-diagnostics-next-line globalTimers:off - polls real child-process exits under a frozen TestClock.
+  Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, millis)));
+
+const awaitCrashyState = (
+  lspManager: LspManager.LspManager["Service"],
+  cwd: string,
+  state: string,
+) =>
+  Effect.gen(function* () {
+    for (let attempt = 0; attempt < 400; attempt++) {
+      const status = yield* lspManager.serverStatus({ cwd });
+      if (status.servers.find((server) => server.serverId === "crashy")?.state === state) return;
+      yield* realSleep(25);
+    }
+    return yield* Effect.die(new Error(`crashy server never reached state '${state}'`));
+  });
+
+it.layer(CrashServerTestLayer, { excludeTestServices: true })(
+  "LspManagerLive crash backoff",
+  (it) => {
+    it.effect(
+      "backs off before respawning a crashed server instead of respawning per keystroke",
+      () =>
+        Effect.gen(function* () {
+          const lspManager = yield* LspManager.LspManager;
+          const cwd = yield* makeTempDir;
+          const send = (version: number) =>
+            lspManager.didChange({ cwd, relativePath: "main.crashy", contents: "x", version });
+
+          // Spawns the server; the fake crashes on receiving the didChange.
+          yield* send(0);
+          yield* awaitCrashyState(lspManager, cwd, "failed");
+
+          // Every keystroke while the failure is cached surfaces the crash
+          // instead of respawning.
+          const first = yield* send(1).pipe(Effect.flip);
+          expect(first.failure).toBe("server_crashed");
+          const second = yield* send(2).pipe(Effect.flip);
+          expect(second.failure).toBe("server_crashed");
+
+          // Still gated just before the first retry window (1 min) elapses.
+          yield* TestClock.adjust(Duration.seconds(59));
+          const gated = yield* send(3).pipe(Effect.flip);
+          expect(gated.failure).toBe("server_crashed");
+
+          // Past the window: respawns (and crashes on the didChange again).
+          yield* TestClock.adjust(Duration.seconds(2));
+          yield* send(4);
+          yield* awaitCrashyState(lspManager, cwd, "failed");
+
+          // Second consecutive crash: the retry window doubles to 2 minutes.
+          const observed = yield* send(5).pipe(Effect.flip);
+          expect(observed.failure).toBe("server_crashed");
+          yield* TestClock.adjust(Duration.seconds(61));
+          const stillGated = yield* send(6).pipe(Effect.flip);
+          expect(stillGated.failure).toBe("server_crashed");
+          yield* TestClock.adjust(Duration.seconds(60));
+          yield* send(7);
+          yield* awaitCrashyState(lspManager, cwd, "failed");
+        }).pipe(Effect.provide(TestClock.layer())),
+      { timeout: 60_000 },
+    );
+
+    it.effect(
+      "resets the crash streak after a healthy stretch of uptime",
+      () =>
+        Effect.gen(function* () {
+          const lspManager = yield* LspManager.LspManager;
+          const cwd = yield* makeTempDir;
+          const send = (version: number) =>
+            lspManager.didChange({ cwd, relativePath: "main.crashy", contents: "x", version });
+
+          // Two quick crashes build a streak of 2 (retry window: 2 minutes).
+          yield* send(0);
+          yield* awaitCrashyState(lspManager, cwd, "failed");
+          expect((yield* send(1).pipe(Effect.flip)).failure).toBe("server_crashed");
+          yield* TestClock.adjust(Duration.seconds(61));
+          yield* send(2);
+          yield* awaitCrashyState(lspManager, cwd, "failed");
+          expect((yield* send(3).pipe(Effect.flip)).failure).toBe("server_crashed");
+
+          // Respawn, keep it alive through a healthy stretch, then crash it.
+          yield* TestClock.adjust(Duration.seconds(121));
+          yield* lspManager.didOpen({ cwd, relativePath: "main.crashy", contents: "x" });
+          yield* awaitCrashyState(lspManager, cwd, "running");
+          yield* TestClock.adjust(Duration.minutes(6));
+          yield* send(4);
+          yield* awaitCrashyState(lspManager, cwd, "failed");
+
+          // The healthy run reset the streak: the retry window is back to
+          // 1 minute — a streak of 3 would have required 4.
+          expect((yield* send(5).pipe(Effect.flip)).failure).toBe("server_crashed");
+          yield* TestClock.adjust(Duration.seconds(59));
+          expect((yield* send(6).pipe(Effect.flip)).failure).toBe("server_crashed");
+          yield* TestClock.adjust(Duration.seconds(2));
+          yield* send(7);
+          yield* awaitCrashyState(lspManager, cwd, "failed");
+        }).pipe(Effect.provide(TestClock.layer())),
+      { timeout: 60_000 },
+    );
+  },
+);
+
+// A server that stays silent until it is told a document was saved, then
+// publishes a marker diagnostic. Observing that diagnostic is what proves the
+// didSave reached the server, since didSave has no response of its own.
+const SAVE_REPORTING_SERVER_SCRIPT = `
+let buffer = Buffer.alloc(0);
+const write = (message) => {
+  const body = JSON.stringify(message);
+  process.stdout.write("Content-Length: " + Buffer.byteLength(body) + "\\r\\n\\r\\n" + body);
+};
+process.stdin.on("data", (chunk) => {
+  buffer = Buffer.concat([buffer, chunk]);
+  for (;;) {
+    const separator = buffer.indexOf("\\r\\n\\r\\n");
+    if (separator === -1) return;
+    const length = Number(/Content-Length: (\\d+)/.exec(buffer.slice(0, separator).toString())[1]);
+    if (buffer.length < separator + 4 + length) return;
+    const message = JSON.parse(buffer.slice(separator + 4, separator + 4 + length).toString());
+    buffer = buffer.slice(separator + 4 + length);
+    if (message.method === "initialize") write({ jsonrpc: "2.0", id: message.id, result: { capabilities: {} } });
+    else if (message.method === "shutdown") write({ jsonrpc: "2.0", id: message.id, result: null });
+    else if (message.method === "exit") process.exit(0);
+    else if (message.method === "textDocument/didSave") {
+      write({
+        jsonrpc: "2.0",
+        method: "textDocument/publishDiagnostics",
+        params: {
+          uri: message.params.textDocument.uri,
+          diagnostics: [{
+            range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+            severity: 1,
+            message: "saved",
+          }],
+        },
+      });
+    }
+  }
+});
+setInterval(() => {}, 1000);
+`.trim();
+
+/**
+ * Watcher that reports the same file changing on a loop. LspManager subscribes
+ * while opening a document, so a stream that fired once could land before the
+ * document was registered; repeating removes that race without a coordination
+ * channel between the test and the manager.
+ */
+const RepeatingWatcherTestLayer = Layer.succeed(
+  WorkspaceWatcher,
+  WorkspaceWatcher.of({
+    subscribe: () =>
+      Stream.forever(
+        Stream.fromEffect(
+          Effect.as(realSleep(25), { _tag: "changes", paths: ["main.saved"] } as const),
+        ),
+      ),
+  }),
+);
+
+const SaveReportingTestLayer = LspManager.layer.pipe(
+  Layer.provide(WorkspacePaths.layer),
+  Layer.provide(RepeatingWatcherTestLayer),
+  Layer.provide(
+    serverSettingsLayerTest({
+      languageServers: [
+        {
+          serverId: "saver",
+          displayName: "save-reporting-language-server",
+          command: process.execPath,
+          args: ["-e", SAVE_REPORTING_SERVER_SCRIPT],
+          extensions: [".saved"],
+          languageId: "saved",
+        },
+      ],
+    }),
+  ),
+  Layer.provideMerge(NodeServices.layer),
+);
+
+it.layer(SaveReportingTestLayer, { excludeTestServices: true })(
+  "LspManagerLive save forwarding",
+  (it) => {
+    it.effect(
+      "forwards didSave for open documents when the workspace changes on disk",
+      () =>
+        Effect.gen(function* () {
+          const lspManager = yield* LspManager.LspManager;
+          const cwd = yield* makeTempDir;
+
+          const diagnosticsFiber = yield* lspManager.subscribeDiagnostics({ cwd }).pipe(
+            Stream.filter((event) => event.relativePath === "main.saved"),
+            Stream.take(1),
+            Stream.runCollect,
+            Effect.forkChild,
+          );
+
+          yield* lspManager.didOpen({ cwd, relativePath: "main.saved", contents: "x" });
+
+          const events = yield* Fiber.join(diagnosticsFiber).pipe(Effect.timeout("30 seconds"));
+          expect(events[0]!.diagnostics[0]!.message).toBe("saved");
+        }),
+      { timeout: 60_000 },
+    );
+
+    it.effect("ignores changes to files no server has open", () =>
+      Effect.gen(function* () {
+        const lspManager = yield* LspManager.LspManager;
+        const cwd = yield* makeTempDir;
+
+        // The watcher reports main.saved on a loop, but nothing opened it here,
+        // so no didSave is owed and no diagnostic can arrive.
+        yield* realSleep(200);
+        const status = yield* lspManager.serverStatus({ cwd });
+        expect(status.servers).toHaveLength(0);
       }),
     );
   },

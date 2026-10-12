@@ -5,9 +5,10 @@ const WINDOWS_DRIVE_PATH_PATTERN = /^[A-Za-z]:[\\/]/;
 const WINDOWS_UNC_PATH_PATTERN = /^\\\\/;
 const EXTERNAL_SCHEME_PATTERN = /^([A-Za-z][A-Za-z0-9+.-]*):(.*)$/;
 const RELATIVE_PATH_PREFIX_PATTERN = /^(~\/|\.{1,2}\/)/;
-const RELATIVE_FILE_PATH_PATTERN = /^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)+(?::\d+){0,2}$/;
-const RELATIVE_FILE_NAME_PATTERN = /^[A-Za-z0-9._-]+\.[A-Za-z0-9_-]+(?::\d+){0,2}$/;
-const POSITION_SUFFIX_PATTERN = /:\d+(?::\d+)?$/;
+const RELATIVE_FILE_PATH_PATTERN =
+  /^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)+(?::\d+(?:[-–]\d+|:\d+)?)?$/;
+const RELATIVE_FILE_NAME_PATTERN = /^[A-Za-z0-9._-]+\.[A-Za-z0-9_-]+(?::\d+(?:[-–]\d+|:\d+)?)?$/;
+const POSITION_SUFFIX_PATTERN = /:\d+(?:[-–]\d+|:\d+)?$/;
 const POSITION_ONLY_PATTERN = /^\d+(?::\d+)?$/;
 const POSIX_FILE_ROOT_PREFIXES = [
   "/Users/",
@@ -22,14 +23,26 @@ const POSIX_FILE_ROOT_PREFIXES = [
   "/root/",
 ] as const;
 
+/** Structural subset of a thread workspace root (see `state/threadRoots.ts`);
+    kept structural so this leaf module stays free of store imports. */
+export interface WorkspaceRootLike {
+  readonly path: string;
+  readonly label: string;
+  readonly isPrimary: boolean;
+}
+
 export interface MarkdownFileLinkMeta {
   filePath: string;
   targetPath: string;
   displayPath: string;
   workspaceRelativePath: string | null;
+  /** Absolute path of the (non-primary) workspace root containing the file;
+      null when the file resolves against the primary root or no root at all. */
+  rootPath: string | null;
   basename: string;
   line?: number;
   column?: number;
+  endLine?: number;
 }
 
 function safeDecode(value: string): string {
@@ -175,7 +188,10 @@ function basenameOfPath(path: string): string {
   return separatorIndex >= 0 ? path.slice(separatorIndex + 1) : path;
 }
 
-function workspaceRelativePath(path: string, workspaceRoot: string | undefined): string | null {
+export function workspaceRelativePath(
+  path: string,
+  workspaceRoot: string | undefined,
+): string | null {
   if (!workspaceRoot) return null;
   const normalizedPath = normalizeWindowsDrivePath(path.replaceAll("\\", "/"));
   const normalizedRoot = normalizeWindowsDrivePath(workspaceRoot.replaceAll("\\", "/")).replace(
@@ -191,23 +207,53 @@ function workspaceRelativePath(path: string, workspaceRoot: string | undefined):
 export function resolveMarkdownFileLinkMeta(
   href: string | undefined,
   cwd?: string,
+  roots?: ReadonlyArray<WorkspaceRootLike>,
 ): MarkdownFileLinkMeta | null {
   const targetPath = resolveMarkdownFileLinkTarget(href, cwd);
   if (!targetPath) return null;
 
-  const { path, line, column } = splitPathAndPosition(targetPath);
+  const { path, line, column, endLine } = splitPathAndPosition(targetPath);
   const parsedLine = line ? Number.parseInt(line, 10) : Number.NaN;
   const parsedColumn = column ? Number.parseInt(column, 10) : Number.NaN;
+  const parsedEndLine = endLine ? Number.parseInt(endLine, 10) : Number.NaN;
   const lineNumber = Number.isFinite(parsedLine) ? parsedLine : undefined;
   const columnNumber = Number.isFinite(parsedColumn) ? parsedColumn : undefined;
+  // A degenerate range (`:79-65`, `:65-65`) collapses to its start line so
+  // downstream reveal logic never sees end <= start.
+  const endLineNumber =
+    Number.isFinite(parsedEndLine) && lineNumber !== undefined && parsedEndLine > lineNumber
+      ? parsedEndLine
+      : undefined;
+
+  // Absolute paths inside an attached (non-primary) root resolve to that
+  // root: the display path is label-qualified and the relative path opens in
+  // the built-in editor scoped via `rootPath`. Primary matches keep the
+  // legacy single-root shape below.
+  const attachedRoot =
+    roots?.find((root) => !root.isPrimary && workspaceRelativePath(path, root.path) !== null) ??
+    null;
+  const attachedRelativePath =
+    attachedRoot !== null ? workspaceRelativePath(path, attachedRoot.path) : null;
+  const positionSuffix =
+    lineNumber === undefined
+      ? ""
+      : endLineNumber !== undefined
+        ? `:${lineNumber}-${endLineNumber}`
+        : `:${lineNumber}${columnNumber !== undefined ? `:${columnNumber}` : ""}`;
 
   return {
     filePath: path,
     targetPath,
-    displayPath: formatWorkspaceRelativePath(targetPath, cwd),
-    workspaceRelativePath: workspaceRelativePath(path, cwd),
+    displayPath:
+      attachedRoot !== null && attachedRelativePath !== null
+        ? `${attachedRoot.label}/${attachedRelativePath}${positionSuffix}`
+        : formatWorkspaceRelativePath(targetPath, cwd),
+    workspaceRelativePath:
+      attachedRoot !== null ? attachedRelativePath : workspaceRelativePath(path, cwd),
+    rootPath: attachedRoot !== null && attachedRelativePath !== null ? attachedRoot.path : null,
     basename: basenameOfPath(path),
     ...(lineNumber !== undefined ? { line: lineNumber } : {}),
     ...(columnNumber !== undefined ? { column: columnNumber } : {}),
+    ...(endLineNumber !== undefined ? { endLine: endLineNumber } : {}),
   };
 }

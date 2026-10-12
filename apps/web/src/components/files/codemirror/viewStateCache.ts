@@ -1,3 +1,5 @@
+import type { EditorView } from "@codemirror/view";
+
 /**
  * Session-scoped memory of cursor/scroll positions for closed file editors.
  *
@@ -13,6 +15,8 @@ export interface CachedEditorViewState {
   readonly head: number;
   /** Raw scrollDOM.scrollTop pixels; the DOM clamps out-of-range values. */
   readonly scrollTop: number;
+  /** Restores the visible line and offset despite virtualized height estimates. */
+  readonly scrollSnapshot?: ReturnType<EditorView["scrollSnapshot"]>;
   /**
    * revealRequestId in effect when captured. A different id on the next
    * mount means an explicit reveal (go-to-def, search jump) happened since —

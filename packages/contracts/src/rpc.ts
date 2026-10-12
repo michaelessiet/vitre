@@ -23,6 +23,10 @@ import {
   VcsCreateRefResult,
   VcsCreateWorktreeInput,
   VcsCreateWorktreeResult,
+  VcsFileBaselineInput,
+  VcsFileBaselineResult,
+  VcsFileStatusesInput,
+  VcsFileStatusesResult,
   VcsInitInput,
   VcsListRefsInput,
   VcsListRefsResult,
@@ -65,6 +69,11 @@ import {
   RelayClientInstallProgressEventSchema,
   RelayClientStatusSchema,
 } from "./relayClient.ts";
+import {
+  ClaudeBinaryInstallFailedError,
+  ClaudeBinaryInstallProgressEventSchema,
+  ClaudeBinaryStatusSchema,
+} from "./claudeBinary.ts";
 import {
   ProjectListEntriesError,
   ProjectListEntriesInput,
@@ -173,6 +182,11 @@ import {
   LspLocationsResult,
   LspPositionInput,
   LspRenameInput,
+  LspCodeAction,
+  LspCodeActionsInput,
+  LspCodeActionsResult,
+  LspResolveCodeActionInput,
+  LspSemanticTokensResult,
   LspResolveCompletionInput,
   LspServerStatusResult,
   LspSignatureHelpResult,
@@ -231,6 +245,9 @@ export const WS_METHODS = {
   lspDefinition: "lsp.definition",
   lspReferences: "lsp.references",
   lspRename: "lsp.rename",
+  lspCodeActions: "lsp.codeActions",
+  lspResolveCodeAction: "lsp.resolveCodeAction",
+  lspSemanticTokens: "lsp.semanticTokens",
   lspFormat: "lsp.format",
   lspServerStatus: "lsp.serverStatus",
 
@@ -250,6 +267,8 @@ export const WS_METHODS = {
   vcsCreateRef: "vcs.createRef",
   vcsSwitchRef: "vcs.switchRef",
   vcsInit: "vcs.init",
+  vcsGetFileBaseline: "vcs.getFileBaseline",
+  vcsGetFileStatuses: "vcs.getFileStatuses",
 
   // Git workflow methods
   gitRunStackedAction: "git.runStackedAction",
@@ -299,6 +318,10 @@ export const WS_METHODS = {
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
   cloudInstallRelayClient: "cloud.installRelayClient",
+
+  // Claude managed binary methods
+  claudeGetBinaryStatus: "claude.getBinaryStatus",
+  claudeInstallBinary: "claude.installBinary",
 
   // Knowledge graph methods
   graphRuntimeStatus: "graph.runtimeStatus",
@@ -434,6 +457,24 @@ export const WsCloudInstallRelayClientRpc = Rpc.make(WS_METHODS.cloudInstallRela
   payload: Schema.Struct({}),
   success: RelayClientInstallProgressEventSchema,
   error: Schema.Union([RelayClientInstallFailedError, EnvironmentAuthorizationError]),
+  stream: true,
+});
+
+export const WsClaudeGetBinaryStatusRpc = Rpc.make(WS_METHODS.claudeGetBinaryStatus, {
+  payload: Schema.Struct({}),
+  success: ClaudeBinaryStatusSchema,
+  error: EnvironmentAuthorizationError,
+});
+
+/**
+ * Streams install stages plus download byte counts: the CLI download is
+ * ~120MB compressed and a non-streaming call would show an unresolving
+ * spinner. Mirrors `cloud.installRelayClient`.
+ */
+export const WsClaudeInstallBinaryRpc = Rpc.make(WS_METHODS.claudeInstallBinary, {
+  payload: Schema.Struct({}),
+  success: ClaudeBinaryInstallProgressEventSchema,
+  error: Schema.Union([ClaudeBinaryInstallFailedError, EnvironmentAuthorizationError]),
   stream: true,
 });
 
@@ -688,6 +729,22 @@ export const WsLspFormatRpc = Rpc.make(WS_METHODS.lspFormat, {
   error: Schema.Union([LspError, EnvironmentAuthorizationError]),
 });
 
+export const WsLspCodeActionsRpc = Rpc.make(WS_METHODS.lspCodeActions, {
+  payload: LspCodeActionsInput,
+  success: LspCodeActionsResult,
+  error: Schema.Union([LspError, EnvironmentAuthorizationError]),
+});
+export const WsLspResolveCodeActionRpc = Rpc.make(WS_METHODS.lspResolveCodeAction, {
+  payload: LspResolveCodeActionInput,
+  success: LspCodeAction,
+  error: Schema.Union([LspError, EnvironmentAuthorizationError]),
+});
+export const WsLspSemanticTokensRpc = Rpc.make(WS_METHODS.lspSemanticTokens, {
+  payload: LspCodeActionsInput,
+  success: LspSemanticTokensResult,
+  error: Schema.Union([LspError, EnvironmentAuthorizationError]),
+});
+
 export const WsLspServerStatusRpc = Rpc.make(WS_METHODS.lspServerStatus, {
   payload: Schema.Struct({ cwd: Schema.String }),
   success: LspServerStatusResult,
@@ -778,6 +835,18 @@ export const WsVcsSwitchRefRpc = Rpc.make(WS_METHODS.vcsSwitchRef, {
 export const WsVcsInitRpc = Rpc.make(WS_METHODS.vcsInit, {
   payload: VcsInitInput,
   error: Schema.Union([VcsError, EnvironmentAuthorizationError]),
+});
+
+export const WsVcsGetFileBaselineRpc = Rpc.make(WS_METHODS.vcsGetFileBaseline, {
+  payload: VcsFileBaselineInput,
+  success: VcsFileBaselineResult,
+  error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
+});
+
+export const WsVcsGetFileStatusesRpc = Rpc.make(WS_METHODS.vcsGetFileStatuses, {
+  payload: VcsFileStatusesInput,
+  success: VcsFileStatusesResult,
+  error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
 });
 
 /**
@@ -1017,6 +1086,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerSignalProcessRpc,
   WsCloudGetRelayClientStatusRpc,
   WsCloudInstallRelayClientRpc,
+  WsClaudeGetBinaryStatusRpc,
+  WsClaudeInstallBinaryRpc,
   WsGraphRuntimeStatusRpc,
   WsGraphInstallRuntimeRpc,
   WsGraphStatusRpc,
@@ -1047,6 +1118,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsLspDefinitionRpc,
   WsLspReferencesRpc,
   WsLspRenameRpc,
+  WsLspCodeActionsRpc,
+  WsLspResolveCodeActionRpc,
+  WsLspSemanticTokensRpc,
   WsLspFormatRpc,
   WsLspServerStatusRpc,
   WsSubscribeLspDiagnosticsRpc,
@@ -1065,6 +1139,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsVcsCreateRefRpc,
   WsVcsSwitchRefRpc,
   WsVcsInitRpc,
+  WsVcsGetFileBaselineRpc,
+  WsVcsGetFileStatusesRpc,
   WsReviewGetDiffPreviewRpc,
   WsTerminalOpenRpc,
   WsTerminalAttachRpc,

@@ -26,6 +26,7 @@ import {
   type EnvironmentConnectionPresentation,
 } from "@t3tools/client-runtime/connection";
 import { effectiveSettled, effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
+import { mergeEnvironmentThread } from "@t3tools/client-runtime/state/threads";
 import {
   parseScopedThreadKey,
   scopedThreadKey,
@@ -44,8 +45,11 @@ import { nextTerminalId, resolveTerminalSessionLabel } from "@t3tools/shared/ter
 import { Debouncer } from "@tanstack/react-pacer";
 import { useAtomValue } from "@effect/atom-react";
 import {
+  type ComponentProps,
+  type Dispatch,
   lazy,
   memo,
+  type SetStateAction,
   Suspense,
   useCallback,
   useEffect,
@@ -118,6 +122,7 @@ import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../rightPanelLayout";
 import {
+  fileSurfaceId,
   selectActiveRightPanel,
   selectActiveRightPanelSurface,
   selectThreadRightPanelState,
@@ -143,7 +148,6 @@ import { DiffWorkerPoolProvider } from "./DiffWorkerPoolProvider";
 import { BranchToolbar } from "./BranchToolbar";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import PlanSidebar from "./PlanSidebar";
-import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import {
   AlarmClockIcon,
   CheckCircle2Icon,
@@ -178,6 +182,8 @@ import {
   isRightPanelFocused,
 } from "../lib/rightPanelFocus";
 import { requestEditorFocus } from "./files/editorFocusRequest";
+import { dispatchActiveFileSave } from "./files/fileSaveBus";
+import { UnsavedChangesDialog } from "./files/UnsavedChangesDialog";
 import { getTerminalFocusOwner } from "../lib/terminalFocus";
 import { subscribeAppCommand } from "./appCommandBus";
 import { dispatchFileTreeAction } from "./files/fileTreeActionBus";
@@ -219,17 +225,18 @@ import {
   serverEnvironment,
 } from "../state/server";
 import { terminalEnvironment } from "../state/terminal";
-import { threadEnvironment } from "../state/threads";
+import { environmentThreadDetails, threadEnvironment } from "../state/threads";
 import { vcsEnvironment } from "../state/vcs";
 import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
 import {
   useProject,
   useProjects,
-  useThread,
+  useThreadMessages,
   useThreadProposedPlans,
   useThreadRefs,
   useThreadShell,
 } from "../state/entities";
+import { useThreadRoots } from "../state/threadRoots";
 import { environmentShell } from "../state/shell";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
 import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
@@ -399,6 +406,9 @@ const DiffPanel = lazy(() => import("./DiffPanel"));
 const SearchPanel = lazy(() => import("./SearchPanel"));
 const FilePreviewPanel = lazy(() => import("./files/FilePreviewPanel"));
 const GraphPanel = lazy(() => import("./graph/GraphPanel"));
+// Lazy so @xterm stays out of the entry chunk; the drawer only mounts once a
+// terminal is opened.
+const ThreadTerminalDrawer = lazy(() => import("./ThreadTerminalDrawer"));
 const EMPTY_PENDING_FILE_SURFACE_IDS: ReadonlySet<string> = new Set();
 const TYPE_TO_FOCUS_EDITABLE_SELECTOR = [
   "input",
@@ -499,6 +509,21 @@ interface TerminalLaunchContext {
 
 type PersistentTerminalLaunchContext = Pick<TerminalLaunchContext, "cwd" | "worktreePath">;
 
+/**
+ * Streaming-stable thread view: the shell-authoritative merge of the thread
+ * detail with `messages` hidden. Unlike `useThread`, the returned identity
+ * does not churn on pure streaming text deltas — messages must be read via
+ * `useThreadMessages` (or the narrower message slices) instead.
+ */
+function useThreadChrome(ref: ScopedThreadRef): Thread | null {
+  const shell = useThreadShell(ref);
+  const detailSansMessages = useAtomValue(environmentThreadDetails.detailSansMessagesAtom(ref));
+  return useMemo(
+    () => mergeEnvironmentThread(detailSansMessages, shell),
+    [detailSansMessages, shell],
+  );
+}
+
 function useLocalDispatchState(input: {
   activeThread: Thread | undefined;
   activeLatestTurn: Thread["latestTurn"] | null;
@@ -506,10 +531,11 @@ function useLocalDispatchState(input: {
   activePendingApproval: ApprovalRequestId | null;
   activePendingUserInput: ApprovalRequestId | null;
   threadError: string | null | undefined;
+  /** Sourced from the narrow latest-user-message slice; `activeThread` hides messages. */
+  latestUserMessageId: MessageId | null;
 }) {
   const [localDispatch, setLocalDispatch] = useState<LocalDispatchSnapshot | null>(null);
-  const latestUserMessageId =
-    input.activeThread?.messages.findLast((message) => message.role === "user")?.id ?? null;
+  const latestUserMessageId = input.latestUserMessageId;
 
   const resetLocalDispatch = useCallback(() => {
     setLocalDispatch(null);
@@ -549,10 +575,15 @@ function useLocalDispatchState(input: {
             ? active
             : { ...active, preparingWorktree };
         }
-        return createLocalDispatchSnapshot(input.activeThread, options);
+        // `activeThread` is the messages-hidden chrome, so the snapshot's
+        // findLast-derived id is patched from the narrow slice.
+        return {
+          ...createLocalDispatchSnapshot(input.activeThread, options),
+          latestUserMessageId,
+        };
       });
     },
-    [input.activeThread, serverAcknowledgedLocalDispatch],
+    [input.activeThread, latestUserMessageId, serverAcknowledgedLocalDispatch],
   );
 
   return {
@@ -633,7 +664,10 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
   const openTerminal = useAtomCommand(terminalEnvironment.open, "terminal open");
   const writeTerminal = useAtomCommand(terminalEnvironment.write, "terminal write");
   const closeTerminalMutation = useAtomCommand(terminalEnvironment.close, "terminal close");
-  const serverThread = useThread(threadRef);
+  // Chrome (messages hidden) — this drawer only reads workspace metadata, so
+  // it must not re-render on every streaming message delta.
+  const serverThread = useThreadChrome(threadRef);
+  const threadRoots = useThreadRoots(threadRef);
   const draftThread = useComposerDraftStore((store) => store.getDraftThreadByRef(threadRef));
   const projectRef = serverThread
     ? scopeProjectRef(serverThread.environmentId, serverThread.projectId)
@@ -833,34 +867,42 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
     threadRef,
   ]);
 
-  const createNewTerminal = useCallback(() => {
-    if (!cwd) {
-      return;
-    }
-    const terminalId = nextTerminalId(serverOrderedTerminalIds);
-    storeNewTerminal(threadRef, terminalId);
-    bumpFocusRequestId();
-    void openTerminal({
-      environmentId: threadRef.environmentId,
-      input: {
-        threadId,
-        terminalId,
-        cwd,
-        ...(effectiveWorktreePath != null ? { worktreePath: effectiveWorktreePath } : {}),
-        env: runtimeEnv,
-      },
-    });
-  }, [
-    bumpFocusRequestId,
-    cwd,
-    effectiveWorktreePath,
-    runtimeEnv,
-    serverOrderedTerminalIds,
-    storeNewTerminal,
-    threadId,
-    threadRef,
-    openTerminal,
-  ]);
+  const createNewTerminal = useCallback(
+    (rootPath?: string) => {
+      const launchCwd = rootPath ?? cwd;
+      if (!launchCwd) {
+        return;
+      }
+      const terminalId = nextTerminalId(serverOrderedTerminalIds);
+      storeNewTerminal(threadRef, terminalId);
+      bumpFocusRequestId();
+      // Attached-root launches skip the primary repo's worktree path: it
+      // describes the primary checkout, not the attached repository.
+      void openTerminal({
+        environmentId: threadRef.environmentId,
+        input: {
+          threadId,
+          terminalId,
+          cwd: launchCwd,
+          ...(rootPath === undefined && effectiveWorktreePath != null
+            ? { worktreePath: effectiveWorktreePath }
+            : {}),
+          env: runtimeEnv,
+        },
+      });
+    },
+    [
+      bumpFocusRequestId,
+      cwd,
+      effectiveWorktreePath,
+      runtimeEnv,
+      serverOrderedTerminalIds,
+      storeNewTerminal,
+      threadId,
+      threadRef,
+      openTerminal,
+    ],
+  );
 
   const activateTerminal = useCallback(
     (terminalId: string) => {
@@ -921,35 +963,38 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
 
   return (
     <div className={visible ? undefined : "hidden"}>
-      <ThreadTerminalDrawer
-        threadRef={threadRef}
-        threadId={threadId}
-        cwd={cwd}
-        worktreePath={effectiveWorktreePath}
-        runtimeEnv={runtimeEnv}
-        visible={visible}
-        height={terminalUiState.terminalHeight}
-        // Known-session order is MRU and changes on focus; persisted store order keeps sidebar labels stable.
-        terminalIds={terminalUiState.terminalIds}
-        activeTerminalId={terminalUiState.activeTerminalId}
-        terminalGroups={terminalUiState.terminalGroups}
-        activeTerminalGroupId={terminalUiState.activeTerminalGroupId}
-        focusRequestId={focusRequestId + localFocusRequestId + (visible ? 1 : 0)}
-        onSplitTerminal={splitTerminal}
-        onSplitTerminalVertical={splitTerminalVertical}
-        onNewTerminal={createNewTerminal}
-        splitShortcutLabel={visible ? splitShortcutLabel : undefined}
-        splitVerticalShortcutLabel={visible ? splitVerticalShortcutLabel : undefined}
-        newShortcutLabel={visible ? newShortcutLabel : undefined}
-        closeShortcutLabel={visible ? closeShortcutLabel : undefined}
-        keybindings={keybindings}
-        onActiveTerminalChange={activateTerminal}
-        onCloseTerminal={closeTerminal}
-        onHeightChange={setTerminalHeight}
-        onAddTerminalContext={handleAddTerminalContext}
-        terminalLabelsById={terminalLabelsById}
-        terminalLaunchLocationsById={terminalLaunchLocationsById}
-      />
+      <Suspense fallback={null}>
+        <ThreadTerminalDrawer
+          threadRef={threadRef}
+          threadId={threadId}
+          cwd={cwd}
+          worktreePath={effectiveWorktreePath}
+          runtimeEnv={runtimeEnv}
+          visible={visible}
+          height={terminalUiState.terminalHeight}
+          // Known-session order is MRU and changes on focus; persisted store order keeps sidebar labels stable.
+          terminalIds={terminalUiState.terminalIds}
+          activeTerminalId={terminalUiState.activeTerminalId}
+          terminalGroups={terminalUiState.terminalGroups}
+          activeTerminalGroupId={terminalUiState.activeTerminalGroupId}
+          focusRequestId={focusRequestId + localFocusRequestId + (visible ? 1 : 0)}
+          onSplitTerminal={splitTerminal}
+          onSplitTerminalVertical={splitTerminalVertical}
+          onNewTerminal={createNewTerminal}
+          launchRoots={threadRoots.all}
+          splitShortcutLabel={visible ? splitShortcutLabel : undefined}
+          splitVerticalShortcutLabel={visible ? splitVerticalShortcutLabel : undefined}
+          newShortcutLabel={visible ? newShortcutLabel : undefined}
+          closeShortcutLabel={visible ? closeShortcutLabel : undefined}
+          keybindings={keybindings}
+          onActiveTerminalChange={activateTerminal}
+          onCloseTerminal={closeTerminal}
+          onHeightChange={setTerminalHeight}
+          onAddTerminalContext={handleAddTerminalContext}
+          terminalLabelsById={terminalLabelsById}
+          terminalLaunchLocationsById={terminalLaunchLocationsById}
+        />
+      </Suspense>
     </div>
   );
 });
@@ -963,7 +1008,7 @@ interface PersistentThreadTerminalPanelProps {
   onAddTerminalContext: (selection: TerminalContextSelection) => void;
   onSplitTerminal: () => void;
   onSplitTerminalVertical: () => void;
-  onNewTerminal: () => void;
+  onNewTerminal: (rootPath?: string) => void;
   onActiveTerminalChange: (terminalId: string) => void;
   onCloseTerminal: (terminalId: string) => void;
   splitShortcutLabel?: string | undefined;
@@ -989,7 +1034,9 @@ const PersistentThreadTerminalPanel = memo(function PersistentThreadTerminalPane
   newShortcutLabel,
   closeShortcutLabel,
 }: PersistentThreadTerminalPanelProps) {
-  const serverThread = useThread(threadRef);
+  // Chrome (messages hidden) — only workspace metadata is read here.
+  const serverThread = useThreadChrome(threadRef);
+  const threadRoots = useThreadRoots(threadRef);
   const draftThread = useComposerDraftStore((store) => store.getDraftThreadByRef(threadRef));
   const projectRef = serverThread
     ? scopeProjectRef(serverThread.environmentId, serverThread.projectId)
@@ -1086,40 +1133,45 @@ const PersistentThreadTerminalPanel = memo(function PersistentThreadTerminalPane
   if (!project || !cwd) return null;
 
   return (
-    <ThreadTerminalDrawer
-      mode="panel"
-      threadRef={threadRef}
-      threadId={threadRef.threadId}
-      cwd={cwd}
-      worktreePath={worktreePath}
-      runtimeEnv={runtimeEnv}
-      height={0}
-      terminalIds={surface.terminalIds}
-      activeTerminalId={surface.activeTerminalId}
-      terminalGroups={[
-        {
-          id: surface.id,
-          terminalIds: surface.terminalIds,
-          ...(surface.splitDirection === "vertical" ? { splitDirection: "vertical" as const } : {}),
-        },
-      ]}
-      activeTerminalGroupId={surface.id}
-      focusRequestId={focusRequestId}
-      onSplitTerminal={onSplitTerminal}
-      onSplitTerminalVertical={onSplitTerminalVertical}
-      onNewTerminal={onNewTerminal}
-      splitShortcutLabel={splitShortcutLabel}
-      splitVerticalShortcutLabel={splitVerticalShortcutLabel}
-      newShortcutLabel={newShortcutLabel}
-      closeShortcutLabel={closeShortcutLabel}
-      onActiveTerminalChange={onActiveTerminalChange}
-      onCloseTerminal={onCloseTerminal}
-      onHeightChange={() => undefined}
-      onAddTerminalContext={onAddTerminalContext}
-      terminalLabelsById={terminalLabelsById}
-      terminalLaunchLocationsById={terminalLaunchLocationsById}
-      keybindings={keybindings}
-    />
+    <Suspense fallback={null}>
+      <ThreadTerminalDrawer
+        mode="panel"
+        threadRef={threadRef}
+        threadId={threadRef.threadId}
+        cwd={cwd}
+        worktreePath={worktreePath}
+        runtimeEnv={runtimeEnv}
+        height={0}
+        terminalIds={surface.terminalIds}
+        activeTerminalId={surface.activeTerminalId}
+        terminalGroups={[
+          {
+            id: surface.id,
+            terminalIds: surface.terminalIds,
+            ...(surface.splitDirection === "vertical"
+              ? { splitDirection: "vertical" as const }
+              : {}),
+          },
+        ]}
+        activeTerminalGroupId={surface.id}
+        focusRequestId={focusRequestId}
+        onSplitTerminal={onSplitTerminal}
+        onSplitTerminalVertical={onSplitTerminalVertical}
+        onNewTerminal={onNewTerminal}
+        launchRoots={threadRoots.all}
+        splitShortcutLabel={splitShortcutLabel}
+        splitVerticalShortcutLabel={splitVerticalShortcutLabel}
+        newShortcutLabel={newShortcutLabel}
+        closeShortcutLabel={closeShortcutLabel}
+        onActiveTerminalChange={onActiveTerminalChange}
+        onCloseTerminal={onCloseTerminal}
+        onHeightChange={() => undefined}
+        onAddTerminalContext={onAddTerminalContext}
+        terminalLabelsById={terminalLabelsById}
+        terminalLaunchLocationsById={terminalLaunchLocationsById}
+        keybindings={keybindings}
+      />
+    </Suspense>
   );
 });
 
@@ -1133,6 +1185,463 @@ type LocalThreadErrorEntry = {
 
 function chatActionErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "An error occurred.";
+}
+
+type MessagesTimelineProps = ComponentProps<typeof MessagesTimeline>;
+
+interface ChatTimelineSectionProps {
+  readonly threadRef: ScopedThreadRef;
+  /** Route environment — asset URLs resolve against the route, not the thread. */
+  readonly environmentId: EnvironmentId;
+  readonly activeThreadId: ThreadId;
+  readonly activeThreadEnvironmentId: EnvironmentId;
+  readonly routeThreadKey: string;
+  readonly isWorking: boolean;
+  readonly activeTurnInProgress: boolean;
+  readonly activeTurnStartedAt: string | null;
+  readonly latestTurn: Thread["latestTurn"];
+  readonly runningTurnId: TurnId | null;
+  readonly proposedPlans: Thread["proposedPlans"];
+  readonly workLogEntries: ReturnType<typeof deriveWorkLogEntries>;
+  readonly turnDiffSummaryByAssistantMessageId: MessagesTimelineProps["turnDiffSummaryByAssistantMessageId"];
+  readonly inferredCheckpointTurnCountByTurnId: Record<TurnId, number>;
+  readonly optimisticUserMessages: ChatMessage[];
+  readonly setOptimisticUserMessages: Dispatch<SetStateAction<ChatMessage[]>>;
+  readonly attachmentPreviewHandoffByMessageId: Record<string, string[]>;
+  readonly attachmentPreviewPromotionInFlightByMessageIdRef: { current: Record<string, true> };
+  readonly clearAttachmentPreviewHandoff: (
+    messageId: MessageId,
+    previewUrls?: ReadonlyArray<string>,
+  ) => void;
+  readonly handoffAttachmentPreviews: (messageId: MessageId, previewUrls: string[]) => void;
+  /** Kept current during render so the parent's stable revert callback can read it. */
+  readonly revertTurnCountRef: { current: ReadonlyMap<MessageId, number> };
+  readonly listRef: { current: LegendListRef | null };
+  readonly timelineScrollModeRef: { current: TimelineScrollMode };
+  readonly pendingTimelineAnchorRef: { current: MessageId | null };
+  readonly positionedTimelineAnchorRef: { current: MessageId | null };
+  readonly settledTimelineAnchorRef: { current: MessageId | null };
+  readonly anchorUserScrollGenerationRef: { current: number };
+  readonly liveFollowUserScrollGenerationRef: { current: number | null };
+  readonly getActiveTimelineTurnMetrics: (
+    list?: LegendListRef | null,
+  ) => ReturnType<typeof getAnchoredTurnMetrics> | null;
+  readonly timelineRealContentOverflowsViewport: (list?: LegendListRef | null) => boolean;
+  readonly onOpenTurnDiff: MessagesTimelineProps["onOpenTurnDiff"];
+  readonly onRevertUserMessage: MessagesTimelineProps["onRevertUserMessage"];
+  readonly isRevertingCheckpoint: boolean;
+  readonly onImageExpand: MessagesTimelineProps["onImageExpand"];
+  readonly markdownCwd: MessagesTimelineProps["markdownCwd"];
+  readonly resolvedTheme: MessagesTimelineProps["resolvedTheme"];
+  readonly timestampFormat: MessagesTimelineProps["timestampFormat"];
+  readonly workspaceRoot: MessagesTimelineProps["workspaceRoot"];
+  readonly skills: NonNullable<MessagesTimelineProps["skills"]>;
+  readonly anchorMessageId: MessagesTimelineProps["anchorMessageId"];
+  readonly onAnchorReady: MessagesTimelineProps["onAnchorReady"];
+  readonly onAnchorSizeChanged: MessagesTimelineProps["onAnchorSizeChanged"];
+  readonly contentInsetEndAdjustment: number;
+  readonly onIsAtEndChange: MessagesTimelineProps["onIsAtEndChange"];
+  readonly onManualNavigation: MessagesTimelineProps["onManualNavigation"];
+  readonly hideEmptyPlaceholder: boolean;
+  readonly topFadeEnabled: boolean;
+}
+
+/**
+ * Owns the streaming `messages` subscription (and everything derived from it)
+ * so a pure text delta re-renders only this subtree instead of the whole
+ * ChatViewContent. All other props are referentially stable across streaming
+ * deltas — the parent subscribes to the messages-hidden thread chrome.
+ */
+function ChatTimelineSection(props: ChatTimelineSectionProps) {
+  const {
+    threadRef,
+    environmentId,
+    activeThreadId,
+    attachmentPreviewHandoffByMessageId,
+    attachmentPreviewPromotionInFlightByMessageIdRef,
+    clearAttachmentPreviewHandoff,
+    handoffAttachmentPreviews,
+    optimisticUserMessages,
+    setOptimisticUserMessages,
+    proposedPlans,
+    workLogEntries,
+    turnDiffSummaryByAssistantMessageId,
+    inferredCheckpointTurnCountByTurnId,
+    revertTurnCountRef,
+    listRef,
+    timelineScrollModeRef,
+    pendingTimelineAnchorRef,
+    positionedTimelineAnchorRef,
+    settledTimelineAnchorRef,
+    anchorUserScrollGenerationRef,
+    liveFollowUserScrollGenerationRef,
+    getActiveTimelineTurnMetrics,
+    timelineRealContentOverflowsViewport,
+  } = props;
+  const serverMessages = useThreadMessages(threadRef);
+  const serverAttachmentIds = useMemo(() => {
+    const attachmentIds = new Set<string>();
+    for (const message of serverMessages) {
+      for (const attachment of message.attachments ?? []) {
+        attachmentIds.add(attachment.id);
+      }
+    }
+    return [...attachmentIds];
+  }, [serverMessages]);
+  const serverAttachmentResources = useMemo(
+    () =>
+      serverAttachmentIds.map((attachmentId) => ({
+        _tag: "attachment" as const,
+        attachmentId,
+      })),
+    [serverAttachmentIds],
+  );
+  const serverAttachmentUrls = useAssetUrls(environmentId, serverAttachmentResources);
+  const serverAttachmentUrlById = useMemo(
+    () =>
+      new Map(
+        serverAttachmentIds.flatMap((attachmentId, index) => {
+          const url = serverAttachmentUrls[index];
+          return url ? [[attachmentId, url] as const] : [];
+        }),
+      ),
+    [serverAttachmentIds, serverAttachmentUrls],
+  );
+  const displayServerMessages = useMemo<ReadonlyArray<ChatMessage>>(() => {
+    return serverMessages.map((message) => {
+      if (!message.attachments || message.attachments.length === 0) {
+        return message;
+      }
+      return {
+        ...message,
+        attachments: message.attachments.map((attachment) => {
+          const previewUrl = serverAttachmentUrlById.get(attachment.id);
+          return previewUrl ? { ...attachment, previewUrl } : attachment;
+        }),
+      };
+    });
+  }, [serverAttachmentUrlById, serverMessages]);
+  useEffect(() => {
+    if (typeof Image === "undefined" || displayServerMessages.length === 0) {
+      return;
+    }
+
+    const cleanups: Array<() => void> = [];
+    const userMessagesById = new Map<string, ChatMessage>(
+      displayServerMessages
+        .filter((message) => message.role === "user")
+        .map((message) => [String(message.id), message] as const),
+    );
+
+    for (const [messageId, handoffPreviewUrls] of Object.entries(
+      attachmentPreviewHandoffByMessageId,
+    )) {
+      if (attachmentPreviewPromotionInFlightByMessageIdRef.current[messageId]) {
+        continue;
+      }
+
+      const serverMessage = userMessagesById.get(messageId);
+      if (!serverMessage?.attachments || serverMessage.attachments.length === 0) {
+        continue;
+      }
+
+      const serverPreviewUrls = serverMessage.attachments.flatMap((attachment) =>
+        attachment.type === "image" && attachment.previewUrl ? [attachment.previewUrl] : [],
+      );
+      if (
+        serverPreviewUrls.length === 0 ||
+        serverPreviewUrls.length !== handoffPreviewUrls.length ||
+        serverPreviewUrls.some((previewUrl) => previewUrl.startsWith("blob:"))
+      ) {
+        continue;
+      }
+
+      attachmentPreviewPromotionInFlightByMessageIdRef.current[messageId] = true;
+
+      let cancelled = false;
+      const imageInstances: HTMLImageElement[] = [];
+
+      const preloadServerPreviews = Promise.all(
+        serverPreviewUrls.map(
+          (previewUrl) =>
+            new Promise<void>((resolve, reject) => {
+              const image = new Image();
+              imageInstances.push(image);
+              const handleLoad = () => resolve();
+              const handleError = () =>
+                reject(new Error(`Failed to load server preview for ${messageId}.`));
+              image.addEventListener("load", handleLoad, { once: true });
+              image.addEventListener("error", handleError, { once: true });
+              image.src = previewUrl;
+            }),
+        ),
+      );
+
+      void preloadServerPreviews
+        .then(() => {
+          if (cancelled) {
+            return;
+          }
+          clearAttachmentPreviewHandoff(messageId as MessageId, handoffPreviewUrls);
+        })
+        .catch(() => {
+          if (!cancelled) {
+            delete attachmentPreviewPromotionInFlightByMessageIdRef.current[messageId];
+          }
+        });
+
+      cleanups.push(() => {
+        cancelled = true;
+        delete attachmentPreviewPromotionInFlightByMessageIdRef.current[messageId];
+        for (const image of imageInstances) {
+          image.src = "";
+        }
+      });
+    }
+
+    return () => {
+      for (const cleanup of cleanups) {
+        cleanup();
+      }
+    };
+  }, [
+    attachmentPreviewHandoffByMessageId,
+    attachmentPreviewPromotionInFlightByMessageIdRef,
+    clearAttachmentPreviewHandoff,
+    displayServerMessages,
+  ]);
+  const timelineMessages = useMemo(() => {
+    const messages = displayServerMessages;
+    const serverMessagesWithPreviewHandoff =
+      Object.keys(attachmentPreviewHandoffByMessageId).length === 0
+        ? messages
+        : // Spread only fires for the few messages that actually changed;
+          // unchanged ones early-return their original reference.
+          // In-place mutation would break React's immutable state contract.
+          messages.map((message) => {
+            if (
+              message.role !== "user" ||
+              !message.attachments ||
+              message.attachments.length === 0
+            ) {
+              return message;
+            }
+            const handoffPreviewUrls = attachmentPreviewHandoffByMessageId[message.id];
+            if (!handoffPreviewUrls || handoffPreviewUrls.length === 0) {
+              return message;
+            }
+
+            let changed = false;
+            let imageIndex = 0;
+            const attachments = message.attachments.map((attachment) => {
+              if (attachment.type !== "image") {
+                return attachment;
+              }
+              const handoffPreviewUrl = handoffPreviewUrls[imageIndex];
+              imageIndex += 1;
+              if (!handoffPreviewUrl || attachment.previewUrl === handoffPreviewUrl) {
+                return attachment;
+              }
+              changed = true;
+              return {
+                ...attachment,
+                previewUrl: handoffPreviewUrl,
+              };
+            });
+
+            return changed ? { ...message, attachments } : message;
+          });
+
+    if (optimisticUserMessages.length === 0) {
+      return serverMessagesWithPreviewHandoff;
+    }
+    const serverIds = new Set(serverMessagesWithPreviewHandoff.map((message) => message.id));
+    const pendingMessages = optimisticUserMessages.filter((message) => !serverIds.has(message.id));
+    if (pendingMessages.length === 0) {
+      return serverMessagesWithPreviewHandoff;
+    }
+    return [...serverMessagesWithPreviewHandoff, ...pendingMessages];
+  }, [attachmentPreviewHandoffByMessageId, displayServerMessages, optimisticUserMessages]);
+  const timelineEntries = useMemo(
+    () => deriveTimelineEntries(timelineMessages, proposedPlans, workLogEntries),
+    [proposedPlans, timelineMessages, workLogEntries],
+  );
+  const revertTurnCountByUserMessageId = useMemo(() => {
+    const byUserMessageId = new Map<MessageId, number>();
+    for (let index = 0; index < timelineEntries.length; index += 1) {
+      const entry = timelineEntries[index];
+      if (!entry || entry.kind !== "message" || entry.message.role !== "user") {
+        continue;
+      }
+
+      for (let nextIndex = index + 1; nextIndex < timelineEntries.length; nextIndex += 1) {
+        const nextEntry = timelineEntries[nextIndex];
+        if (!nextEntry || nextEntry.kind !== "message") {
+          continue;
+        }
+        if (nextEntry.message.role === "user") {
+          break;
+        }
+        const summary = turnDiffSummaryByAssistantMessageId.get(nextEntry.message.id);
+        if (!summary) {
+          continue;
+        }
+        const turnCount =
+          summary.checkpointTurnCount ?? inferredCheckpointTurnCountByTurnId[summary.turnId];
+        if (typeof turnCount !== "number") {
+          break;
+        }
+        byUserMessageId.set(entry.message.id, Math.max(0, turnCount - 1));
+        break;
+      }
+    }
+
+    return byUserMessageId;
+  }, [inferredCheckpointTurnCountByTurnId, timelineEntries, turnDiffSummaryByAssistantMessageId]);
+  revertTurnCountRef.current = revertTurnCountByUserMessageId;
+
+  useEffect(() => {
+    if (liveFollowUserScrollGenerationRef.current !== anchorUserScrollGenerationRef.current) {
+      return;
+    }
+
+    let secondFrame: number | null = null;
+    const frame = requestAnimationFrame(() => {
+      secondFrame = requestAnimationFrame(() => {
+        if (liveFollowUserScrollGenerationRef.current !== anchorUserScrollGenerationRef.current) {
+          return;
+        }
+        if (pendingTimelineAnchorRef.current !== null) {
+          return;
+        }
+        if (
+          positionedTimelineAnchorRef.current !== null &&
+          settledTimelineAnchorRef.current !== positionedTimelineAnchorRef.current
+        ) {
+          return;
+        }
+        const list = listRef.current;
+        if (!list) {
+          return;
+        }
+
+        if (timelineScrollModeRef.current === "anchoring-new-turn") {
+          const metrics = getActiveTimelineTurnMetrics(list);
+          if (!metrics) {
+            return;
+          }
+          if (metrics.scrollDeltaToRevealEnd <= 1) {
+            return;
+          }
+
+          const nextOffset = list.getState().scroll + metrics.scrollDeltaToRevealEnd;
+          void list.scrollToOffset({ offset: nextOffset, animated: false });
+          return;
+        }
+
+        if (timelineScrollModeRef.current !== "following-end") {
+          return;
+        }
+        if (!timelineRealContentOverflowsViewport(list)) {
+          return;
+        }
+
+        void list.scrollToEnd?.({ animated: false });
+      });
+    });
+
+    return () => {
+      cancelAnimationFrame(frame);
+      if (secondFrame !== null) {
+        cancelAnimationFrame(secondFrame);
+      }
+    };
+  }, [
+    activeThreadId,
+    timelineEntries,
+    getActiveTimelineTurnMetrics,
+    timelineRealContentOverflowsViewport,
+    anchorUserScrollGenerationRef,
+    liveFollowUserScrollGenerationRef,
+    listRef,
+    pendingTimelineAnchorRef,
+    positionedTimelineAnchorRef,
+    settledTimelineAnchorRef,
+    timelineScrollModeRef,
+  ]);
+
+  useEffect(() => {
+    if (serverMessages.length === 0) {
+      return;
+    }
+    const serverIds = new Set(serverMessages.map((message) => message.id));
+    const removedMessages = optimisticUserMessages.filter((message) => serverIds.has(message.id));
+    if (removedMessages.length === 0) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setOptimisticUserMessages((existing) =>
+        existing.filter((message) => !serverIds.has(message.id)),
+      );
+    }, 0);
+    for (const removedMessage of removedMessages) {
+      const previewUrls = collectUserMessageBlobPreviewUrls(removedMessage);
+      if (previewUrls.length > 0) {
+        // Non-image blobs never join the preview handoff; release them now.
+        for (const attachment of removedMessage.attachments ?? []) {
+          if (attachment.type !== "image") {
+            revokeBlobPreviewUrl(attachment.previewUrl);
+          }
+        }
+        handoffAttachmentPreviews(removedMessage.id, previewUrls);
+        continue;
+      }
+      revokeUserMessagePreviewUrls(removedMessage);
+    }
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [
+    activeThreadId,
+    serverMessages,
+    handoffAttachmentPreviews,
+    optimisticUserMessages,
+    setOptimisticUserMessages,
+  ]);
+
+  return (
+    <MessagesTimeline
+      key={activeThreadId}
+      isWorking={props.isWorking}
+      activeTurnInProgress={props.activeTurnInProgress}
+      activeTurnStartedAt={props.activeTurnStartedAt}
+      listRef={listRef}
+      timelineEntries={timelineEntries}
+      latestTurn={props.latestTurn}
+      runningTurnId={props.runningTurnId}
+      turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
+      activeThreadEnvironmentId={props.activeThreadEnvironmentId}
+      routeThreadKey={props.routeThreadKey}
+      onOpenTurnDiff={props.onOpenTurnDiff}
+      revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
+      onRevertUserMessage={props.onRevertUserMessage}
+      isRevertingCheckpoint={props.isRevertingCheckpoint}
+      onImageExpand={props.onImageExpand}
+      markdownCwd={props.markdownCwd}
+      resolvedTheme={props.resolvedTheme}
+      timestampFormat={props.timestampFormat}
+      workspaceRoot={props.workspaceRoot}
+      skills={props.skills}
+      anchorMessageId={props.anchorMessageId}
+      onAnchorReady={props.onAnchorReady}
+      onAnchorSizeChanged={props.onAnchorSizeChanged}
+      contentInsetEndAdjustment={props.contentInsetEndAdjustment}
+      onIsAtEndChange={props.onIsAtEndChange}
+      onManualNavigation={props.onManualNavigation}
+      hideEmptyPlaceholder={props.hideEmptyPlaceholder}
+      topFadeEnabled={props.topFadeEnabled}
+    />
+  );
 }
 
 function ChatViewContent(props: ChatViewProps) {
@@ -1193,7 +1702,15 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const composerDraftTarget: ScopedThreadRef | DraftId =
     routeKind === "server" ? routeThreadRef : props.draftId;
-  const serverThread = useThread(routeThreadRef);
+  // Subscription narrowing: the chrome hides messages so pure streaming text
+  // deltas (~28ms commits) never re-render this component. Messages are
+  // consumed by ChatTimelineSection below; the few message-derived facts this
+  // component needs come from the narrow slices right after.
+  const serverThread = useThreadChrome(routeThreadRef);
+  const hasServerMessages = useAtomValue(environmentThreadDetails.hasMessagesAtom(routeThreadRef));
+  const latestUserMessageId = useAtomValue(
+    environmentThreadDetails.latestUserMessageIdAtom(routeThreadRef),
+  );
   const markThreadVisited = useUiStateStore((store) => store.markThreadVisited);
   const activeThreadLastVisitedAt = useUiStateStore(
     (store) => store.threadLastVisitedAtById[routeThreadKey],
@@ -1613,11 +2130,11 @@ function ChatViewContent(props: ChatViewProps) {
     ? (pendingFileSurfaceIdsByProject.get(activeProjectKey) ?? EMPTY_PENDING_FILE_SURFACE_IDS)
     : EMPTY_PENDING_FILE_SURFACE_IDS;
   const handleFilePendingChange = useCallback(
-    (relativePath: string, pending: boolean) => {
+    (relativePath: string, pending: boolean, options?: { readonly rootPath?: string | null }) => {
       if (!activeProjectKey) return;
       setPendingFileSurfaceIdsByProject((currentByProject) => {
         const current = currentByProject.get(activeProjectKey) ?? EMPTY_PENDING_FILE_SURFACE_IDS;
-        const surfaceId = `file:${relativePath}`;
+        const surfaceId = fileSurfaceId(options?.rootPath ?? null, relativePath);
         if (current.has(surfaceId) === pending) return currentByProject;
         const next = new Set(current);
         if (pending) next.add(surfaceId);
@@ -1629,6 +2146,33 @@ function ChatViewContent(props: ChatViewProps) {
       });
     },
     [activeProjectKey],
+  );
+  // Closing file tabs with unsaved edits while autosave is off routes
+  // through a Save / Discard / Cancel prompt instead of dropping the edits.
+  const autoSaveEnabled = useClientSettings((settings) => settings.autoSaveEnabled);
+  const [unsavedCloseRequest, setUnsavedCloseRequest] = useState<{
+    /** cwd is resolved at the dialog render site (primary root for null). */
+    dirtyFiles: Array<{ relativePath: string; rootPath: string | null }>;
+    proceed: () => void;
+  } | null>(null);
+  const guardUnsavedFileSurfaces = useCallback(
+    (surfaces: ReadonlyArray<RightPanelSurface>, proceed: () => void) => {
+      if (autoSaveEnabled) {
+        proceed();
+        return;
+      }
+      const dirtyFiles = surfaces.flatMap((surface) =>
+        surface.kind === "file" && pendingFileSurfaceIds.has(surface.id)
+          ? [{ relativePath: surface.relativePath, rootPath: surface.rootPath }]
+          : [],
+      );
+      if (dirtyFiles.length === 0) {
+        proceed();
+        return;
+      }
+      setUnsavedCloseRequest({ dirtyFiles, proceed });
+    },
+    [autoSaveEnabled, pendingFileSurfaceIds],
   );
   const configuredPreviewUrls = useMemo(
     () => getConfiguredPreviewUrls(activeProject?.scripts),
@@ -2052,6 +2596,7 @@ function ChatViewContent(props: ChatViewProps) {
     activePendingApproval: activePendingApproval?.requestId ?? null,
     activePendingUserInput: activePendingUserInput?.requestId ?? null,
     threadError,
+    latestUserMessageId,
   });
   const isWorking = phase === "running" || isSendBusy || isConnecting || isRevertingCheckpoint;
   const activeWorkStartedAt = deriveActiveWorkStartedAt(
@@ -2119,196 +2664,27 @@ function ChatViewContent(props: ChatViewProps) {
       return next;
     });
   }, []);
-  const serverMessages = activeThread?.messages;
-  const serverAttachmentIds = useMemo(() => {
-    const attachmentIds = new Set<string>();
-    for (const message of serverMessages ?? []) {
-      for (const attachment of message.attachments ?? []) {
-        attachmentIds.add(attachment.id);
-      }
-    }
-    return [...attachmentIds];
-  }, [serverMessages]);
-  const serverAttachmentResources = useMemo(
-    () =>
-      serverAttachmentIds.map((attachmentId) => ({
-        _tag: "attachment" as const,
-        attachmentId,
-      })),
-    [serverAttachmentIds],
-  );
-  const serverAttachmentUrls = useAssetUrls(environmentId, serverAttachmentResources);
-  const serverAttachmentUrlById = useMemo(
-    () =>
-      new Map(
-        serverAttachmentIds.flatMap((attachmentId, index) => {
-          const url = serverAttachmentUrls[index];
-          return url ? [[attachmentId, url] as const] : [];
-        }),
-      ),
-    [serverAttachmentIds, serverAttachmentUrls],
-  );
-  const displayServerMessages = useMemo<ReadonlyArray<ChatMessage>>(() => {
-    if (!serverMessages) return [];
-    return serverMessages.map((message) => {
-      if (!message.attachments || message.attachments.length === 0) {
-        return message;
-      }
-      return {
-        ...message,
-        attachments: message.attachments.map((attachment) => {
-          const previewUrl = serverAttachmentUrlById.get(attachment.id);
-          return previewUrl ? { ...attachment, previewUrl } : attachment;
-        }),
-      };
-    });
-  }, [serverAttachmentUrlById, serverMessages]);
-  useEffect(() => {
-    if (typeof Image === "undefined" || displayServerMessages.length === 0) {
-      return;
-    }
-
-    const cleanups: Array<() => void> = [];
-    const userMessagesById = new Map<string, ChatMessage>(
-      displayServerMessages
-        .filter((message) => message.role === "user")
-        .map((message) => [String(message.id), message] as const),
-    );
-
-    for (const [messageId, handoffPreviewUrls] of Object.entries(
-      attachmentPreviewHandoffByMessageId,
-    )) {
-      if (attachmentPreviewPromotionInFlightByMessageIdRef.current[messageId]) {
-        continue;
-      }
-
-      const serverMessage = userMessagesById.get(messageId);
-      if (!serverMessage?.attachments || serverMessage.attachments.length === 0) {
-        continue;
-      }
-
-      const serverPreviewUrls = serverMessage.attachments.flatMap((attachment) =>
-        attachment.type === "image" && attachment.previewUrl ? [attachment.previewUrl] : [],
-      );
-      if (
-        serverPreviewUrls.length === 0 ||
-        serverPreviewUrls.length !== handoffPreviewUrls.length ||
-        serverPreviewUrls.some((previewUrl) => previewUrl.startsWith("blob:"))
-      ) {
-        continue;
-      }
-
-      attachmentPreviewPromotionInFlightByMessageIdRef.current[messageId] = true;
-
-      let cancelled = false;
-      const imageInstances: HTMLImageElement[] = [];
-
-      const preloadServerPreviews = Promise.all(
-        serverPreviewUrls.map(
-          (previewUrl) =>
-            new Promise<void>((resolve, reject) => {
-              const image = new Image();
-              imageInstances.push(image);
-              const handleLoad = () => resolve();
-              const handleError = () =>
-                reject(new Error(`Failed to load server preview for ${messageId}.`));
-              image.addEventListener("load", handleLoad, { once: true });
-              image.addEventListener("error", handleError, { once: true });
-              image.src = previewUrl;
-            }),
-        ),
-      );
-
-      void preloadServerPreviews
-        .then(() => {
-          if (cancelled) {
-            return;
-          }
-          clearAttachmentPreviewHandoff(messageId as MessageId, handoffPreviewUrls);
-        })
-        .catch(() => {
-          if (!cancelled) {
-            delete attachmentPreviewPromotionInFlightByMessageIdRef.current[messageId];
-          }
-        });
-
-      cleanups.push(() => {
-        cancelled = true;
-        delete attachmentPreviewPromotionInFlightByMessageIdRef.current[messageId];
-        for (const image of imageInstances) {
-          image.src = "";
-        }
-      });
-    }
-
-    return () => {
-      for (const cleanup of cleanups) {
-        cleanup();
-      }
-    };
-  }, [attachmentPreviewHandoffByMessageId, clearAttachmentPreviewHandoff, displayServerMessages]);
-  const timelineMessages = useMemo(() => {
-    const messages = displayServerMessages;
-    const serverMessagesWithPreviewHandoff =
-      Object.keys(attachmentPreviewHandoffByMessageId).length === 0
-        ? messages
-        : // Spread only fires for the few messages that actually changed;
-          // unchanged ones early-return their original reference.
-          // In-place mutation would break React's immutable state contract.
-          messages.map((message) => {
-            if (
-              message.role !== "user" ||
-              !message.attachments ||
-              message.attachments.length === 0
-            ) {
-              return message;
-            }
-            const handoffPreviewUrls = attachmentPreviewHandoffByMessageId[message.id];
-            if (!handoffPreviewUrls || handoffPreviewUrls.length === 0) {
-              return message;
-            }
-
-            let changed = false;
-            let imageIndex = 0;
-            const attachments = message.attachments.map((attachment) => {
-              if (attachment.type !== "image") {
-                return attachment;
-              }
-              const handoffPreviewUrl = handoffPreviewUrls[imageIndex];
-              imageIndex += 1;
-              if (!handoffPreviewUrl || attachment.previewUrl === handoffPreviewUrl) {
-                return attachment;
-              }
-              changed = true;
-              return {
-                ...attachment,
-                previewUrl: handoffPreviewUrl,
-              };
-            });
-
-            return changed ? { ...message, attachments } : message;
-          });
-
-    if (optimisticUserMessages.length === 0) {
-      return serverMessagesWithPreviewHandoff;
-    }
-    const serverIds = new Set(serverMessagesWithPreviewHandoff.map((message) => message.id));
-    const pendingMessages = optimisticUserMessages.filter((message) => !serverIds.has(message.id));
-    if (pendingMessages.length === 0) {
-      return serverMessagesWithPreviewHandoff;
-    }
-    return [...serverMessagesWithPreviewHandoff, ...pendingMessages];
-  }, [attachmentPreviewHandoffByMessageId, displayServerMessages, optimisticUserMessages]);
-  const timelineEntries = useMemo(
-    () =>
-      deriveTimelineEntries(timelineMessages, activeThread?.proposedPlans ?? [], workLogEntries),
-    [activeThread?.proposedPlans, timelineMessages, workLogEntries],
-  );
   const [dockedDraftHeroThreadKey, setDockedDraftHeroThreadKey] = useState<string | null>(null);
   const draftHeroDockRequested =
     activeThreadKey !== null && dockedDraftHeroThreadKey === activeThreadKey;
+  // Local drafts have no server messages, so their timeline reduces to the
+  // optimistic messages (plus plans/work entries — both empty on a fresh
+  // draft). Computing this here keeps the parent off the streaming messages
+  // slice; the full timeline lives in ChatTimelineSection.
+  const draftTimelineIsEmpty = useMemo(() => {
+    if (!isLocalDraftThread) {
+      return false;
+    }
+    return (
+      deriveTimelineEntries(
+        optimisticUserMessages,
+        activeThread?.proposedPlans ?? [],
+        workLogEntries,
+      ).length === 0
+    );
+  }, [activeThread?.proposedPlans, isLocalDraftThread, optimisticUserMessages, workLogEntries]);
   const isDraftHeroState =
-    isLocalDraftThread && timelineEntries.length === 0 && !isWorking && !draftHeroDockRequested;
+    isLocalDraftThread && draftTimelineIsEmpty && !isWorking && !draftHeroDockRequested;
   const [
     attachDraftHeroTransitionGroupRef,
     attachDraftHeroComposerAnchorRef,
@@ -2324,39 +2700,10 @@ function ChatViewContent(props: ChatViewProps) {
     }
     return byMessageId;
   }, [turnDiffSummaries]);
-  const revertTurnCountByUserMessageId = useMemo(() => {
-    const byUserMessageId = new Map<MessageId, number>();
-    for (let index = 0; index < timelineEntries.length; index += 1) {
-      const entry = timelineEntries[index];
-      if (!entry || entry.kind !== "message" || entry.message.role !== "user") {
-        continue;
-      }
-
-      for (let nextIndex = index + 1; nextIndex < timelineEntries.length; nextIndex += 1) {
-        const nextEntry = timelineEntries[nextIndex];
-        if (!nextEntry || nextEntry.kind !== "message") {
-          continue;
-        }
-        if (nextEntry.message.role === "user") {
-          break;
-        }
-        const summary = turnDiffSummaryByAssistantMessageId.get(nextEntry.message.id);
-        if (!summary) {
-          continue;
-        }
-        const turnCount =
-          summary.checkpointTurnCount ?? inferredCheckpointTurnCountByTurnId[summary.turnId];
-        if (typeof turnCount !== "number") {
-          break;
-        }
-        byUserMessageId.set(entry.message.id, Math.max(0, turnCount - 1));
-        break;
-      }
-    }
-
-    return byUserMessageId;
-  }, [inferredCheckpointTurnCountByTurnId, timelineEntries, turnDiffSummaryByAssistantMessageId]);
-
+  // Effective workspace roots for this thread (primary + attached). The
+  // primary equals gitCwd today; surfaces that later fan out across roots
+  // read from this seam instead of recomputing worktree/workspace fallbacks.
+  const threadRoots = useThreadRoots(routeThreadRef, draftId ?? undefined);
   const gitCwd = activeProject
     ? projectScriptCwd({
         project: { cwd: activeProject.workspaceRoot },
@@ -2463,7 +2810,7 @@ function ChatViewContent(props: ChatViewProps) {
 
   const envLocked = Boolean(
     activeThread &&
-    (activeThread.messages.length > 0 ||
+    (hasServerMessages ||
       (activeThread.session !== null && activeThread.session.status !== "stopped")),
   );
 
@@ -2558,7 +2905,7 @@ function ChatViewContent(props: ChatViewProps) {
       if (!activeThreadId || !activeProject) {
         return;
       }
-      const cwdForOpen = gitCwd ?? activeProject.workspaceRoot;
+      const cwdForOpen = threadRoots.primary?.path ?? gitCwd ?? activeProject.workspaceRoot;
       if (!cwdForOpen) {
         return;
       }
@@ -2588,6 +2935,7 @@ function ChatViewContent(props: ChatViewProps) {
     activeThreadWorktreePath,
     environmentId,
     gitCwd,
+    threadRoots,
     openTerminal,
     panelTerminalIds,
     setTerminalOpen,
@@ -2600,7 +2948,7 @@ function ChatViewContent(props: ChatViewProps) {
       if (!activeThreadRef || hasReachedSplitLimit || !activeThreadId || !activeProject) {
         return;
       }
-      const cwdForOpen = gitCwd ?? activeProject.workspaceRoot;
+      const cwdForOpen = threadRoots.primary?.path ?? gitCwd ?? activeProject.workspaceRoot;
       if (!cwdForOpen) {
         return;
       }
@@ -2634,6 +2982,7 @@ function ChatViewContent(props: ChatViewProps) {
       activeThreadWorktreePath,
       environmentId,
       gitCwd,
+      threadRoots,
       hasReachedSplitLimit,
       storeSplitTerminal,
       storeSplitTerminalVertical,
@@ -2643,7 +2992,7 @@ function ChatViewContent(props: ChatViewProps) {
     if (!activeThreadRef || !activeThreadId || !activeProject) {
       return;
     }
-    const cwdForOpen = gitCwd ?? activeProject.workspaceRoot;
+    const cwdForOpen = threadRoots.primary?.path ?? gitCwd ?? activeProject.workspaceRoot;
     if (!cwdForOpen) {
       return;
     }
@@ -2672,6 +3021,7 @@ function ChatViewContent(props: ChatViewProps) {
     activeThreadWorktreePath,
     environmentId,
     gitCwd,
+    threadRoots,
     storeNewTerminal,
   ]);
   const closeTerminal = useCallback(
@@ -2725,7 +3075,8 @@ function ChatViewContent(props: ChatViewProps) {
           return { ...current, [activeProject.id]: script.id };
         });
       }
-      const targetCwd = options?.cwd ?? gitCwd ?? activeProject.workspaceRoot;
+      const targetCwd =
+        options?.cwd ?? threadRoots.primary?.path ?? gitCwd ?? activeProject.workspaceRoot;
       const baseTerminalId =
         terminalUiState.activeTerminalId || activeKnownTerminalIds[0] || DEFAULT_THREAD_TERMINAL_ID;
       const isBaseTerminalBusy = runningTerminalIds.includes(baseTerminalId);
@@ -2812,6 +3163,7 @@ function ChatViewContent(props: ChatViewProps) {
       activeThreadId,
       activeThreadRef,
       gitCwd,
+      threadRoots,
       setTerminalOpen,
       setThreadError,
       storeNewTerminal,
@@ -3069,9 +3421,11 @@ function ChatViewContent(props: ChatViewProps) {
     });
   }, [activeProject, activeWorkspaceRoot, knowledgeGraphEnabled, runGraphBuild]);
   const openFileSurface = useCallback(
-    (relativePath: string, line?: number) => {
+    (relativePath: string, line?: number, options?: { readonly rootPath?: string | null }) => {
       if (!activeThreadRef || !activeProject) return;
-      useRightPanelStore.getState().openFile(activeThreadRef, relativePath, line);
+      useRightPanelStore
+        .getState()
+        .openFile(activeThreadRef, relativePath, line, undefined, options);
     },
     [activeProject, activeThreadRef],
   );
@@ -3094,35 +3448,41 @@ function ChatViewContent(props: ChatViewProps) {
       useRightPanelStore.getState().close(activeThreadRef);
     }
   }, [activeThreadRef]);
-  const addTerminalSurface = useCallback(() => {
-    if (!activeThreadRef || !activeThreadId || !activeProject) return;
-    const cwd = gitCwd ?? activeProject.workspaceRoot;
-    const terminalId = nextTerminalId([...activeKnownTerminalIds, ...panelTerminalIds]);
-    useRightPanelStore.getState().openTerminal(activeThreadRef, terminalId);
-    setTerminalFocusRequestId((value) => value + 1);
-    void openTerminal({
-      environmentId: activeThreadRef.environmentId,
-      input: {
-        threadId: activeThreadId,
-        terminalId,
-        cwd,
-        ...(activeThreadWorktreePath != null ? { worktreePath: activeThreadWorktreePath } : {}),
-        env: projectScriptRuntimeEnv({
-          project: { cwd: activeProject.workspaceRoot },
-          worktreePath: activeThreadWorktreePath,
-        }),
-      },
-    });
-  }, [
-    activeKnownTerminalIds,
-    activeProject,
-    activeThreadId,
-    activeThreadRef,
-    activeThreadWorktreePath,
-    gitCwd,
-    openTerminal,
-    panelTerminalIds,
-  ]);
+  const addTerminalSurface = useCallback(
+    (rootPath?: string) => {
+      if (!activeThreadRef || !activeThreadId || !activeProject) return;
+      const cwd = rootPath ?? threadRoots.primary?.path ?? gitCwd ?? activeProject.workspaceRoot;
+      const terminalId = nextTerminalId([...activeKnownTerminalIds, ...panelTerminalIds]);
+      useRightPanelStore.getState().openTerminal(activeThreadRef, terminalId);
+      setTerminalFocusRequestId((value) => value + 1);
+      void openTerminal({
+        environmentId: activeThreadRef.environmentId,
+        input: {
+          threadId: activeThreadId,
+          terminalId,
+          cwd,
+          ...(rootPath === undefined && activeThreadWorktreePath != null
+            ? { worktreePath: activeThreadWorktreePath }
+            : {}),
+          env: projectScriptRuntimeEnv({
+            project: { cwd: activeProject.workspaceRoot },
+            worktreePath: activeThreadWorktreePath,
+          }),
+        },
+      });
+    },
+    [
+      activeKnownTerminalIds,
+      activeProject,
+      activeThreadId,
+      activeThreadRef,
+      activeThreadWorktreePath,
+      gitCwd,
+      threadRoots,
+      openTerminal,
+      panelTerminalIds,
+    ],
+  );
   const splitPanelTerminal = useCallback(
     (direction: "horizontal" | "vertical" = "horizontal") => {
       if (
@@ -3135,7 +3495,7 @@ function ChatViewContent(props: ChatViewProps) {
         return;
       }
       const terminalId = nextTerminalId([...activeKnownTerminalIds, ...panelTerminalIds]);
-      const cwd = gitCwd ?? activeProject.workspaceRoot;
+      const cwd = threadRoots.primary?.path ?? gitCwd ?? activeProject.workspaceRoot;
       useRightPanelStore
         .getState()
         .splitTerminal(activeThreadRef, activeRightPanelSurface.id, terminalId, direction);
@@ -3162,6 +3522,7 @@ function ChatViewContent(props: ChatViewProps) {
       activeThreadRef,
       activeThreadWorktreePath,
       gitCwd,
+      threadRoots,
       openTerminal,
       panelTerminalIds,
     ],
@@ -3282,23 +3643,33 @@ function ChatViewContent(props: ChatViewProps) {
   const closeRightPanelSurface = useCallback(
     (surface: RightPanelSurface) => {
       if (!activeThreadRef) return;
-      cleanupRightPanelSurfaces([surface]);
-      useRightPanelStore.getState().closeSurface(activeThreadRef, surface.id);
-      syncActivePreviewSurface();
+      guardUnsavedFileSurfaces([surface], () => {
+        cleanupRightPanelSurfaces([surface]);
+        useRightPanelStore.getState().closeSurface(activeThreadRef, surface.id);
+        syncActivePreviewSurface();
+      });
     },
-    [activeThreadRef, cleanupRightPanelSurfaces, syncActivePreviewSurface],
+    [
+      activeThreadRef,
+      cleanupRightPanelSurfaces,
+      guardUnsavedFileSurfaces,
+      syncActivePreviewSurface,
+    ],
   );
   const closeOtherRightPanelSurfaces = useCallback(
     (surface: RightPanelSurface) => {
       if (!activeThreadRef) return;
       const surfaces = rightPanelState.surfaces.filter((entry) => entry.id !== surface.id);
-      cleanupRightPanelSurfaces(surfaces);
-      useRightPanelStore.getState().closeOtherSurfaces(activeThreadRef, surface.id);
-      syncActivePreviewSurface();
+      guardUnsavedFileSurfaces(surfaces, () => {
+        cleanupRightPanelSurfaces(surfaces);
+        useRightPanelStore.getState().closeOtherSurfaces(activeThreadRef, surface.id);
+        syncActivePreviewSurface();
+      });
     },
     [
       activeThreadRef,
       cleanupRightPanelSurfaces,
+      guardUnsavedFileSurfaces,
       rightPanelState.surfaces,
       syncActivePreviewSurface,
     ],
@@ -3309,22 +3680,32 @@ function ChatViewContent(props: ChatViewProps) {
       const surfaceIndex = rightPanelState.surfaces.findIndex((entry) => entry.id === surface.id);
       if (surfaceIndex < 0) return;
       const surfaces = rightPanelState.surfaces.slice(surfaceIndex + 1);
-      cleanupRightPanelSurfaces(surfaces);
-      useRightPanelStore.getState().closeSurfacesToRight(activeThreadRef, surface.id);
-      syncActivePreviewSurface();
+      guardUnsavedFileSurfaces(surfaces, () => {
+        cleanupRightPanelSurfaces(surfaces);
+        useRightPanelStore.getState().closeSurfacesToRight(activeThreadRef, surface.id);
+        syncActivePreviewSurface();
+      });
     },
     [
       activeThreadRef,
       cleanupRightPanelSurfaces,
+      guardUnsavedFileSurfaces,
       rightPanelState.surfaces,
       syncActivePreviewSurface,
     ],
   );
   const closeAllRightPanelSurfaces = useCallback(() => {
     if (!activeThreadRef) return;
-    cleanupRightPanelSurfaces(rightPanelState.surfaces);
-    useRightPanelStore.getState().closeAllSurfaces(activeThreadRef);
-  }, [activeThreadRef, cleanupRightPanelSurfaces, rightPanelState.surfaces]);
+    guardUnsavedFileSurfaces(rightPanelState.surfaces, () => {
+      cleanupRightPanelSurfaces(rightPanelState.surfaces);
+      useRightPanelStore.getState().closeAllSurfaces(activeThreadRef);
+    });
+  }, [
+    activeThreadRef,
+    cleanupRightPanelSurfaces,
+    guardUnsavedFileSurfaces,
+    rightPanelState.surfaces,
+  ]);
   const copyRightPanelFilePath = useCallback((relativePath: string) => {
     if (typeof window === "undefined" || !navigator.clipboard?.writeText) {
       toastManager.add(
@@ -3688,72 +4069,6 @@ function ChatViewContent(props: ChatViewProps) {
   }, []);
 
   useEffect(() => {
-    if (!activeThread?.id) {
-      return;
-    }
-    if (liveFollowUserScrollGenerationRef.current !== anchorUserScrollGenerationRef.current) {
-      return;
-    }
-
-    let secondFrame: number | null = null;
-    const frame = requestAnimationFrame(() => {
-      secondFrame = requestAnimationFrame(() => {
-        if (liveFollowUserScrollGenerationRef.current !== anchorUserScrollGenerationRef.current) {
-          return;
-        }
-        if (pendingTimelineAnchorRef.current !== null) {
-          return;
-        }
-        if (
-          positionedTimelineAnchorRef.current !== null &&
-          settledTimelineAnchorRef.current !== positionedTimelineAnchorRef.current
-        ) {
-          return;
-        }
-        const list = legendListRef.current;
-        if (!list) {
-          return;
-        }
-
-        if (timelineScrollModeRef.current === "anchoring-new-turn") {
-          const metrics = getActiveTimelineTurnMetrics(list);
-          if (!metrics) {
-            return;
-          }
-          if (metrics.scrollDeltaToRevealEnd <= 1) {
-            return;
-          }
-
-          const nextOffset = list.getState().scroll + metrics.scrollDeltaToRevealEnd;
-          void list.scrollToOffset({ offset: nextOffset, animated: false });
-          return;
-        }
-
-        if (timelineScrollModeRef.current !== "following-end") {
-          return;
-        }
-        if (!timelineRealContentOverflowsViewport(list)) {
-          return;
-        }
-
-        void list.scrollToEnd?.({ animated: false });
-      });
-    });
-
-    return () => {
-      cancelAnimationFrame(frame);
-      if (secondFrame !== null) {
-        cancelAnimationFrame(secondFrame);
-      }
-    };
-  }, [
-    activeThread?.id,
-    timelineEntries,
-    getActiveTimelineTurnMetrics,
-    timelineRealContentOverflowsViewport,
-  ]);
-
-  useEffect(() => {
     setPullRequestDialogState(null);
     isAtEndRef.current = true;
     timelineScrollModeRef.current = "following-end";
@@ -3811,40 +4126,6 @@ function ChatViewContent(props: ChatViewProps) {
   }, [activeThread?.id, focusComposer, terminalUiState.terminalOpen]);
 
   useEffect(() => {
-    if (!activeThread?.id) return;
-    if (activeThread.messages.length === 0) {
-      return;
-    }
-    const serverIds = new Set(activeThread.messages.map((message) => message.id));
-    const removedMessages = optimisticUserMessages.filter((message) => serverIds.has(message.id));
-    if (removedMessages.length === 0) {
-      return;
-    }
-    const timer = window.setTimeout(() => {
-      setOptimisticUserMessages((existing) =>
-        existing.filter((message) => !serverIds.has(message.id)),
-      );
-    }, 0);
-    for (const removedMessage of removedMessages) {
-      const previewUrls = collectUserMessageBlobPreviewUrls(removedMessage);
-      if (previewUrls.length > 0) {
-        // Non-image blobs never join the preview handoff; release them now.
-        for (const attachment of removedMessage.attachments ?? []) {
-          if (attachment.type !== "image") {
-            revokeBlobPreviewUrl(attachment.previewUrl);
-          }
-        }
-        handoffAttachmentPreviews(removedMessage.id, previewUrls);
-        continue;
-      }
-      revokeUserMessagePreviewUrls(removedMessage);
-    }
-    return () => {
-      window.clearTimeout(timer);
-    };
-  }, [activeThread?.id, activeThread?.messages, handoffAttachmentPreviews, optimisticUserMessages]);
-
-  useEffect(() => {
     setOptimisticUserMessages((existing) => {
       for (const message of existing) {
         revokeUserMessagePreviewUrls(message);
@@ -3868,7 +4149,7 @@ function ChatViewContent(props: ChatViewProps) {
   const canOverrideServerThreadEnvMode = Boolean(
     isServerThread &&
     activeThread &&
-    activeThread.messages.length === 0 &&
+    !hasServerMessages &&
     activeThread.worktreePath === null &&
     !envLocked,
   );
@@ -4435,6 +4716,15 @@ function ChatViewContent(props: ChatViewProps) {
         return true;
       }
 
+      if (command === "file.save") {
+        const save = dispatchActiveFileSave();
+        if (save !== null) return true;
+        // Claim ⌘S while a file view is open even when nothing is editable
+        // (rendered markdown, truncated preview) so the browser's save-page
+        // dialog never appears over it.
+        return activeRightPanelSurface?.kind === "file";
+      }
+
       if (command === "rightPanel.closeSurface") {
         // Only claim mod+w while a right-panel surface is open; otherwise
         // fall through to the platform default.
@@ -4719,7 +5009,7 @@ function ChatViewContent(props: ChatViewProps) {
       return;
     }
     const threadIdForSend = activeThread.id;
-    const isFirstMessage = !isServerThread || activeThread.messages.length === 0;
+    const isFirstMessage = !isServerThread || !hasServerMessages;
     const baseBranchForWorktree =
       isFirstMessage && sendEnvMode === "worktree" && !activeThread.worktreePath
         ? activeThreadBranch
@@ -5676,8 +5966,9 @@ function ChatViewContent(props: ChatViewProps) {
   );
   // Both the Map and the revert handler are read from refs at call-time so
   // the callback reference is fully stable and never busts context identity.
-  const revertTurnCountRef = useRef(revertTurnCountByUserMessageId);
-  revertTurnCountRef.current = revertTurnCountByUserMessageId;
+  // ChatTimelineSection (which derives the Map from the streaming messages)
+  // keeps `revertTurnCountRef.current` up to date during its render.
+  const revertTurnCountRef = useRef<ReadonlyMap<MessageId, number>>(new Map());
   const onRevertToTurnCountRef = useRef(onRevertToTurnCount);
   onRevertToTurnCountRef.current = onRevertToTurnCount;
   const onRevertUserMessage = useCallback((messageId: MessageId) => {
@@ -5803,7 +6094,10 @@ function ChatViewContent(props: ChatViewProps) {
           relativePath={
             activeRightPanelSurface.kind === "file" ? activeRightPanelSurface.relativePath : null
           }
+          roots={threadRoots.all}
+          activeRootPath={activeFileSurface?.rootPath ?? null}
           revealLine={activeFileSurface?.revealLine ?? null}
+          revealEndLine={activeFileSurface?.revealEndLine ?? null}
           revealRequestId={activeFileSurface?.revealRequestId ?? 0}
           onOpenFile={openFileSurface}
           onPendingChange={handleFilePendingChange}
@@ -5879,25 +6173,47 @@ function ChatViewContent(props: ChatViewProps) {
             </div>
             {/* Messages Wrapper */}
             <div className="relative flex min-h-0 flex-1 flex-col">
-              {/* Messages — LegendList handles virtualization and scrolling internally */}
-              <MessagesTimeline
-                key={activeThread.id}
+              {/* Messages — ChatTimelineSection owns the streaming messages
+                  subscription so pure text deltas re-render only this subtree;
+                  LegendList handles virtualization and scrolling internally */}
+              <ChatTimelineSection
+                threadRef={routeThreadRef}
+                environmentId={environmentId}
+                activeThreadId={activeThread.id}
+                activeThreadEnvironmentId={activeThread.environmentId}
+                routeThreadKey={routeThreadKey}
                 isWorking={isWorking}
                 activeTurnInProgress={isWorking || !latestTurnSettled}
                 activeTurnStartedAt={activeWorkStartedAt}
-                listRef={legendListRef}
-                timelineEntries={timelineEntries}
                 latestTurn={activeLatestTurn}
                 runningTurnId={
                   activeThread.session?.status === "running"
                     ? activeThread.session.activeTurnId
                     : null
                 }
+                proposedPlans={activeThread.proposedPlans}
+                workLogEntries={workLogEntries}
                 turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
-                activeThreadEnvironmentId={activeThread.environmentId}
-                routeThreadKey={routeThreadKey}
+                inferredCheckpointTurnCountByTurnId={inferredCheckpointTurnCountByTurnId}
+                optimisticUserMessages={optimisticUserMessages}
+                setOptimisticUserMessages={setOptimisticUserMessages}
+                attachmentPreviewHandoffByMessageId={attachmentPreviewHandoffByMessageId}
+                attachmentPreviewPromotionInFlightByMessageIdRef={
+                  attachmentPreviewPromotionInFlightByMessageIdRef
+                }
+                clearAttachmentPreviewHandoff={clearAttachmentPreviewHandoff}
+                handoffAttachmentPreviews={handoffAttachmentPreviews}
+                revertTurnCountRef={revertTurnCountRef}
+                listRef={legendListRef}
+                timelineScrollModeRef={timelineScrollModeRef}
+                pendingTimelineAnchorRef={pendingTimelineAnchorRef}
+                positionedTimelineAnchorRef={positionedTimelineAnchorRef}
+                settledTimelineAnchorRef={settledTimelineAnchorRef}
+                anchorUserScrollGenerationRef={anchorUserScrollGenerationRef}
+                liveFollowUserScrollGenerationRef={liveFollowUserScrollGenerationRef}
+                getActiveTimelineTurnMetrics={getActiveTimelineTurnMetrics}
+                timelineRealContentOverflowsViewport={timelineRealContentOverflowsViewport}
                 onOpenTurnDiff={onOpenTurnDiff}
-                revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
                 onRevertUserMessage={onRevertUserMessage}
                 isRevertingCheckpoint={isRevertingCheckpoint}
                 onImageExpand={onExpandTimelineImage}
@@ -6037,6 +6353,7 @@ function ChatViewContent(props: ChatViewProps) {
                             keybindings={keybindings}
                             terminalOpen={Boolean(terminalUiState.terminalOpen)}
                             gitCwd={gitCwd}
+                            threadRoots={threadRoots.all}
                             promptRef={promptRef}
                             composerImagesRef={composerImagesRef}
                             composerTerminalContextsRef={composerTerminalContextsRef}
@@ -6215,7 +6532,7 @@ function ChatViewContent(props: ChatViewProps) {
             onCloseAllSurfaces={closeAllRightPanelSurfaces}
             onCopyFilePath={copyRightPanelFilePath}
             onAddBrowser={createBrowserSurface}
-            onAddTerminal={addTerminalSurface}
+            onAddTerminal={() => addTerminalSurface()}
             onAddDiff={addDiffSurface}
             onAddFiles={addFilesSurface}
             onAddSearch={addSearchSurface}
@@ -6247,7 +6564,7 @@ function ChatViewContent(props: ChatViewProps) {
             onCloseAllSurfaces={closeAllRightPanelSurfaces}
             onCopyFilePath={copyRightPanelFilePath}
             onAddBrowser={createBrowserSurface}
-            onAddTerminal={addTerminalSurface}
+            onAddTerminal={() => addTerminalSurface()}
             onAddDiff={addDiffSurface}
             onAddFiles={addFilesSurface}
             onAddSearch={addSearchSurface}
@@ -6261,6 +6578,25 @@ function ChatViewContent(props: ChatViewProps) {
             {rightPanelContent}
           </RightPanelTabs>
         </RightPanelSheet>
+      ) : null}
+
+      {unsavedCloseRequest && activeProject && activeWorkspaceRoot ? (
+        <UnsavedChangesDialog
+          environmentId={activeProject.environmentId}
+          dirtyFiles={unsavedCloseRequest.dirtyFiles.map((file) => ({
+            ...file,
+            cwd: file.rootPath ?? activeWorkspaceRoot,
+          }))}
+          onResolvePending={(relativePath, rootPath) =>
+            handleFilePendingChange(relativePath, false, { rootPath })
+          }
+          onProceed={() => {
+            const { proceed } = unsavedCloseRequest;
+            setUnsavedCloseRequest(null);
+            proceed();
+          }}
+          onCancel={() => setUnsavedCloseRequest(null)}
+        />
       ) : null}
 
       {expandedImage && (

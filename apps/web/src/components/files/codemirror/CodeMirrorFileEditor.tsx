@@ -29,7 +29,7 @@ import { syncCodeEditorFocusToDesktop } from "../../../lib/desktopEditorZoom";
 import { computeDocReplacement } from "./docReplacement";
 import { requestDocumentSave } from "./documentSave";
 import { editorFontSize } from "./fontSize";
-import { languageExtensionForPath, lazyLanguageLoaderForPath } from "./languages";
+import { languageExtensionForPath } from "./languages";
 import { goToLspDefinitionAtCursor, showLspHoverAtCursor } from "./lspBridge";
 import { revealEditorLine, revealLineExtension } from "./revealLine";
 import { editorTheme } from "./theme";
@@ -38,6 +38,7 @@ import {
   saveEditorViewState,
   shouldRestoreEditorViewState,
 } from "./viewStateCache";
+import { useLazyHighlighting } from "./useLazyHighlighting";
 
 // `gh` in vim normal mode shows LSP hover info at the cursor (the VSCode-vim
 // convention). Registered once; no-ops in documents without an LSP bridge.
@@ -68,6 +69,8 @@ export interface CodeMirrorFileEditorProps {
   readOnly?: boolean;
   /** Line to scroll to and highlight; retriggered by `revealRequestId`. */
   revealLine?: number | null;
+  /** Last line of a highlighted range starting at `revealLine`. */
+  revealEndLine?: number | null;
   revealRequestId?: number;
   /**
    * When set, cursor/scroll are remembered across unmounts under this key
@@ -88,6 +91,7 @@ const externalContentsUpdate = Annotation.define<boolean>();
 
 interface EditorHandle {
   readonly view: EditorView;
+  readonly language: Compartment;
   readonly wrap: Compartment;
   readonly readOnly: Compartment;
   readonly vim: Compartment;
@@ -160,6 +164,7 @@ export function CodeMirrorFileEditor({
   vimMode = false,
   readOnly = false,
   revealLine = null,
+  revealEndLine = null,
   revealRequestId,
   viewStateKey,
   extensions,
@@ -170,6 +175,7 @@ export function CodeMirrorFileEditor({
   const containerRef = useRef<HTMLDivElement>(null);
   const [editor, setEditor] = useState<EditorHandle | null>(null);
   const view = editor?.view ?? null;
+  useLazyHighlighting(view, editor?.language ?? null, relativePath);
   /** Contents last applied to or emitted from the document. */
   const syncedContentsRef = useRef<string | null>(null);
 
@@ -228,6 +234,7 @@ export function CodeMirrorFileEditor({
 
     const editorView = new EditorView({
       parent,
+      ...(restore?.scrollSnapshot ? { scrollTo: restore.scrollSnapshot } : {}),
       state: EditorState.create({
         doc: initial.contents,
         ...(restore === null
@@ -257,38 +264,23 @@ export function CodeMirrorFileEditor({
       }),
     });
 
-    // Languages outside the eager set resolve from the language-data
-    // registry; the grammar chunk arrives async, so highlighting appears
-    // once loaded. A load that fails or outlives the view degrades to plain.
-    const loadLazyLanguage = lazyLanguageLoaderForPath(relativePath);
-    let lazyLanguageStale = false;
-    if (loadLazyLanguage !== null) {
-      loadLazyLanguage().then(
-        (language) => {
-          if (lazyLanguageStale) return;
-          editorView.dispatch({ effects: languageCompartment.reconfigure(language) });
-        },
-        () => {},
-      );
-    }
+    // Capture scrolling while the view is mounted. React can detach an ancestor
+    // before cleanup, at which point the browser reports scrollTop as zero.
+    let scrollTop = restore?.scrollTop ?? 0;
+    let scrollSnapshot = restore?.scrollSnapshot ?? editorView.scrollSnapshot();
+    const rememberScroll = () => {
+      if (!editorView.scrollDOM.isConnected || editorView.scrollDOM.clientHeight === 0) return;
+      scrollTop = editorView.scrollDOM.scrollTop;
+      scrollSnapshot = editorView.scrollSnapshot();
+    };
+    editorView.scrollDOM.addEventListener("scroll", rememberScroll);
 
-    // When restoring, the mount-triggered reveal run must not re-center a
-    // stale reveal line; the scroll write lands via requestMeasure so it
-    // follows CodeMirror's initial layout instead of being clamped to 0.
+    // A restored viewport suppresses the stale mount-triggered reveal.
     suppressNextRevealRef.current = restore !== null;
-    if (restore !== null && restore.scrollTop > 0) {
-      const scrollTop = restore.scrollTop;
-      editorView.requestMeasure({
-        read: () => {},
-        write: () => {
-          editorView.scrollDOM.scrollTop = scrollTop;
-        },
-      });
-    }
-
     syncedContentsRef.current = initial.contents;
     setEditor({
       view: editorView,
+      language: languageCompartment,
       wrap: wrapCompartment,
       readOnly: readOnlyCompartment,
       vim: vimCompartment,
@@ -296,18 +288,17 @@ export function CodeMirrorFileEditor({
     });
     onViewReadyRef.current?.(editorView);
     return () => {
-      // Capture position before destroy; layout-effect cleanup runs with the
-      // DOM still attached, so selection and scrollTop are both still valid.
+      editorView.scrollDOM.removeEventListener("scroll", rememberScroll);
       const { viewStateKey: latestKey, revealRequestId: latestRevealRequestId } = latestRef.current;
       if (latestKey !== undefined) {
         saveEditorViewState(latestKey, {
           anchor: editorView.state.selection.main.anchor,
           head: editorView.state.selection.main.head,
-          scrollTop: editorView.scrollDOM.scrollTop,
+          scrollTop,
+          scrollSnapshot,
           revealRequestId: latestRevealRequestId,
         });
       }
-      lazyLanguageStale = true;
       onViewReadyRef.current?.(null);
       setEditor(null);
       editorView.destroy();
@@ -361,8 +352,8 @@ export function CodeMirrorFileEditor({
       suppressNextRevealRef.current = false;
       return;
     }
-    revealEditorLine(view, revealLine);
-  }, [view, revealLine, revealRequestId]);
+    revealEditorLine(view, revealLine, revealEndLine);
+  }, [view, revealLine, revealEndLine, revealRequestId]);
 
   // data-code-editor feeds the `editorFocus` keybinding when-context
   // (see lib/editorFocus.ts).

@@ -1,0 +1,200 @@
+[
+  {
+    "new_fold_us": 38,
+    "new_parser_input_bytes": 3407872,
+    "note": "Counts parser input; does not time actual VT parsing or painting.",
+    "old_fold_us": 16191,
+    "old_parser_input_bytes": 228060160,
+    "run": 1,
+    "scenario": "terminal-output"
+  },
+  {
+    "iterations": 100,
+    "messages": 100,
+    "note": "Settled snapshots only; active overlays still materialize a view at the coalesced cadence.",
+    "owned_us": 1443,
+    "run": 1,
+    "scenario": "settled-snapshots",
+    "shared_us": 2
+  },
+  {
+    "batch_size": 16,
+    "batched_us": 458,
+    "deltas": 256,
+    "messages": 100,
+    "note": "Synthetic batches, not measured UI cadence; active snapshots still copy history.",
+    "per_item_us": 3590,
+    "run": 1,
+    "scenario": "streaming-snapshots"
+  },
+  {
+    "iterations": 100,
+    "messages": 1000,
+    "note": "Settled snapshots only; active overlays still materialize a view at the coalesced cadence.",
+    "owned_us": 10746,
+    "run": 1,
+    "scenario": "settled-snapshots",
+    "shared_us": 2
+  },
+  {
+    "batch_size": 16,
+    "batched_us": 1584,
+    "deltas": 256,
+    "messages": 1000,
+    "note": "Synthetic batches, not measured UI cadence; active snapshots still copy history.",
+    "per_item_us": 21691,
+    "run": 1,
+    "scenario": "streaming-snapshots"
+  },
+  {
+    "iterations": 100,
+    "messages": 10000,
+    "note": "Settled snapshots only; active overlays still materialize a view at the coalesced cadence.",
+    "owned_us": 56997,
+    "run": 1,
+    "scenario": "settled-snapshots",
+    "shared_us": 4
+  },
+  {
+    "batch_size": 16,
+    "batched_us": 10964,
+    "deltas": 256,
+    "messages": 10000,
+    "note": "Synthetic batches, not measured UI cadence; active snapshots still copy history.",
+    "per_item_us": 148475,
+    "run": 1,
+    "scenario": "streaming-snapshots"
+  },
+  {
+    "new_fold_us": 1,
+    "new_parser_input_bytes": 3407872,
+    "note": "Counts parser input; does not time actual VT parsing or painting.",
+    "old_fold_us": 6106,
+    "old_parser_input_bytes": 228060160,
+    "run": 2,
+    "scenario": "terminal-output"
+  },
+  {
+    "iterations": 100,
+    "messages": 100,
+    "note": "Settled snapshots only; active overlays still materialize a view at the coalesced cadence.",
+    "owned_us": 445,
+    "run": 2,
+    "scenario": "settled-snapshots",
+    "shared_us": 0
+  },
+  {
+    "batch_size": 16,
+    "batched_us": 190,
+    "deltas": 256,
+    "messages": 100,
+    "note": "Synthetic batches, not measured UI cadence; active snapshots still copy history.",
+    "per_item_us": 1475,
+    "run": 2,
+    "scenario": "streaming-snapshots"
+  },
+  {
+    "iterations": 100,
+    "messages": 1000,
+    "note": "Settled snapshots only; active overlays still materialize a view at the coalesced cadence.",
+    "owned_us": 5167,
+    "run": 2,
+    "scenario": "settled-snapshots",
+    "shared_us": 1
+  },
+  {
+    "batch_size": 16,
+    "batched_us": 1142,
+    "deltas": 256,
+    "messages": 1000,
+    "note": "Synthetic batches, not measured UI cadence; active snapshots still copy history.",
+    "per_item_us": 14612,
+    "run": 2,
+    "scenario": "streaming-snapshots"
+  },
+  {
+    "iterations": 100,
+    "messages": 10000,
+    "note": "Settled snapshots only; active overlays still materialize a view at the coalesced cadence.",
+    "owned_us": 55188,
+    "run": 2,
+    "scenario": "settled-snapshots",
+    "shared_us": 4
+  },
+  {
+    "batch_size": 16,
+    "batched_us": 10765,
+    "deltas": 256,
+    "messages": 10000,
+    "note": "Synthetic batches, not measured UI cadence; active snapshots still copy history.",
+    "per_item_us": 157635,
+    "run": 2,
+    "scenario": "streaming-snapshots"
+  },
+  {
+    "new_fold_us": 1,
+    "new_parser_input_bytes": 3407872,
+    "note": "Counts parser input; does not time actual VT parsing or painting.",
+    "old_fold_us": 6356,
+    "old_parser_input_bytes": 228060160,
+    "run": 3,
+    "scenario": "terminal-output"
+  },
+  {
+    "iterations": 100,
+    "messages": 100,
+    "note": "Settled snapshots only; active overlays still materialize a view at the coalesced cadence.",
+    "owned_us": 494,
+    "run": 3,
+    "scenario": "settled-snapshots",
+    "shared_us": 0
+  },
+  {
+    "batch_size": 16,
+    "batched_us": 193,
+    "deltas": 256,
+    "messages": 100,
+    "note": "Synthetic batches, not measured UI cadence; active snapshots still copy history.",
+    "per_item_us": 1545,
+    "run": 3,
+    "scenario": "streaming-snapshots"
+  },
+  {
+    "iterations": 100,
+    "messages": 1000,
+    "note": "Settled snapshots only; active overlays still materialize a view at the coalesced cadence.",
+    "owned_us": 5243,
+    "run": 3,
+    "scenario": "settled-snapshots",
+    "shared_us": 0
+  },
+  {
+    "batch_size": 16,
+    "batched_us": 1065,
+    "deltas": 256,
+    "messages": 1000,
+    "note": "Synthetic batches, not measured UI cadence; active snapshots still copy history.",
+    "per_item_us": 15187,
+    "run": 3,
+    "scenario": "streaming-snapshots"
+  },
+  {
+    "iterations": 100,
+    "messages": 10000,
+    "note": "Settled snapshots only; active overlays still materialize a view at the coalesced cadence.",
+    "owned_us": 56585,
+    "run": 3,
+    "scenario": "settled-snapshots",
+    "shared_us": 4
+  },
+  {
+    "batch_size": 16,
+    "batched_us": 12430,
+    "deltas": 256,
+    "messages": 10000,
+    "note": "Synthetic batches, not measured UI cadence; active snapshots still copy history.",
+    "per_item_us": 152892,
+    "run": 3,
+    "scenario": "streaming-snapshots"
+  }
+]

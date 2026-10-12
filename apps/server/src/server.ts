@@ -107,6 +107,7 @@ import {
 import { orchestrationHttpApiLayer } from "./orchestration/http.ts";
 import * as NetService from "@t3tools/shared/Net";
 import * as RelayClient from "@t3tools/shared/relayClient";
+import { layerClaudeManagedBinary } from "./provider/Drivers/ClaudeManagedBinary.ts";
 import { disableTailscaleServe, ensureTailscaleServe } from "@t3tools/tailscale";
 
 // Effect's default preemptive shutdown waits 20s before finalizing request scopes.
@@ -131,6 +132,13 @@ const RelayClientLive = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
     return RelayClient.layerCloudflared({ baseDir: config.baseDir });
+  }),
+);
+
+const ClaudeManagedBinaryLive = Layer.unwrap(
+  Effect.gen(function* () {
+    const config = yield* ServerConfig.ServerConfig;
+    return layerClaudeManagedBinary({ baseDir: config.baseDir });
   }),
 );
 
@@ -281,7 +289,14 @@ const WorkspaceContentSearchLayerLive = WorkspaceContentSearch.layer.pipe(
   Layer.provide(WorkspacePaths.layer),
 );
 
-const LspManagerLayerLive = LspManager.layer.pipe(Layer.provide(WorkspacePaths.layer));
+// LspManager forwards didSave from workspace changes, so it needs the watcher.
+// Providing the same `WorkspaceWatcherLayerLive` reference that WorkspaceLayerLive
+// merges keeps this the one shared instance — Layer construction is memoized per
+// reference within a build, so no second set of filesystem watches is created.
+const LspManagerLayerLive = LspManager.layer.pipe(
+  Layer.provide(WorkspacePaths.layer),
+  Layer.provide(WorkspaceWatcherLayerLive),
+);
 
 const GraphifyRuntimeLayerLive = GraphifyRuntime.layer.pipe(Layer.provide(ProcessRunner.layer));
 
@@ -403,6 +418,7 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
         Layer.provide(ExternalLauncher.layer),
       ),
       CloudManagedEndpointRuntimeLive,
+      ClaudeManagedBinaryLive,
     ),
   ),
 );
@@ -448,15 +464,8 @@ export const makeServerLayer = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
 
-    yield* fixPath();
+    yield* fixPath(config.mode === "desktop" ? config.providerStatusCacheDir : undefined);
 
-    const httpListeningLayer = Layer.effectDiscard(
-      Effect.gen(function* () {
-        yield* HttpServer.HttpServer;
-        const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
-        yield* startup.markHttpListening;
-      }),
-    );
     const runtimeStateLayer = Layer.effectDiscard(
       Effect.acquireRelease(
         Effect.gen(function* () {
@@ -552,10 +561,11 @@ export const makeServerLayer = Layer.unwrap(
     );
 
     const serverApplicationLayer = Layer.mergeAll(
-      HttpRouter.serve(makeRoutesLayer, {
-        disableLogger: !config.logWebSocketEvents,
-      }),
-      httpListeningLayer,
+      ServerRuntimeStartup.markHttpReadyAfterServing(
+        HttpRouter.serve(makeRoutesLayer, {
+          disableLogger: !config.logWebSocketEvents,
+        }),
+      ),
       runtimeStateLayer,
       tailscaleServeLayer,
       cloudDesiredLinkReconcileLayer,

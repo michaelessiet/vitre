@@ -5,6 +5,7 @@ import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
 import * as Ref from "effect/Ref";
@@ -22,6 +23,55 @@ it("uses the canonical Codex default for auto-bootstrapped model selection", () 
     model: DEFAULT_MODEL,
   });
 });
+
+it.effect("HTTP readiness waits for request-handler installation", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const install = yield* Deferred.make<void>();
+      const marked = yield* Ref.make(false);
+      const startup = {
+        awaitCommandReady: Effect.void,
+        markHttpListening: Ref.set(marked, true),
+        enqueueCommand: <A, E>(effect: Effect.Effect<A, E>) => effect,
+      };
+      const building = yield* ServerRuntimeStartup.markHttpReadyAfterServing(
+        Layer.effectDiscard(Deferred.await(install)),
+      ).pipe(
+        Layer.provide(Layer.succeed(ServerRuntimeStartup.ServerRuntimeStartup, startup)),
+        Layer.build,
+        Effect.forkScoped,
+      );
+      yield* Effect.yieldNow;
+      assert.equal(yield* Ref.get(marked), false);
+      yield* Deferred.succeed(install, undefined);
+      yield* Fiber.join(building);
+      assert.equal(yield* Ref.get(marked), true);
+    }),
+  ),
+);
+
+it.effect("failed request-handler installation never announces HTTP readiness", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const marked = yield* Ref.make(false);
+      const error = yield* ServerRuntimeStartup.markHttpReadyAfterServing(
+        Layer.effectDiscard(Effect.fail("failed")),
+      ).pipe(
+        Layer.provide(
+          Layer.succeed(ServerRuntimeStartup.ServerRuntimeStartup, {
+            awaitCommandReady: Effect.void,
+            markHttpListening: Ref.set(marked, true),
+            enqueueCommand: <A, E>(effect: Effect.Effect<A, E>) => effect,
+          }),
+        ),
+        Layer.build,
+        Effect.flip,
+      );
+      assert.equal(error, "failed");
+      assert.equal(yield* Ref.get(marked), false);
+    }),
+  ),
+);
 
 it.effect("enqueueCommand waits for readiness and then drains queued work", () =>
   Effect.scoped(
@@ -41,6 +91,23 @@ it.effect("enqueueCommand waits for readiness and then drains queued work", () =
       const result = yield* Fiber.join(queuedCommandFiber);
       assert.equal(result, 1);
       assert.equal(yield* Ref.get(executionCount), 1);
+    }),
+  ),
+);
+
+it.effect("optional startup does not block readiness on slow maintenance", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const release = yield* Deferred.make<void>();
+      const completed = yield* Ref.make(false);
+      yield* ServerRuntimeStartup.launchOptionalStartup(
+        Deferred.await(release).pipe(Effect.andThen(Ref.set(completed, true))),
+      );
+      const gate = yield* ServerRuntimeStartup.makeCommandGate;
+      yield* gate.signalCommandReady;
+      assert.equal(yield* gate.enqueueCommand(Effect.succeed("ready")), "ready");
+      assert.equal(yield* Ref.get(completed), false);
+      yield* Deferred.succeed(release, undefined);
     }),
   ),
 );
@@ -147,6 +214,7 @@ it.effect("resolveAutoBootstrapWelcomeTargets returns existing project and threa
               id: bootstrapProjectId,
               title: "Startup Project",
               workspaceRoot: "/tmp/startup-project",
+              additionalRoots: [],
               defaultModelSelection: ServerRuntimeStartup.getAutoBootstrapDefaultModelSelection(),
               scripts: [],
               createdAt: "2026-01-01T00:00:00.000Z",

@@ -59,8 +59,31 @@ export const GlassOpacity = Schema.Int.check(
 export type GlassOpacity = typeof GlassOpacity.Type;
 export const DEFAULT_GLASS_OPACITY: GlassOpacity = 80;
 
+export const AutoSaveMode = Schema.Literals(["afterDelay", "onFocusChange"]);
+export type AutoSaveMode = typeof AutoSaveMode.Type;
+export const DEFAULT_AUTO_SAVE_MODE: AutoSaveMode = "afterDelay";
+
+export const MIN_AUTO_SAVE_DELAY_MS = 100;
+export const MAX_AUTO_SAVE_DELAY_MS = 10_000;
+export const AutoSaveDelayMs = Schema.Int.check(
+  Schema.isBetween({
+    minimum: MIN_AUTO_SAVE_DELAY_MS,
+    maximum: MAX_AUTO_SAVE_DELAY_MS,
+  }),
+);
+export type AutoSaveDelayMs = typeof AutoSaveDelayMs.Type;
+export const DEFAULT_AUTO_SAVE_DELAY_MS: AutoSaveDelayMs = 500;
+
 export const ClientSettingsSchema = Schema.Struct({
   autoOpenPlanSidebar: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  /** Automatically persist editor buffers. When off, saving is manual (⌘S / `:w`). */
+  autoSaveEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  autoSaveMode: AutoSaveMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AUTO_SAVE_MODE)),
+  ),
+  autoSaveDelayMs: AutoSaveDelayMs.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AUTO_SAVE_DELAY_MS)),
+  ),
   confirmThreadArchive: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   confirmThreadDelete: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   dismissedProviderUpdateNotificationKeys: Schema.Array(TrimmedNonEmptyString).pipe(
@@ -120,6 +143,11 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   vimMode: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   wordWrap: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  /**
+   * Open file links in a third-party editor (Cursor, VS Code, …) instead of
+   * the built-in editor. Off by default: files open inside T3 Code.
+   */
+  openFilesInExternalEditor: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   /** Show the editor banner when the open file changed on disk under edits. */
   showFileConflictWarning: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
 });
@@ -131,6 +159,14 @@ export const DEFAULT_CLIENT_SETTINGS: ClientSettings = Schema.decodeSync(ClientS
 
 export const ThreadEnvMode = Schema.Literals(["local", "worktree"]);
 export type ThreadEnvMode = typeof ThreadEnvMode.Type;
+
+/**
+ * Default Claude binary setting. Decoding maps unset/empty to this literal, so
+ * an untouched setting is indistinguishable from a user typing "claude" — both
+ * mean "no explicit path: resolve via managed download / PATH lookup". Any
+ * other value is treated as an explicit executable path.
+ */
+export const DEFAULT_CLAUDE_BINARY_PATH = "claude";
 
 const makeBinaryPathSetting = (fallback: string) =>
   TrimmedString.pipe(
@@ -245,7 +281,7 @@ export const ClaudeSettings = makeProviderSettingsSchema(
       Schema.withDecodingDefault(Effect.succeed(true)),
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
-    binaryPath: makeBinaryPathSetting("claude").pipe(
+    binaryPath: makeBinaryPathSetting(DEFAULT_CLAUDE_BINARY_PATH).pipe(
       Schema.annotateKey({
         title: "Binary path",
         description: "Path to the Claude binary used by this instance.",
@@ -575,12 +611,30 @@ export const AutoCompactThresholdTokens = Schema.Int.check(
 export type AutoCompactThresholdTokens = typeof AutoCompactThresholdTokens.Type;
 export const DEFAULT_AUTO_COMPACT_THRESHOLD_TOKENS: AutoCompactThresholdTokens = 200_000;
 
+// Per-referenced-thread budget for transcripts inlined into a provider turn
+// when a message mentions another chat with `#thread`. Characters rather than
+// tokens so the server can enforce it without a tokenizer; ~4 chars/token
+// makes the 32k default roughly 8k tokens per referenced conversation.
+export const MIN_THREAD_REFERENCE_MAX_CHARS = 1_000;
+export const MAX_THREAD_REFERENCE_MAX_CHARS = 100_000;
+export const ThreadReferenceMaxChars = Schema.Int.check(
+  Schema.isBetween({
+    minimum: MIN_THREAD_REFERENCE_MAX_CHARS,
+    maximum: MAX_THREAD_REFERENCE_MAX_CHARS,
+  }),
+);
+export type ThreadReferenceMaxChars = typeof ThreadReferenceMaxChars.Type;
+export const DEFAULT_THREAD_REFERENCE_MAX_CHARS: ThreadReferenceMaxChars = 32_000;
+
 export const ServerSettings = Schema.Struct({
   enableAssistantStreaming: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   enableProviderUpdateChecks: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   autoCompactEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   autoCompactThresholdTokens: AutoCompactThresholdTokens.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_AUTO_COMPACT_THRESHOLD_TOKENS)),
+  ),
+  threadReferenceMaxChars: ThreadReferenceMaxChars.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_THREAD_REFERENCE_MAX_CHARS)),
   ),
   automaticGitFetchInterval: Schema.DurationFromMillis.pipe(
     Schema.withDecodingDefault(
@@ -731,6 +785,7 @@ export const ServerSettingsPatch = Schema.Struct({
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
   autoCompactEnabled: Schema.optionalKey(Schema.Boolean),
   autoCompactThresholdTokens: Schema.optionalKey(AutoCompactThresholdTokens),
+  threadReferenceMaxChars: Schema.optionalKey(ThreadReferenceMaxChars),
   automaticGitFetchInterval: Schema.optionalKey(Schema.DurationFromMillis),
   defaultThreadEnvMode: Schema.optionalKey(ThreadEnvMode),
   newWorktreesStartFromOrigin: Schema.optionalKey(Schema.Boolean),
@@ -773,6 +828,9 @@ export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 
 export const ClientSettingsPatch = Schema.Struct({
   autoOpenPlanSidebar: Schema.optionalKey(Schema.Boolean),
+  autoSaveEnabled: Schema.optionalKey(Schema.Boolean),
+  autoSaveMode: Schema.optionalKey(AutoSaveMode),
+  autoSaveDelayMs: Schema.optionalKey(AutoSaveDelayMs),
   confirmThreadArchive: Schema.optionalKey(Schema.Boolean),
   confirmThreadDelete: Schema.optionalKey(Schema.Boolean),
   diffIgnoreWhitespace: Schema.optionalKey(Schema.Boolean),
@@ -810,6 +868,7 @@ export const ClientSettingsPatch = Schema.Struct({
   timestampFormat: Schema.optionalKey(TimestampFormat),
   vimMode: Schema.optionalKey(Schema.Boolean),
   wordWrap: Schema.optionalKey(Schema.Boolean),
+  openFilesInExternalEditor: Schema.optionalKey(Schema.Boolean),
   showFileConflictWarning: Schema.optionalKey(Schema.Boolean),
 });
 export type ClientSettingsPatch = typeof ClientSettingsPatch.Type;

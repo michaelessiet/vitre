@@ -29,8 +29,10 @@ import { cn } from "~/lib/utils";
 import { useProject, useThreadShells } from "~/state/entities";
 import { orchestrationEnvironment } from "~/state/orchestration";
 import { projectEnvironment } from "~/state/projects";
+import { useMultiRootComposerPathSearch } from "~/state/queries";
 import { useEnvironmentQuery } from "~/state/query";
 import { primaryServerKeybindingsAtom } from "~/state/server";
+import { composeThreadRoots } from "~/state/threadRoots";
 
 import { CodeMirrorFileEditor } from "./files/codemirror/CodeMirrorFileEditor";
 import { requestEditorFocus } from "./files/editorFocusRequest";
@@ -53,6 +55,10 @@ type QuickSearchItem =
       readonly key: string;
       readonly kind: "file";
       readonly path: string;
+      /** Absolute path of the containing workspace root; null = primary. */
+      readonly rootPath: string | null;
+      /** Shown on rows only when more than one root is searched. */
+      readonly rootLabel: string | null;
       readonly ignored: boolean;
     }
   | { readonly key: string; readonly kind: "file-match"; readonly match: ProjectSearchContentMatch }
@@ -153,12 +159,30 @@ export function QuickSearch() {
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const navigate = useNavigate();
   const threads = useThreadShells();
-  const { activeThread, routeThreadRef } = useHandleNewThread();
-  const project = useProject(
-    activeThread ? scopeProjectRef(activeThread.environmentId, activeThread.projectId) : null,
+  const { activeDraftThread, activeThread, defaultProjectRef, routeThreadRef } =
+    useHandleNewThread();
+  // Search scope: the open thread, else the draft being composed, else the
+  // first project — search must keep working from the home and new-chat
+  // pages, not only inside a thread.
+  const scopeRef = activeThread
+    ? scopeProjectRef(activeThread.environmentId, activeThread.projectId)
+    : activeDraftThread
+      ? scopeProjectRef(activeDraftThread.environmentId, activeDraftThread.projectId)
+      : defaultProjectRef;
+  const project = useProject(scopeRef);
+  const environmentId = scopeRef?.environmentId ?? null;
+  const cwd = activeThread
+    ? (activeThread.worktreePath ?? project?.workspaceRoot ?? null)
+    : (activeDraftThread?.worktreePath ?? project?.workspaceRoot ?? null);
+  const threadRoots = useMemo(
+    () =>
+      composeThreadRoots({
+        primaryPath: cwd,
+        projectRoots: project?.resolvedAdditionalRoots,
+        threadRoots: activeThread?.resolvedAdditionalRoots,
+      }),
+    [activeThread?.resolvedAdditionalRoots, cwd, project?.resolvedAdditionalRoots],
   );
-  const environmentId = activeThread?.environmentId ?? null;
-  const cwd = activeThread?.worktreePath ?? project?.workspaceRoot ?? null;
 
   const [mode, setMode] = useState<QuickSearchMode | null>(null);
   const [query, setQuery] = useState("");
@@ -232,14 +256,11 @@ export function QuickSearch() {
   const trimmedQuery = query.trim();
   const debouncedQuery = useDebouncedValue(trimmedQuery, QUERY_DEBOUNCE_MS);
 
-  const fileNameResults = useEnvironmentQuery(
-    mode === "open" && environmentId !== null && cwd !== null && debouncedQuery.length > 0
-      ? projectEnvironment.searchEntries({
-          environmentId,
-          input: { cwd, query: debouncedQuery, limit: FILE_NAME_RESULT_LIMIT },
-        })
-      : null,
-  );
+  const fileNameResults = useMultiRootComposerPathSearch({
+    environmentId,
+    roots: mode === "open" ? threadRoots.all : [],
+    query: mode === "open" ? debouncedQuery : null,
+  });
   const fileContentResults = useEnvironmentQuery(
     mode === "content" && environmentId !== null && cwd !== null && debouncedQuery.length >= 2
       ? projectEnvironment.searchContent({
@@ -267,13 +288,23 @@ export function QuickSearch() {
           thread,
         }),
       );
-      const fileItems = (fileNameResults.data?.entries ?? [])
-        .filter((entry) => entry.kind === "file")
+      const showRootLabels = threadRoots.all.length > 1;
+      const perRootCounts = new Map<string, number>();
+      const fileItems = fileNameResults.entries
+        .filter(({ entry }) => entry.kind === "file")
+        .filter(({ root }) => {
+          const count = perRootCounts.get(root.path) ?? 0;
+          if (count >= FILE_NAME_RESULT_LIMIT) return false;
+          perRootCounts.set(root.path, count + 1);
+          return true;
+        })
         .map(
-          (entry): QuickSearchItem => ({
-            key: `file:${entry.path}`,
+          ({ entry, root }): QuickSearchItem => ({
+            key: `file:${root.path}:${entry.path}`,
             kind: "file",
             path: entry.path,
+            rootPath: root.isPrimary ? null : root.path,
+            rootLabel: showRootLabels ? root.label : null,
             ignored: entry.ignored === true,
           }),
         );
@@ -305,9 +336,10 @@ export function QuickSearch() {
   }, [
     debouncedQuery,
     fileContentResults.data,
-    fileNameResults.data,
+    fileNameResults.entries,
     messageResults.data,
     mode,
+    threadRoots.all,
     threads,
   ]);
 
@@ -324,10 +356,19 @@ export function QuickSearch() {
       ?.scrollIntoView({ block: "nearest" });
   }, [selectedIndex]);
 
+  // Files open into the right panel, which is keyed by thread: the open
+  // thread, else the draft page's pre-created thread (ChatView keys the
+  // panel the same way on draft routes).
+  const fileThreadRef =
+    routeThreadRef ??
+    (activeDraftThread
+      ? scopeThreadRef(activeDraftThread.environmentId, activeDraftThread.threadId)
+      : null);
+
   const activate = useCallback(
     (item: QuickSearchItem) => {
-      close();
       if (item.kind === "thread") {
+        close();
         void navigate({
           to: "/$environmentId/$threadId",
           params: buildThreadRouteParams(scopeThreadRef(item.thread.environmentId, item.thread.id)),
@@ -335,6 +376,7 @@ export function QuickSearch() {
         return;
       }
       if (item.kind === "message") {
+        close();
         if (environmentId === null) return;
         void navigate({
           to: "/$environmentId/$threadId",
@@ -342,16 +384,27 @@ export function QuickSearch() {
         });
         return;
       }
-      if (routeThreadRef === null) return;
+      // No thread surface to open the file into (home page): keep the dialog
+      // open — its preview pane is the only viewer available.
+      if (fileThreadRef === null) return;
+      close();
       activatedFileRef.current = true;
       requestEditorFocus("quick-search");
       if (item.kind === "file") {
-        useRightPanelStore.getState().openFile(routeThreadRef, item.path);
+        useRightPanelStore
+          .getState()
+          .openFile(
+            fileThreadRef,
+            item.path,
+            undefined,
+            undefined,
+            item.rootPath !== null ? { rootPath: item.rootPath } : undefined,
+          );
         return;
       }
-      useRightPanelStore.getState().openFile(routeThreadRef, item.match.path, item.match.line);
+      useRightPanelStore.getState().openFile(fileThreadRef, item.match.path, item.match.line);
     },
-    [close, environmentId, navigate, routeThreadRef],
+    [close, environmentId, fileThreadRef, navigate],
   );
 
   const onInputKeyDown = useCallback(
@@ -378,10 +431,19 @@ export function QuickSearch() {
     selectedItem === null
       ? null
       : selectedItem.kind === "file"
-        ? { path: selectedItem.path, line: null }
+        ? { path: selectedItem.path, line: null, rootPath: selectedItem.rootPath }
         : selectedItem.kind === "file-match"
-          ? { path: selectedItem.match.path, line: selectedItem.match.line }
+          ? { path: selectedItem.match.path, line: selectedItem.match.line, rootPath: null }
           : null;
+
+  // Surface query failures instead of letting them masquerade as an empty
+  // result set (a failed ripgrep spawn used to look identical to "No results").
+  const searchError =
+    debouncedQuery.length === 0
+      ? null
+      : mode === "content"
+        ? (fileContentResults.error ?? messageResults.error)
+        : fileNameResults.error;
 
   const searchPlaceholder =
     mode === "content" ? "Search chat and file contents…" : "Jump to a chat or file…";
@@ -461,12 +523,19 @@ export function QuickSearch() {
             <div className="flex min-h-0 flex-1">
               <ScrollArea className="min-w-0 flex-1">
                 <div className="p-1.5">
+                  {searchError !== null ? (
+                    <div className="px-2 py-1.5 text-xs text-destructive">{searchError}</div>
+                  ) : null}
                   {flatItems.length === 0 ? (
-                    <div className="px-2 py-6 text-center text-xs text-muted-foreground">
-                      {mode === "content" && trimmedQuery.length < 2
-                        ? "Type at least 2 characters to search."
-                        : "No results."}
-                    </div>
+                    searchError !== null ? null : (
+                      <div className="px-2 py-6 text-center text-xs text-muted-foreground">
+                        {mode === "content" && trimmedQuery.length < 2
+                          ? "Type at least 2 characters to search."
+                          : environmentId === null
+                            ? "Add a project to search."
+                            : "No results."}
+                      </div>
+                    )
                   ) : (
                     groups.map((group) => (
                       <div key={group.label} className="mb-1">
@@ -514,6 +583,7 @@ export function QuickSearch() {
                                   path={item.path}
                                   query={debouncedQuery}
                                   ignored={item.ignored}
+                                  rootLabel={item.rootLabel}
                                 />
                               ) : item.kind === "file-match" ? (
                                 <FileMatchRowContent match={item.match} />
@@ -552,7 +622,7 @@ export function QuickSearch() {
                 ) : previewFile !== null && environmentId !== null && cwd !== null ? (
                   <FilePreview
                     environmentId={environmentId}
-                    cwd={cwd}
+                    cwd={previewFile.rootPath ?? cwd}
                     relativePath={previewFile.path}
                     revealLine={previewFile.line}
                   />
@@ -574,10 +644,12 @@ function FileRowContent({
   path,
   query,
   ignored = false,
+  rootLabel = null,
 }: {
   path: string;
   query: string;
   ignored?: boolean;
+  rootLabel?: string | null;
 }) {
   const { name, directory } = splitSearchResultPath(path);
   return (
@@ -585,6 +657,9 @@ function FileRowContent({
       <HighlightedName text={name} query={query} />
       {directory.length > 0 ? (
         <span className="truncate text-[10px] text-muted-foreground">{directory}</span>
+      ) : null}
+      {rootLabel !== null ? (
+        <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">{rootLabel}</span>
       ) : null}
     </span>
   );

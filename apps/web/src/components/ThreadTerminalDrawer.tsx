@@ -30,11 +30,14 @@ import {
   useRef,
   useState,
 } from "react";
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from "~/components/ui/menu";
 import { Popover, PopoverPopup, PopoverTrigger } from "~/components/ui/popover";
 import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
 import { cn } from "~/lib/utils";
 import { type TerminalContextSelection } from "~/lib/terminalContext";
 import { useOpenInPreferredEditor } from "../editorPreferences";
+import { getClientSettings } from "../hooks/useSettings";
+import { openWorkspaceFilePrimaryAction } from "../openFileActions";
 import {
   collectWrappedTerminalLinkLine,
   extractTerminalLinks,
@@ -44,13 +47,8 @@ import {
   wrappedTerminalLinkRangeIntersectsBufferLine,
 } from "../terminal-links";
 import {
-  isDiffToggleShortcut,
   isTerminalClearShortcut,
-  isTerminalCloseShortcut,
-  isTerminalNewShortcut,
-  isTerminalSplitShortcut,
-  isTerminalSplitVerticalShortcut,
-  isTerminalToggleShortcut,
+  isTerminalPassthroughShortcut,
   terminalDeleteShortcutData,
   terminalNavigationShortcutData,
 } from "../keybindings";
@@ -528,14 +526,10 @@ export function TerminalViewport({
     terminal.attachCustomKeyEventHandler((event) => {
       const currentKeybindings = keybindingsRef.current;
       const options = { context: { terminalFocus: true, terminalOpen: true } };
-      if (
-        isTerminalToggleShortcut(event, currentKeybindings, options) ||
-        isTerminalSplitShortcut(event, currentKeybindings, options) ||
-        isTerminalSplitVerticalShortcut(event, currentKeybindings, options) ||
-        isTerminalNewShortcut(event, currentKeybindings, options) ||
-        isTerminalCloseShortcut(event, currentKeybindings, options) ||
-        isDiffToggleShortcut(event, currentKeybindings, options)
-      ) {
+      // Returning false makes xterm skip the key entirely — no key sequence for
+      // the shell and, crucially, no cancel(), so the app's own window
+      // listeners still see it.
+      if (isTerminalPassthroughShortcut(event, currentKeybindings, options)) {
         return false;
       }
 
@@ -629,17 +623,25 @@ export function TerminalViewport({
               }
 
               const target = resolvePathLinkTarget(match.text, cwd);
-              void (async () => {
-                const result = await openTerminalPath(target);
-                if (result._tag === "Success" || isAtomCommandInterrupted(result)) {
-                  return;
-                }
-                const error = squashAtomCommandFailure(result);
-                writeSystemMessage(
-                  latestTerminal,
-                  error instanceof Error ? error.message : "Unable to open path",
-                );
-              })();
+              openWorkspaceFilePrimaryAction({
+                threadRef,
+                filePath: target,
+                workspaceRoot: worktreePath ?? cwd,
+                openFilesInExternalEditor: getClientSettings().openFilesInExternalEditor,
+                openInEditor: (targetPath) => {
+                  void (async () => {
+                    const result = await openTerminalPath(targetPath);
+                    if (result._tag === "Success" || isAtomCommandInterrupted(result)) {
+                      return;
+                    }
+                    const error = squashAtomCommandFailure(result);
+                    writeSystemMessage(
+                      latestTerminal,
+                      error instanceof Error ? error.message : "Unable to open path",
+                    );
+                  })();
+                },
+              });
             },
           })),
         );
@@ -716,8 +718,40 @@ export function TerminalViewport({
       void resizeTerminal(activeTerminal.cols, activeTerminal.rows);
     }, 30);
 
+    // Refit on any container size change (right panel/sidebar toggles, splits,
+    // hidden -> visible) — most of those never fire the window resize event.
+    let containerResizeFrame: number | null = null;
+    const containerResizeObserver = new ResizeObserver(() => {
+      if (containerResizeFrame !== null) return;
+      containerResizeFrame = window.requestAnimationFrame(() => {
+        containerResizeFrame = null;
+        const activeTerminal = terminalRef.current;
+        const activeFitAddon = fitAddonRef.current;
+        const mountElement = containerRef.current;
+        if (!activeTerminal || !activeFitAddon || !mountElement) return;
+        const { width, height } = mountElement.getBoundingClientRect();
+        if (width <= 0 || height <= 0) return;
+        const previousCols = activeTerminal.cols;
+        const previousRows = activeTerminal.rows;
+        const wasAtBottom =
+          activeTerminal.buffer.active.viewportY >= activeTerminal.buffer.active.baseY;
+        if (!fitTerminalSafely(activeFitAddon)) return;
+        if (wasAtBottom) {
+          activeTerminal.scrollToBottom();
+        }
+        if (activeTerminal.cols !== previousCols || activeTerminal.rows !== previousRows) {
+          void resizeTerminal(activeTerminal.cols, activeTerminal.rows);
+        }
+      });
+    });
+    containerResizeObserver.observe(mount);
+
     return () => {
       window.clearTimeout(fitTimer);
+      if (containerResizeFrame !== null) {
+        window.cancelAnimationFrame(containerResizeFrame);
+      }
+      containerResizeObserver.disconnect();
       inputDisposable.dispose();
       selectionDisposable.dispose();
       terminalLinksDisposable.dispose();
@@ -847,7 +881,10 @@ interface ThreadTerminalDrawerProps {
   focusRequestId: number;
   onSplitTerminal: () => void;
   onSplitTerminalVertical: () => void;
-  onNewTerminal: () => void;
+  /** Launch a terminal; `rootPath` targets an attached workspace root (absent = primary). */
+  onNewTerminal: (rootPath?: string) => void;
+  /** Effective thread roots (primary first); >1 turns "New terminal" into a root picker. */
+  launchRoots?: ReadonlyArray<TerminalLaunchRoot>;
   splitShortcutLabel?: string | undefined;
   splitVerticalShortcutLabel?: string | undefined;
   newShortcutLabel?: string | undefined;
@@ -861,6 +898,12 @@ interface ThreadTerminalDrawerProps {
   terminalLabelsById?: ReadonlyMap<string, string>;
   /** Prefer per-session launch locations when the server already knows a terminal. */
   terminalLaunchLocationsById?: ReadonlyMap<string, TerminalLaunchLocation>;
+}
+
+interface TerminalLaunchRoot {
+  readonly path: string;
+  readonly label: string;
+  readonly isPrimary: boolean;
 }
 
 interface TerminalActionButtonProps {
@@ -892,6 +935,51 @@ function TerminalActionButton({ label, className, onClick, children }: TerminalA
   );
 }
 
+interface NewTerminalActionProps {
+  label: string;
+  className: string;
+  launchRoots: ReadonlyArray<TerminalLaunchRoot> | undefined;
+  onNewTerminal: (rootPath?: string) => void;
+  children: ReactNode;
+}
+
+/** "New terminal" action: plain button for single-root threads, a root
+    picker when the thread has attached workspace roots. */
+function NewTerminalAction({
+  label,
+  className,
+  launchRoots,
+  onNewTerminal,
+  children,
+}: NewTerminalActionProps) {
+  if (launchRoots === undefined || launchRoots.length <= 1) {
+    return (
+      <TerminalActionButton label={label} className={className} onClick={() => onNewTerminal()}>
+        {children}
+      </TerminalActionButton>
+    );
+  }
+  return (
+    <Menu>
+      <MenuTrigger render={<button type="button" className={className} aria-label={label} />}>
+        {children}
+      </MenuTrigger>
+      <MenuPopup align="end" className="w-56">
+        {launchRoots.map((root) => (
+          <MenuItem
+            key={root.path}
+            onClick={() => onNewTerminal(root.isPrimary ? undefined : root.path)}
+          >
+            <span className="min-w-0 truncate" title={root.path}>
+              {root.label}
+            </span>
+          </MenuItem>
+        ))}
+      </MenuPopup>
+    </Menu>
+  );
+}
+
 export default function ThreadTerminalDrawer({
   mode = "drawer",
   threadRef,
@@ -909,6 +997,7 @@ export default function ThreadTerminalDrawer({
   onSplitTerminal,
   onSplitTerminalVertical,
   onNewTerminal,
+  launchRoots,
   splitShortcutLabel,
   splitVerticalShortcutLabel,
   newShortcutLabel,
@@ -1241,13 +1330,24 @@ export default function ThreadTerminalDrawer({
         ) : null}
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-4 py-6 text-center text-sm text-muted-foreground">
           <p>No terminal sessions for this thread yet.</p>
-          <button
-            type="button"
-            className="rounded-md border border-border/80 bg-background px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent"
-            onClick={onNewTerminalAction}
-          >
-            {newTerminalActionLabel}
-          </button>
+          {launchRoots !== undefined && launchRoots.length > 1 ? (
+            <NewTerminalAction
+              label={newTerminalActionLabel}
+              className="rounded-md border border-border/80 bg-background px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent"
+              launchRoots={launchRoots}
+              onNewTerminal={onNewTerminal}
+            >
+              {newTerminalActionLabel}
+            </NewTerminalAction>
+          ) : (
+            <button
+              type="button"
+              className="rounded-md border border-border/80 bg-background px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent"
+              onClick={onNewTerminalAction}
+            >
+              {newTerminalActionLabel}
+            </button>
+          )}
         </div>
       </aside>
     );
@@ -1301,13 +1401,14 @@ export default function ThreadTerminalDrawer({
               <SquareSplitVertical className="size-3.25" />
             </TerminalActionButton>
             <div className="h-4 w-px bg-border/80" />
-            <TerminalActionButton
+            <NewTerminalAction
               className="p-1 text-foreground/90 transition-colors hover:bg-accent"
-              onClick={onNewTerminalAction}
+              launchRoots={launchRoots}
+              onNewTerminal={onNewTerminal}
               label={newTerminalActionLabel}
             >
               <Plus className="size-3.25" />
-            </TerminalActionButton>
+            </NewTerminalAction>
             <div className="h-4 w-px bg-border/80" />
             <TerminalActionButton
               className="p-1 text-foreground/90 transition-colors hover:bg-accent"
@@ -1435,13 +1536,14 @@ export default function ThreadTerminalDrawer({
                   >
                     <SquareSplitVertical className="size-3.25" />
                   </TerminalActionButton>
-                  <TerminalActionButton
+                  <NewTerminalAction
                     className="inline-flex h-full items-center border-l border-border/70 px-1 text-foreground/90 transition-colors hover:bg-accent/70"
-                    onClick={onNewTerminalAction}
+                    launchRoots={launchRoots}
+                    onNewTerminal={onNewTerminal}
                     label={newTerminalActionLabel}
                   >
                     <Plus className="size-3.25" />
-                  </TerminalActionButton>
+                  </NewTerminalAction>
                   <TerminalActionButton
                     className="inline-flex h-full items-center border-l border-border/70 px-1 text-foreground/90 transition-colors hover:bg-accent/70"
                     onClick={() => onCloseTerminal(resolvedActiveTerminalId)}

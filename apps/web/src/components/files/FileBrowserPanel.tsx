@@ -15,7 +15,7 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
+import { composerMentionFromTreePath } from "~/components/chat/composerMentionDrag";
 import {
   AtSign,
   ClipboardPaste,
@@ -37,6 +37,7 @@ import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { useComposerHandleContext } from "~/composerHandleContext";
 import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
 import { useTheme } from "~/hooks/useTheme";
+import { clampMenuToViewport, type MenuPoint } from "~/lib/menuPosition";
 import { cn } from "~/lib/utils";
 import { T3_PIERRE_ICONS } from "~/pierre-icons";
 import { useThreadShell } from "~/state/entities";
@@ -47,6 +48,8 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { useCopyEntryAcrossThreads } from "./copyEntryAcrossThreads";
 import { createFileTreeDragMentionController } from "./fileTreeDragMention";
 import { subscribeFileTreeAction } from "./fileTreeActionBus";
+import { buildFileTreeGitDecorations } from "./fileTreeGitStatus";
+import { useFileTreeGitStatuses } from "./fileTreeGitStatusState";
 import { useProjectEntriesQuery } from "./projectFilesQueryState";
 import ThreadDestinationPicker, { type ThreadDestination } from "./ThreadDestinationPicker";
 
@@ -55,6 +58,12 @@ interface FileBrowserPanelProps {
   cwd: string;
   projectName: string;
   threadRef: ScopedThreadRef;
+  /** Set to `cwd` when this panel browses an attached (non-primary) workspace
+      root; mentions from the tree then serialize as absolute paths. */
+  mentionRootPath?: string | null;
+  /** File currently open in the editor, revealed (selected + scrolled to) in the tree. */
+  openRelativePath: string | null;
+  revealRequestId: number;
   onOpenFile: (relativePath: string) => void;
 }
 
@@ -66,8 +75,19 @@ const TREE_UNSAFE_CSS = `
     --trees-border-color-override: color-mix(in srgb, currentColor 14%, transparent);
     --trees-font-family-override: var(--font-sans);
     --trees-font-size-override: 12px;
+    /* Git decoration colors, matching the editor's diff gutter and the
+       VS Code/Zed convention: orange edits, green additions, red deletions. */
+    --trees-git-modified-color-override: var(--warning);
+    --trees-git-added-color-override: var(--success);
+    --trees-git-untracked-color-override: var(--success);
+    --trees-git-deleted-color-override: var(--destructive);
+    --trees-git-renamed-color-override: var(--info);
   }
   button[data-type='item'] { border-radius: 5px; }
+  /* A folder's status is an aggregate of what is inside it, so it tints the
+     name only: a letter there would claim the folder itself changed. */
+  button[data-item-type='folder'] > [data-item-section='git'] { visibility: hidden; }
+  [data-item-section='decoration'] { color: var(--destructive); font-weight: 600; }
 `;
 
 function treePath(entry: ProjectEntry): string {
@@ -129,11 +149,83 @@ interface TreeContextMenuAction {
   readonly run: () => void;
 }
 
+/**
+ * The tree renders no context menu of its own (`render: () => null`), so this is
+ * a plain fixed-position surface anchored to the row. Its height depends on the
+ * action list, so the position is clamped against the *measured* box: rows near
+ * the bottom of a tall tree would otherwise push Delete past the viewport edge.
+ */
+function TreeContextMenu({
+  anchorRect,
+  actions,
+  onRun,
+}: {
+  anchorRect: ContextMenuAnchorRect;
+  actions: ReadonlyArray<TreeContextMenuAction>;
+  onRun: (action: TreeContextMenuAction) => void;
+}) {
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const [position, setPosition] = useState<MenuPoint | null>(null);
+  const preferredLeft = anchorRect.left;
+  const preferredTop = anchorRect.bottom + 2;
+
+  useLayoutEffect(() => {
+    const menu = menuRef.current;
+    if (menu === null) return;
+    const place = () => {
+      setPosition(
+        clampMenuToViewport(
+          menu.getBoundingClientRect(),
+          { left: preferredLeft, top: preferredTop },
+          { width: window.innerWidth, height: window.innerHeight },
+        ),
+      );
+    };
+    place();
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
+  }, [preferredLeft, preferredTop]);
+
+  return (
+    <div
+      ref={menuRef}
+      data-file-tree-context-menu-root="true"
+      className="fixed z-50 max-h-[min(24rem,70vh)] min-w-44 overflow-y-auto rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md"
+      style={{
+        left: position?.left ?? preferredLeft,
+        top: position?.top ?? preferredTop,
+        // Measured in a layout effect, so this only hides a pre-paint frame.
+        visibility: position === null ? "hidden" : undefined,
+      }}
+      role="menu"
+    >
+      {actions.map((action) => (
+        <button
+          key={action.label}
+          type="button"
+          role="menuitem"
+          className={cn(
+            "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs hover:bg-accent hover:text-accent-foreground",
+            action.destructive === true && "text-destructive hover:text-destructive",
+          )}
+          onClick={() => onRun(action)}
+        >
+          <action.icon className="size-3.5" />
+          {action.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export default function FileBrowserPanel({
   environmentId,
   cwd,
   projectName,
   threadRef,
+  mentionRootPath = null,
+  openRelativePath,
+  revealRequestId,
   onOpenFile,
 }: FileBrowserPanelProps) {
   const { resolvedTheme } = useTheme();
@@ -147,6 +239,16 @@ export default function FileBrowserPanel({
   const entryKindsRef = useRef<ReadonlyMap<string, ProjectEntry["kind"]>>(entryKinds);
   const treePaths = useMemo(() => entries.map(treePath), [entries]);
   const previousTreePathsRef = useRef<readonly string[]>([]);
+
+  const gitStatuses = useFileTreeGitStatuses(environmentId, cwd);
+  const gitDecorations = useMemo(
+    () => buildFileTreeGitDecorations(gitStatuses, treePaths),
+    [gitStatuses, treePaths],
+  );
+  // The tree reads renderRowDecoration once at construction, so conflicts are
+  // published through a ref rather than a new callback identity.
+  const conflictedPathsRef = useRef<ReadonlySet<string>>(gitDecorations.conflictedPaths);
+  conflictedPathsRef.current = gitDecorations.conflictedPaths;
 
   const mutateEntry = useAtomCommand(projectEnvironment.mutateEntry, { reportFailure: false });
   /** Placeholder paths added by New File / New Folder, awaiting their name. */
@@ -219,21 +321,26 @@ export default function FileBrowserPanel({
 
   // Mention helpers, offered from the tree's context menu: the composer
   // understands the serialized file link, so both actions share it.
-  const copyMention = useCallback((path: string) => {
-    const relativePath = stripTrailingSlash(path);
-    void (async () => {
-      try {
-        await writeTextToClipboard(serializeComposerFileLink(relativePath));
-        toastManager.add({ type: "success", title: "Mention copied", description: relativePath });
-      } catch (error) {
-        toastManager.add({
-          type: "error",
-          title: "Failed to copy mention",
-          description: error instanceof Error ? error.message : "An error occurred.",
-        });
-      }
-    })();
-  }, []);
+  const copyMention = useCallback(
+    (path: string) => {
+      const relativePath = stripTrailingSlash(path);
+      const mention = composerMentionFromTreePath(relativePath, { rootPath: mentionRootPath });
+      if (mention === null) return;
+      void (async () => {
+        try {
+          await writeTextToClipboard(mention);
+          toastManager.add({ type: "success", title: "Mention copied", description: relativePath });
+        } catch (error) {
+          toastManager.add({
+            type: "error",
+            title: "Failed to copy mention",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          });
+        }
+      })();
+    },
+    [mentionRootPath],
+  );
 
   const addMentionToChat = useCallback(
     (path: string) => {
@@ -246,7 +353,10 @@ export default function FileBrowserPanel({
         });
         return;
       }
-      const mention = serializeComposerFileLink(stripTrailingSlash(path));
+      const mention = composerMentionFromTreePath(stripTrailingSlash(path), {
+        rootPath: mentionRootPath,
+      });
+      if (mention === null) return;
       const inserted = composer.insertTextAtEnd(`${mention} `, { ensureLeadingBoundary: true });
       if (!inserted) {
         toastManager.add({
@@ -256,16 +366,20 @@ export default function FileBrowserPanel({
         });
       }
     },
-    [composerRef],
+    [composerRef, mentionRootPath],
   );
 
   const treeModelRef = useRef<ReturnType<typeof useFileTree>["model"] | null>(null);
+  const revealInProgressRef = useRef(false);
   const dragMention = useMemo(
     () =>
-      createFileTreeDragMentionController({
-        deselect: (path) => treeModelRef.current?.getItem(path)?.deselect(),
-      }),
-    [],
+      createFileTreeDragMentionController(
+        {
+          deselect: (path) => treeModelRef.current?.getItem(path)?.deselect(),
+        },
+        { mentionRootPath },
+      ),
+    [mentionRootPath],
   );
 
   const { model } = useFileTree({
@@ -275,10 +389,23 @@ export default function FileBrowserPanel({
     density: "compact",
     fileTreeSearchMode: "hide-non-matches",
     flattenEmptyDirectories: true,
-    initialExpansion: 1,
+    // Everything starts collapsed; the reveal effect below expands only the
+    // ancestors of the file being opened.
+    initialExpansion: "closed",
     icons: T3_PIERRE_ICONS,
+    renderRowDecoration: ({ row }) =>
+      row.kind === "file" && conflictedPathsRef.current.has(row.path)
+        ? { text: "!", title: "Merge conflict" }
+        : null,
     onSelectionChange: (selectedPaths) => {
       dragMention.handleSelectionChange(selectedPaths);
+      // Programmatic reveal syncs the selection to the already-open file;
+      // those emissions (including intermediate deselects) must not re-open
+      // files. select()/deselect() emit synchronously, so the flag is set for
+      // exactly the reveal's own emissions.
+      if (revealInProgressRef.current) {
+        return;
+      }
       // Starting a drag selects the dragged row; that selection is a side
       // effect of the gesture, not a request to open the file.
       if (dragMention.isDragInProgress()) {
@@ -314,6 +441,65 @@ export default function FileBrowserPanel({
     pendingCreatesRef.current.clear();
     model.resetPaths(treePaths);
   }, [entryKinds, model, treePaths]);
+
+  // Git decorations are options the tree only reads at construction, so they
+  // are pushed imperatively; the model dedupes by content signature.
+  useEffect(() => {
+    model.setGitStatus(gitDecorations.entries);
+  }, [gitDecorations, model]);
+
+  // Reveal the open file: select it, expand its ancestors and scroll it into
+  // view. Keyed by reveal request so background entry refreshes don't yank the
+  // user's scroll position back to the open file; declared after the
+  // resetPaths effect so it always sees the fresh tree.
+  const lastRevealedKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (openRelativePath === null) return;
+    const revealKey = `${revealRequestId}:${openRelativePath}`;
+    if (lastRevealedKeyRef.current === revealKey) return;
+
+    // One frame lets a freshly remounted tree measure its viewport before the
+    // scroll request is consumed.
+    const frame = window.requestAnimationFrame(() => {
+      // Absent (entries still loading, or truncated listing): leave the key
+      // unrecorded so the next treePaths change retries.
+      const item = model.getItem(openRelativePath);
+      if (item === null || item.isDirectory()) return;
+
+      const selected = model.getSelectedPaths();
+      if (selected.length === 1 && selected[0] === openRelativePath) {
+        // Opened from the tree itself; the row is already selected.
+        lastRevealedKeyRef.current = revealKey;
+        return;
+      }
+
+      revealInProgressRef.current = true;
+      try {
+        for (const path of selected) {
+          if (stripTrailingSlash(path) !== openRelativePath) model.getItem(path)?.deselect();
+        }
+        item.select();
+      } finally {
+        revealInProgressRef.current = false;
+      }
+
+      // Search owns expansion and row visibility in hide-non-matches mode
+      // (and would clobber programmatic expansion); the tree re-expands
+      // ancestors of selected paths itself when search closes.
+      if (!model.isSearchOpen()) {
+        const parent = parentDirectory(openRelativePath);
+        if (parent.length > 0) {
+          const dir = model.getItem(parent);
+          // expand() opens the entire ancestor chain, not just this level.
+          if (dir !== null && "expand" in dir && !dir.isExpanded()) dir.expand();
+        }
+        // Sets virtual focus only; DOM focus stays in the editor.
+        model.scrollToPath(openRelativePath);
+      }
+      lastRevealedKeyRef.current = revealKey;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [model, openRelativePath, revealRequestId, treePaths]);
 
   /**
    * Directory that New File / New Folder should target: the focused entry if
@@ -744,35 +930,15 @@ export default function FileBrowserPanel({
       )}
       {contextMenu !== null && contextMenuActions !== null
         ? createPortal(
-            <div
-              data-file-tree-context-menu-root="true"
-              className="fixed z-50 min-w-44 rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md"
-              style={{
-                left: Math.min(contextMenu.anchorRect.left, window.innerWidth - 192),
-                top: Math.min(contextMenu.anchorRect.bottom + 2, window.innerHeight - 160),
+            <TreeContextMenu
+              anchorRect={contextMenu.anchorRect}
+              actions={contextMenuActions}
+              onRun={(action) => {
+                contextMenu.close({ restoreFocus: false });
+                setContextMenu(null);
+                action.run();
               }}
-              role="menu"
-            >
-              {contextMenuActions.map((action) => (
-                <button
-                  key={action.label}
-                  type="button"
-                  role="menuitem"
-                  className={cn(
-                    "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs hover:bg-accent hover:text-accent-foreground",
-                    action.destructive === true && "text-destructive hover:text-destructive",
-                  )}
-                  onClick={() => {
-                    contextMenu.close({ restoreFocus: false });
-                    setContextMenu(null);
-                    action.run();
-                  }}
-                >
-                  <action.icon className="size-3.5" />
-                  {action.label}
-                </button>
-              ))}
-            </div>,
+            />,
             document.body,
           )
         : null}

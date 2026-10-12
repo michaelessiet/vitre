@@ -5,11 +5,15 @@
  * app (dependency of apps/server); other built-ins are resolved from PATH and
  * degrade to a `not_installed` status when absent. User-defined servers from
  * the `languageServers` server setting are merged in via `resolveRegistry`;
- * they are never bundled and always spawn from PATH.
+ * they are never bundled and always spawn from PATH. Optional defaults (Kotlin)
+ * fill unclaimed extensions after custom settings and are discovered through
+ * serverStatus, without reserving their ids or extensions in settings.
  *
  * @module LanguageServers
  */
 import type { CustomLanguageServer } from "@t3tools/contracts";
+
+import { rustAnalyzerInitializationOptions } from "./RustProject.ts";
 
 export interface LanguageServerConfig {
   /** Stable id used in status reporting and registry keys. */
@@ -20,7 +24,27 @@ export interface LanguageServerConfig {
   readonly args: ReadonlyArray<string>;
   /** True when the binary ships with the app rather than user PATH. */
   readonly bundled: boolean;
+  /** Initialize handshake budget; unset means the LspClient default (30s). */
+  readonly initializeTimeoutMs?: number;
+  /**
+   * Per-workspace `initializationOptions` for the initialize handshake.
+   *
+   * Resolved once per client start, and async because a server may need to
+   * inspect the workspace first (rust-analyzer must be told where the Cargo
+   * manifests are). Servers that take configuration through
+   * `workspace/configuration` instead — vtsls — leave this unset.
+   */
+  readonly resolveInitializationOptions?: (
+    workspaceRoot: string,
+  ) => Promise<Record<string, unknown> | undefined>;
 }
+
+/**
+ * Initialize budget for user-configured servers. jdtls-class heavyweights
+ * (bundle cache creation, project import) legitimately take over 30s on a
+ * cold start, and custom servers are exactly where they arrive.
+ */
+export const CUSTOM_SERVER_INITIALIZE_TIMEOUT_MS = 120_000;
 
 const TYPESCRIPT_SERVER: LanguageServerConfig = {
   serverId: "typescript",
@@ -36,6 +60,9 @@ const RUST_ANALYZER: LanguageServerConfig = {
   command: "rust-analyzer",
   args: [],
   bundled: false,
+  // Without linkedProjects, a workspace whose crates live in subdirectories
+  // loads no crate graph at all; see RustProject for the failure mode.
+  resolveInitializationOptions: rustAnalyzerInitializationOptions,
 };
 
 const PYRIGHT: LanguageServerConfig = {
@@ -52,6 +79,17 @@ const GOPLS: LanguageServerConfig = {
   command: "gopls",
   args: [],
   bundled: false,
+};
+
+// Optional defaults are merged after custom settings, so existing Kotlin
+// configurations (including other server implementations) retain precedence.
+const KOTLIN_SERVER: LanguageServerConfig = {
+  serverId: "kotlin",
+  displayName: "kotlin-language-server",
+  command: "kotlin-language-server",
+  args: [],
+  bundled: false,
+  initializeTimeoutMs: CUSTOM_SERVER_INITIALIZE_TIMEOUT_MS,
 };
 
 export interface LanguageBinding {
@@ -118,11 +156,21 @@ export function resolveRegistry(custom: ReadonlyArray<CustomLanguageServer>): Re
       command: entry.command,
       args: entry.args,
       bundled: false,
+      initializeTimeoutMs: CUSTOM_SERVER_INITIALIZE_TIMEOUT_MS,
     };
     servers.push(config);
     for (const extension of entry.extensions) {
       if (extension in bindings) continue;
       bindings[extension] = { server: config, languageId: entry.languageId };
+    }
+  }
+  if (!servers.some((server) => server.serverId === KOTLIN_SERVER.serverId)) {
+    const extensions = [".kt", ".kts"].filter((extension) => !(extension in bindings));
+    if (extensions.length > 0) {
+      servers.push(KOTLIN_SERVER);
+      for (const extension of extensions) {
+        bindings[extension] = { server: KOTLIN_SERVER, languageId: "kotlin" };
+      }
     }
   }
   return {

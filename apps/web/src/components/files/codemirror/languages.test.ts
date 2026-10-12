@@ -3,7 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   editorLanguageIdForPath,
   languageExtensionForPath,
-  lazyLanguageLoaderForPath,
+  lazyLanguageDescriptionForPath,
 } from "./languages";
 
 describe("editorLanguageIdForPath", () => {
@@ -53,28 +53,28 @@ describe("languageExtensionForPath", () => {
   });
 });
 
-describe("lazyLanguageLoaderForPath", () => {
-  it("resolves registry languages outside the eager set", () => {
-    expect(lazyLanguageLoaderForPath("src/Main.java")).not.toBeNull();
-    expect(lazyLanguageLoaderForPath("src/App.kt")).not.toBeNull();
-    expect(lazyLanguageLoaderForPath("build.gradle.kts")).not.toBeNull();
-    expect(lazyLanguageLoaderForPath("Dockerfile")).not.toBeNull();
+describe("lazyLanguageDescriptionForPath", () => {
+  it("matches languages that lack bundled support", () => {
+    expect(lazyLanguageDescriptionForPath("cmd/main.go")?.name).toBe("Go");
+    expect(lazyLanguageDescriptionForPath("src/Main.java")?.name).toBe("Java");
+    expect(lazyLanguageDescriptionForPath("Cargo.toml")?.name).toBe("TOML");
   });
 
-  it("returns null for eagerly supported languages", () => {
-    expect(lazyLanguageLoaderForPath("src/index.ts")).toBeNull();
-    expect(lazyLanguageLoaderForPath("src/main.rs")).toBeNull();
+  it("matches case-sensitive registry filenames verbatim", () => {
+    expect(lazyLanguageDescriptionForPath("services/api/Dockerfile")?.name).toBe("Dockerfile");
   });
 
-  it("returns null when no grammar matches", () => {
-    expect(lazyLanguageLoaderForPath("LICENSE")).toBeNull();
-    expect(lazyLanguageLoaderForPath("bin/tool.exe")).toBeNull();
+  it("falls back to the lowercased file name for uppercase extensions", () => {
+    expect(lazyLanguageDescriptionForPath("CMD/MAIN.GO")?.name).toBe("Go");
   });
 
-  it("loads language support for Java and Kotlin", async () => {
-    const java = lazyLanguageLoaderForPath("src/Main.java");
-    const kotlin = lazyLanguageLoaderForPath("src/App.kt");
-    await expect(java?.()).resolves.toBeDefined();
-    await expect(kotlin?.()).resolves.toBeDefined();
+  it("returns null for languages with bundled support", () => {
+    expect(lazyLanguageDescriptionForPath("src/index.ts")).toBeNull();
+    expect(lazyLanguageDescriptionForPath("notes.md")).toBeNull();
+  });
+
+  it("returns null when no registered language matches", () => {
+    expect(lazyLanguageDescriptionForPath("LICENSE")).toBeNull();
+    expect(lazyLanguageDescriptionForPath(".gitignore")).toBeNull();
   });
 });

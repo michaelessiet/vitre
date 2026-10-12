@@ -9,12 +9,14 @@
  * Deliberately a plain promise-based class: vscode-jsonrpc owns the wire
  * protocol and its connection lifecycle callbacks; LspManager wraps this in
  * Effect and owns registry/refcount/diagnostics concerns. Documents are
- * synced with full text (TextDocumentSyncKind.Full).
+ * sent as full buffers by our clients; LspManager adapts changes to the
+ * server's negotiated synchronization mode.
  *
  * @module LspClient
  */
 import * as NodeChildProcess from "node:child_process";
 import * as NodeModule from "node:module";
+import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 
 import {
@@ -28,10 +30,10 @@ import type * as Protocol from "vscode-languageserver-protocol";
 import type { LanguageServerConfig } from "./LanguageServers.ts";
 
 const REQUEST_TIMEOUT_MS = 15_000;
-// jdtls-class servers legitimately take over 30s on a cold start (bundle
-// cache creation, project import); a timeout that fires while the server is
-// still booting turns a slow start into a hard failure.
-const INITIALIZE_TIMEOUT_MS = 120_000;
+/** Default initialize budget; configs may override via initializeTimeoutMs. */
+const INITIALIZE_TIMEOUT_MS = 30_000;
+/** Grace period after SIGTERM before escalating to SIGKILL on dispose. */
+const KILL_ESCALATION_MS = 5_000;
 
 export type LspClientFailure =
   | { readonly kind: "not_installed" }
@@ -76,6 +78,23 @@ function withTimeout<A>(promise: Promise<A>, timeoutMs: number): Promise<A> {
   });
 }
 
+/**
+ * Rewrite a path resolved through Electron's app.asar to its app.asar.unpacked
+ * twin. Child processes must not run from inside the archive: tsserver sets
+ * `process.noAsar = true` before serving requests, after which every fs call
+ * on an app.asar path reports "not found" — its default-lib directory (derived
+ * from its own __filename) turns up empty and every ambient global (Pick,
+ * JSON, Error, ...) becomes "Cannot find name". asarUnpack ships all of
+ * node_modules on the real filesystem, so the unpacked twin always exists.
+ * Outside a packaged build the path contains no app.asar and passes through.
+ */
+export function rewriteAsarPath(resolvedPath: string): string {
+  return resolvedPath.replace(
+    `${NodePath.sep}app.asar${NodePath.sep}`,
+    `${NodePath.sep}app.asar.unpacked${NodePath.sep}`,
+  );
+}
+
 function resolveSpawn(config: LanguageServerConfig): {
   readonly command: string;
   readonly args: ReadonlyArray<string>;
@@ -86,7 +105,7 @@ function resolveSpawn(config: LanguageServerConfig): {
   // bundles its own TypeScript, so unlike a bare typescript-language-server it
   // needs no separately-shipped tsserver to drive.
   const require = NodeModule.createRequire(import.meta.url);
-  const cliPath = require.resolve("@vtsls/language-server/bin/vtsls.js");
+  const cliPath = rewriteAsarPath(require.resolve("@vtsls/language-server/bin/vtsls.js"));
   return { command: process.execPath, args: [cliPath, ...config.args] };
 }
 
@@ -138,6 +157,7 @@ function configurationForSection(section: string | undefined): unknown {
 }
 
 export class LspClient {
+  serverCapabilities: Protocol.ServerCapabilities = {};
   private connection: MessageConnection | null = null;
   private child: NodeChildProcess.ChildProcess | null = null;
   private disposed = false;
@@ -152,8 +172,9 @@ export class LspClient {
     try {
       await client.spawnAndInitialize();
     } catch (error) {
-      // A failed initialize must not leak the spawned process: an orphaned
-      // server also wedges future starts that contend on its workspace lock.
+      // A failed initialize (timeout, error response, exit mid-handshake)
+      // must not leak the spawned process; dispose() is safe when the child
+      // already exited (kill on a dead pid is a no-op).
       await client.dispose().catch(() => {});
       throw error;
     }
@@ -193,6 +214,9 @@ export class LspClient {
       this.options.onExit(
         `exited with ${code ?? signal ?? "unknown"}: ${stderrTail.trim().slice(0, 500)}`,
       );
+      // Reject in-flight requests (initialize included) now rather than
+      // letting them run out their timeouts against a dead connection.
+      this.connection?.dispose();
     });
 
     const connection = createMessageConnection(
@@ -217,13 +241,18 @@ export class LspClient {
     connection.listen();
 
     const rootUri = NodeURL.pathToFileURL(this.options.workspaceRoot).toString();
+    const initializationOptions = await this.resolveInitializationOptions();
     const initializeParams: Protocol.InitializeParams = {
       processId: process.pid,
       rootUri,
       workspaceFolders: [{ uri: rootUri, name: "workspace" }],
+      ...(initializationOptions !== undefined ? { initializationOptions } : {}),
       capabilities: {
         textDocument: {
-          synchronization: { didSave: false },
+          // LspManager forwards didSave from workspace file changes. It gates
+          // save-triggered analysis: rust-analyzer runs `cargo check` only on
+          // save, so without it those diagnostics never refresh.
+          synchronization: { didSave: true },
           completion: {
             contextSupport: true,
             completionItem: {
@@ -249,17 +278,99 @@ export class LspClient {
           references: {},
           rename: {},
           formatting: {},
+          codeAction: {
+            dataSupport: true,
+            disabledSupport: true,
+            isPreferredSupport: true,
+            resolveSupport: { properties: ["edit"] },
+            codeActionLiteralSupport: {
+              codeActionKind: {
+                valueSet: [
+                  "",
+                  "quickfix",
+                  "refactor",
+                  "refactor.extract",
+                  "refactor.inline",
+                  "refactor.rewrite",
+                  "source",
+                  "source.organizeImports",
+                  "source.fixAll",
+                ],
+              },
+            },
+          },
+          semanticTokens: {
+            requests: { range: true, full: true },
+            tokenTypes: [
+              "namespace",
+              "type",
+              "class",
+              "enum",
+              "interface",
+              "struct",
+              "typeParameter",
+              "parameter",
+              "variable",
+              "property",
+              "enumMember",
+              "event",
+              "function",
+              "method",
+              "macro",
+              "keyword",
+              "modifier",
+              "comment",
+              "string",
+              "number",
+              "regexp",
+              "operator",
+              "decorator",
+            ],
+            tokenModifiers: [
+              "declaration",
+              "definition",
+              "readonly",
+              "static",
+              "deprecated",
+              "abstract",
+              "async",
+              "modification",
+              "documentation",
+              "defaultLibrary",
+            ],
+            formats: ["relative"],
+            overlappingTokenSupport: false,
+            multilineTokenSupport: false,
+          },
         },
         // vtsls pulls settings via workspace/configuration during init; the
         // request handler above returns VTSLS_WORKSPACE_CONFIGURATION.
         workspace: { workspaceFolders: true, configuration: true },
       },
     };
-    await withTimeout(
-      connection.sendRequest("initialize", initializeParams),
-      INITIALIZE_TIMEOUT_MS,
+    const initialized = await withTimeout(
+      connection.sendRequest<Protocol.InitializeResult>("initialize", initializeParams),
+      this.options.config.initializeTimeoutMs ?? INITIALIZE_TIMEOUT_MS,
     );
+    this.serverCapabilities = initialized.capabilities ?? {};
     await connection.sendNotification("initialized", {});
+  }
+
+  /**
+   * Workspace-specific initialize options, or undefined when the server has no
+   * resolver or the resolver declines. A resolver failure degrades to the
+   * server's defaults rather than aborting the handshake: losing
+   * `linkedProjects` costs language features, while failing the start costs
+   * the editor its server entirely.
+   */
+  private async resolveInitializationOptions(): Promise<Record<string, unknown> | undefined> {
+    const resolve = this.options.config.resolveInitializationOptions;
+    if (resolve === undefined) return undefined;
+    try {
+      return await resolve(this.options.workspaceRoot);
+    } catch {
+      return undefined;
+    }
   }
 
   private requireConnection(): MessageConnection {
@@ -286,8 +397,28 @@ export class LspClient {
         await this.connection.sendNotification("exit", null).catch(() => {});
         this.connection.dispose();
       }
+    } catch {
+      // Connection already torn down (e.g. by the exit handler after the
+      // child died); sendRequest throws synchronously on a disposed
+      // connection and there is nothing left to say goodbye to.
     } finally {
-      this.child?.kill();
+      this.killChild();
     }
+  }
+
+  /**
+   * Kill the child, escalating to SIGKILL for servers that ignore SIGTERM —
+   * a server hung during initialize is exactly that case. No-op when the
+   * child already exited.
+   */
+  private killChild(): void {
+    const child = this.child;
+    if (child === null || child.exitCode !== null || child.signalCode !== null) return;
+    child.kill();
+    const escalation = setTimeout(() => {
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    }, KILL_ESCALATION_MS);
+    escalation.unref();
+    child.once("exit", () => clearTimeout(escalation));
   }
 }

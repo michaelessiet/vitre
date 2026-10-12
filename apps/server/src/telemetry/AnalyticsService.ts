@@ -11,22 +11,32 @@ import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 
 import packageJson from "../../package.json" with { type: "json" };
+import { writeFileStringAtomically } from "../atomicWrite.ts";
 import * as ServerConfig from "../config.ts";
 import { getTelemetryIdentifier } from "./Identify.ts";
 
-interface BufferedAnalyticsEvent {
-  readonly event: string;
-  readonly properties?: Readonly<Record<string, unknown>>;
-  readonly capturedAt: string;
-}
+const BufferedAnalyticsEventSchema = Schema.Struct({
+  event: Schema.String,
+  properties: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+  capturedAt: Schema.String,
+});
+
+type BufferedAnalyticsEvent = typeof BufferedAnalyticsEventSchema.Type;
+
+const PendingAnalyticsEvents = Schema.fromJsonString(Schema.Array(BufferedAnalyticsEventSchema));
+
+const decodePendingAnalyticsEvents = Schema.decodeUnknownEffect(PendingAnalyticsEvents);
+const encodePendingAnalyticsEvents = Schema.encodeEffect(PendingAnalyticsEvents);
 
 const TelemetryEnvConfig = Config.all({
   posthogKey: Config.string("T3CODE_POSTHOG_KEY").pipe(
@@ -70,8 +80,34 @@ export const make = Effect.gen(function* () {
   const telemetryConfig = yield* TelemetryEnvConfig;
   const httpClient = yield* HttpClient.HttpClient;
   const serverConfig = yield* ServerConfig.ServerConfig;
+  const fileSystem = yield* FileSystem.FileSystem;
   const identifier = yield* getTelemetryIdentifier;
-  const bufferRef = yield* Ref.make<ReadonlyArray<BufferedAnalyticsEvent>>([]);
+  const pendingPath = serverConfig.pendingTelemetryPath;
+
+  /**
+   * Events spilled by a previous run's shutdown. Reading them back here is what
+   * lets the shutdown path skip the network entirely: the file is consumed and
+   * removed immediately, so a crash between read and send drops at most one
+   * run's tail rather than replaying it forever.
+   */
+  const restorePendingEvents = Effect.gen(function* () {
+    const contents = yield* fileSystem.readFileString(pendingPath).pipe(
+      Effect.map(Option.some),
+      Effect.catchTag("PlatformError", () => Effect.succeed(Option.none<string>())),
+    );
+    yield* fileSystem.remove(pendingPath, { force: true }).pipe(Effect.ignore);
+    if (Option.isNone(contents)) return [] as ReadonlyArray<BufferedAnalyticsEvent>;
+    const trimmed = contents.value.trim();
+    if (trimmed.length === 0) return [] as ReadonlyArray<BufferedAnalyticsEvent>;
+    return yield* decodePendingAnalyticsEvents(trimmed).pipe(
+      Effect.catchCause(() => Effect.succeed([] as ReadonlyArray<BufferedAnalyticsEvent>)),
+    );
+  });
+
+  const restored = telemetryConfig.enabled
+    ? yield* restorePendingEvents
+    : ([] as ReadonlyArray<BufferedAnalyticsEvent>);
+  const bufferRef = yield* Ref.make<ReadonlyArray<BufferedAnalyticsEvent>>(restored);
   const clientType = serverConfig.mode === "desktop" ? "desktop-app" : "cli-web-client";
   const hostPlatform = yield* HostProcessPlatform;
   const hostArchitecture = yield* HostProcessArchitecture;
@@ -172,11 +208,24 @@ export const make = Effect.gen(function* () {
     },
   );
 
+  /**
+   * Shutdown must never wait on PostHog. The pooled connection has always gone
+   * idle by the time a user quits, so flushing here costs a cold DNS + TCP +
+   * TLS round trip (measured at 750-1300ms) on the desktop app's critical quit
+   * path. Spill to disk instead and let the next boot deliver it.
+   */
+  const spillPendingEvents = Effect.gen(function* () {
+    const pending = yield* Ref.getAndSet(bufferRef, []);
+    if (!telemetryConfig.enabled || pending.length === 0) return;
+    const contents = yield* encodePendingAnalyticsEvents(pending);
+    yield* writeFileStringAtomically({ filePath: pendingPath, contents });
+  }).pipe(Effect.ignore);
+
   yield* Effect.forever(Effect.sleep(1000).pipe(Effect.flatMap(() => flush)), {
     disableYield: true,
   }).pipe(Effect.forkScoped);
 
-  yield* Effect.addFinalizer(() => flush);
+  yield* Effect.addFinalizer(() => spillPendingEvents);
 
   return AnalyticsService.of({ record, flush });
 });

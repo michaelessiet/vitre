@@ -197,6 +197,19 @@ export function readPathFromLoginShell(
   return readEnvironmentFromLoginShell(shell, ["PATH"], execFile).PATH;
 }
 
+/** Resolve the login-shell PATH without blocking the server's event loop. */
+export async function readPathFromLoginShellAsync(shell: string): Promise<string | undefined> {
+  const output = await new Promise<string>((resolve, reject) => {
+    NodeChildProcess.execFile(
+      shell,
+      ["-ilc", buildEnvironmentCaptureCommand(["PATH"])],
+      { encoding: "utf8", timeout: 5000 },
+      (error, stdout) => (error ? reject(error) : resolve(stdout)),
+    );
+  });
+  return extractEnvironmentValue(output, "PATH");
+}
+
 export function readPathFromLaunchctl(
   execFile: ExecFileSyncLike = NodeChildProcess.execFileSync,
 ): string | undefined {

@@ -29,9 +29,48 @@ describe("openDiffFilePrimaryAction", () => {
       selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, THREAD_REF),
     ).toMatchObject({
       isOpen: true,
-      activeSurfaceId: "file:apps/web/src/components/DiffPanel.tsx",
+      activeSurfaceId: "file::apps/web/src/components/DiffPanel.tsx",
     });
     expect(openInEditor).not.toHaveBeenCalled();
+  });
+
+  it("opens diff files from an attached root scoped to that root", () => {
+    const openInEditor = vi.fn();
+
+    openDiffFilePrimaryAction({
+      threadRef: THREAD_REF,
+      filePath: "src/app.ts",
+      activeCwd: "/repos/frontend",
+      rootPath: "/repos/frontend",
+      openInEditor,
+    });
+
+    expect(
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, THREAD_REF),
+    ).toMatchObject({
+      isOpen: true,
+      activeSurfaceId: "file:/repos/frontend:src/app.ts",
+    });
+    expect(openInEditor).not.toHaveBeenCalled();
+  });
+
+  it("opens in the external editor when the user opted in", () => {
+    const openInEditor = vi.fn();
+
+    openDiffFilePrimaryAction({
+      threadRef: THREAD_REF,
+      filePath: "apps/web/src/components/DiffPanel.tsx",
+      activeCwd: "/repo/project",
+      openFilesInExternalEditor: true,
+      openInEditor,
+    });
+
+    expect(
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, THREAD_REF),
+    ).toMatchObject({ isOpen: false });
+    expect(openInEditor).toHaveBeenCalledWith(
+      "/repo/project/apps/web/src/components/DiffPanel.tsx",
+    );
   });
 
   it("falls back to the editor without thread context", () => {

@@ -537,6 +537,15 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     );
   });
 
+  // `additionalDirectories` requested by each thread's most recent
+  // `startSession`. Adapters store their own `ProviderSession` objects and
+  // `listSessions` re-reads those, so without this overlay the reactor's
+  // roots-changed restart predicate would always compare against an empty
+  // set. Kept in memory on purpose: it shares the adapters' in-memory
+  // session lifetime, and every new session for a thread passes through
+  // `startSession`, which overwrites (or clears) the entry.
+  const requestedAdditionalDirectoriesByThreadId = new Map<ThreadId, ReadonlyArray<string>>();
+
   const startSession: ProviderServiceMethod<"startSession"> = Effect.fn("startSession")(
     function* (threadId, rawInput) {
       const parsed = yield* decodeInputOrValidationError({
@@ -628,7 +637,18 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         const sessionWithInstance = {
           ...session,
           providerInstanceId: resolvedInstanceId,
+          // Echo the caller-computed additional directories verbatim so
+          // restart detection compares against what was requested, not
+          // whatever normalization the adapter applied internally.
+          ...(input.additionalDirectories !== undefined
+            ? { additionalDirectories: input.additionalDirectories }
+            : {}),
         };
+        if (input.additionalDirectories !== undefined && input.additionalDirectories.length > 0) {
+          requestedAdditionalDirectoriesByThreadId.set(threadId, input.additionalDirectories);
+        } else {
+          requestedAdditionalDirectoriesByThreadId.delete(threadId);
+        }
 
         yield* stopStaleSessionsForThread({
           threadId,
@@ -937,7 +957,14 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       }
 
       const sessions: ProviderSession[] = [];
-      for (const session of activeSessions) {
+      for (const rawSession of activeSessions) {
+        const requestedAdditionalDirectories = requestedAdditionalDirectoriesByThreadId.get(
+          rawSession.threadId,
+        );
+        const session =
+          requestedAdditionalDirectories !== undefined
+            ? { ...rawSession, additionalDirectories: requestedAdditionalDirectories }
+            : rawSession;
         const binding = bindingsByThreadId.get(session.threadId);
         if (!binding) {
           sessions.push(session);
@@ -1073,7 +1100,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     yield* analytics.record("provider.sessions.stopped_all", {
       sessionCount: threadIds.length,
     });
-    yield* analytics.flush;
+    // Deliberately not flushed here. This runs inside a shutdown finalizer on
+    // the sequential layer-teardown path, so a flush would block quit on a cold
+    // TLS handshake to PostHog. AnalyticsService's own finalizer spills whatever
+    // is still buffered to disk and the next boot sends it.
   });
 
   yield* Effect.addFinalizer(() =>

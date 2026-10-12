@@ -78,6 +78,9 @@ import {
   useVcsPullAction,
 } from "~/lib/sourceControlActions";
 import { useThread } from "~/state/entities";
+import { useThreadRoots } from "~/state/threadRoots";
+import { selectSelectedGitRootPath, useGitRootStore } from "~/gitRootStore";
+import { GitRootSwitcher } from "./GitRootSwitcher";
 import { useEnvironmentQuery } from "~/state/query";
 import { serverEnvironment } from "~/state/server";
 import { sourceControlEnvironment } from "~/state/sourceControl";
@@ -85,7 +88,8 @@ import { threadEnvironment } from "~/state/threads";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { vcsEnvironment } from "~/state/vcs";
 import { randomUUID } from "~/lib/utils";
-import { resolvePathLinkTarget } from "~/terminal-links";
+import { getClientSettings } from "~/hooks/useSettings";
+import { openWorkspaceFilePrimaryAction } from "~/openFileActions";
 import { type DraftId, useComposerDraftStore } from "~/composerDraftStore";
 import { readLocalApi } from "~/localApi";
 import { getSourceControlPresentation } from "~/sourceControlPresentation";
@@ -968,7 +972,7 @@ function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
 }
 
 export default function GitActionsControl({
-  gitCwd,
+  gitCwd: primaryGitCwd,
   activeThreadRef,
   draftId,
 }: GitActionsControlProps) {
@@ -976,6 +980,14 @@ export default function GitActionsControl({
     threadEnvironment.updateMetadata,
     "thread branch metadata update",
   );
+  const threadRoots = useThreadRoots(activeThreadRef, draftId);
+  const selectedGitRootPath = useGitRootStore((state) =>
+    selectSelectedGitRootPath(state.selectedRootPathByThreadKey, activeThreadRef, threadRoots.all),
+  );
+  // All git status/actions below run against the selected root; branch
+  // metadata sync stays gated to the primary root.
+  const gitCwd = selectedGitRootPath ?? primaryGitCwd;
+  const isPrimaryRootSelected = selectedGitRootPath === null;
   const activeEnvironmentId = activeThreadRef?.environmentId ?? null;
   const serverConfig = useAtomValue(serverEnvironment.configValueAtom(activeEnvironmentId));
   const openInPreferredEditor = useOpenInPreferredEditor(
@@ -1023,9 +1035,33 @@ export default function GitActionsControl({
     });
   }, []);
 
+  // The elapsed-time ticker for the progress toast is armed only while a git
+  // action is publishing progress (rare and short-lived), instead of an
+  // unconditional per-second interval for every open thread.
+  const progressToastTickerRef = useRef<number | null>(null);
+  const stopProgressToastTicker = useCallback(() => {
+    if (progressToastTickerRef.current === null) {
+      return;
+    }
+    window.clearInterval(progressToastTickerRef.current);
+    progressToastTickerRef.current = null;
+  }, []);
+  const startProgressToastTicker = useCallback(() => {
+    if (progressToastTickerRef.current !== null) {
+      return;
+    }
+    progressToastTickerRef.current = window.setInterval(() => {
+      updateActiveProgressToast();
+    }, 1000);
+  }, [updateActiveProgressToast]);
+  // An in-flight action's interval must never outlive the component.
+  useEffect(() => stopProgressToastTicker, [stopProgressToastTicker]);
+
   const persistThreadBranchSync = useCallback(
     (branch: string | null) => {
-      if (!activeThreadRef) {
+      // A thread's branch metadata tracks its primary repository only —
+      // never sync it from an attached root's git status.
+      if (!activeThreadRef || !isPrimaryRootSelected) {
         return;
       }
 
@@ -1059,6 +1095,7 @@ export default function GitActionsControl({
       activeServerThread,
       activeThreadRef,
       draftId,
+      isPrimaryRootSelected,
       setDraftThreadContext,
       updateThreadMetadata,
     ],
@@ -1163,19 +1200,6 @@ export default function GitActionsControl({
         terminology: changeRequestTerminology,
       })
     : null;
-
-  useEffect(() => {
-    const interval = window.setInterval(() => {
-      if (!activeGitActionProgressRef.current) {
-        return;
-      }
-      updateActiveProgressToast();
-    }, 1000);
-
-    return () => {
-      window.clearInterval(interval);
-    };
-  }, [updateActiveProgressToast]);
 
   useEffect(() => {
     if (gitCwd === null) {
@@ -1319,6 +1343,7 @@ export default function GitActionsControl({
         lastOutputLine: null,
         currentPhaseLabel: progressStages[0] ?? "Running git action...",
       };
+      startProgressToastTicker();
 
       if (progressToastId) {
         toastManager.update(progressToastId, {
@@ -1395,7 +1420,12 @@ export default function GitActionsControl({
         onProgress: applyProgressEvent,
       });
 
-      activeGitActionProgressRef.current = null;
+      // Only tear down if this action still owns the progress slot — a newer
+      // action may have re-armed the ticker with its own progress by now.
+      if (activeGitActionProgressRef.current?.actionId === actionId) {
+        activeGitActionProgressRef.current = null;
+        stopProgressToastTicker();
+      }
       if (result._tag === "Failure") {
         if (isAtomCommandInterrupted(result)) {
           toastManager.close(resolvedProgressToastId);
@@ -1628,24 +1658,32 @@ export default function GitActionsControl({
         });
         return;
       }
-      const target = resolvePathLinkTarget(filePath, gitCwd);
-      void (async () => {
-        const result = await openInPreferredEditor(target);
-        if (result._tag === "Success" || isAtomCommandInterrupted(result)) {
-          return;
-        }
-        const error = squashAtomCommandFailure(result);
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Unable to open file",
-            description: error instanceof Error ? error.message : "An error occurred.",
-            ...(threadToastData !== undefined ? { data: threadToastData } : {}),
-          }),
-        );
-      })();
+      openWorkspaceFilePrimaryAction({
+        threadRef: activeThreadRef,
+        filePath,
+        workspaceRoot: gitCwd,
+        roots: threadRoots.all,
+        openFilesInExternalEditor: getClientSettings().openFilesInExternalEditor,
+        openInEditor: (targetPath) => {
+          void (async () => {
+            const result = await openInPreferredEditor(targetPath);
+            if (result._tag === "Success" || isAtomCommandInterrupted(result)) {
+              return;
+            }
+            const error = squashAtomCommandFailure(result);
+            toastManager.add(
+              stackedThreadToast({
+                type: "error",
+                title: "Unable to open file",
+                description: error instanceof Error ? error.message : "An error occurred.",
+                ...(threadToastData !== undefined ? { data: threadToastData } : {}),
+              }),
+            );
+          })();
+        },
+      });
     },
-    [gitCwd, openInPreferredEditor, threadToastData],
+    [activeThreadRef, gitCwd, openInPreferredEditor, threadRoots.all, threadToastData],
   );
 
   const canPublishRepository = isRepo && gitStatusForActions !== null && !hasPrimaryRemote;
@@ -1654,6 +1692,16 @@ export default function GitActionsControl({
 
   return (
     <>
+      {activeEnvironmentId !== null && activeThreadRef !== null && threadRoots.all.length > 1 && (
+        <GitRootSwitcher
+          environmentId={activeEnvironmentId}
+          roots={threadRoots.all}
+          selectedRootPath={selectedGitRootPath}
+          onSelect={(rootPath) =>
+            useGitRootStore.getState().selectGitRoot(activeThreadRef, rootPath)
+          }
+        />
+      )}
       {!isRepo ? (
         <Button
           variant="outline"

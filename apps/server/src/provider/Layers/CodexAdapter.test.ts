@@ -1049,6 +1049,12 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
                   },
                 ],
               },
+              {
+                id: "resource_path",
+                header: "Resources",
+                question: "Where are the project resources?",
+                options: [],
+              },
             ],
           },
         } satisfies ProviderEvent);
@@ -1072,6 +1078,8 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         const events = Array.from(yield* Fiber.join(eventsFiber));
         NodeAssert.equal(events[0]?.type, "user-input.requested");
         if (events[0]?.type === "user-input.requested") {
+          NodeAssert.equal(events[0].payload.questions.length, 2);
+          NodeAssert.deepStrictEqual(events[0].payload.questions[1]?.options, []);
           NodeAssert.equal(events[0].requestId, "req-user-input-1");
           NodeAssert.equal(events[0].payload.questions[0]?.id, "sandbox_mode");
           NodeAssert.equal(events[0].payload.questions[0]?.multiSelect, false);

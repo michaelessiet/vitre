@@ -72,7 +72,7 @@ describe("rightPanelStore", () => {
     });
   });
 
-  it("upgrades saved file surfaces with neutral reveal state", () => {
+  it("upgrades saved file surfaces with neutral reveal state and root-qualified ids", () => {
     expect(
       migratePersistedRightPanelState({
         byThreadKey: {
@@ -87,14 +87,60 @@ describe("rightPanelStore", () => {
       byThreadKey: {
         "env-1:thread-A": {
           isOpen: true,
-          activeSurfaceId: "file:src/index.ts",
+          // Legacy `file:${relativePath}` ids are rewritten in place and the
+          // active tab follows the rewrite.
+          activeSurfaceId: "file::src/index.ts",
           surfaces: [
             {
-              id: "file:src/index.ts",
+              id: "file::src/index.ts",
               kind: "file",
               relativePath: "src/index.ts",
+              rootPath: null,
               revealLine: null,
+              revealEndLine: null,
               revealRequestId: 0,
+            },
+          ],
+        },
+      },
+    });
+  });
+
+  it("keeps root-qualified file surfaces intact during migration", () => {
+    expect(
+      migratePersistedRightPanelState({
+        byThreadKey: {
+          "env-1:thread-A": {
+            isOpen: true,
+            activeSurfaceId: "file:/repos/frontend:src/app.ts",
+            surfaces: [
+              {
+                id: "file:/repos/frontend:src/app.ts",
+                kind: "file",
+                relativePath: "src/app.ts",
+                rootPath: "/repos/frontend",
+                revealLine: 12,
+                revealEndLine: null,
+                revealRequestId: 3,
+              },
+            ],
+          },
+        },
+      }),
+    ).toEqual({
+      byThreadKey: {
+        "env-1:thread-A": {
+          isOpen: true,
+          activeSurfaceId: "file:/repos/frontend:src/app.ts",
+          surfaces: [
+            {
+              id: "file:/repos/frontend:src/app.ts",
+              kind: "file",
+              relativePath: "src/app.ts",
+              rootPath: "/repos/frontend",
+              revealLine: 12,
+              revealEndLine: null,
+              revealRequestId: 3,
             },
           ],
         },
@@ -173,20 +219,24 @@ describe("rightPanelStore", () => {
 
     expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
       isOpen: true,
-      activeSurfaceId: "file:README.md",
+      activeSurfaceId: "file::README.md",
       surfaces: [
         {
-          id: "file:src/index.ts",
+          id: "file::src/index.ts",
           kind: "file",
           relativePath: "src/index.ts",
+          rootPath: null,
           revealLine: null,
+          revealEndLine: null,
           revealRequestId: 2,
         },
         {
-          id: "file:README.md",
+          id: "file::README.md",
           kind: "file",
           relativePath: "README.md",
+          rootPath: null,
           revealLine: null,
+          revealEndLine: null,
           revealRequestId: 1,
         },
       ],
@@ -199,13 +249,15 @@ describe("rightPanelStore", () => {
 
     expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
       isOpen: true,
-      activeSurfaceId: "file:src/index.ts",
+      activeSurfaceId: "file::src/index.ts",
       surfaces: [
         {
-          id: "file:src/index.ts",
+          id: "file::src/index.ts",
           kind: "file",
           relativePath: "src/index.ts",
+          rootPath: null,
           revealLine: 87,
+          revealEndLine: null,
           revealRequestId: 2,
         },
       ],
@@ -215,17 +267,53 @@ describe("rightPanelStore", () => {
 
     expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
       isOpen: true,
-      activeSurfaceId: "file:src/index.ts",
+      activeSurfaceId: "file::src/index.ts",
       surfaces: [
         {
-          id: "file:src/index.ts",
+          id: "file::src/index.ts",
           kind: "file",
           relativePath: "src/index.ts",
+          rootPath: null,
           revealLine: null,
+          revealEndLine: null,
           revealRequestId: 3,
         },
       ],
     });
+  });
+
+  it("keeps a line range only when it extends past the start line", () => {
+    useRightPanelStore.getState().openFile(refA, "src/index.ts", 65, 79);
+
+    expect(
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).surfaces,
+    ).toEqual([
+      {
+        id: "file::src/index.ts",
+        kind: "file",
+        relativePath: "src/index.ts",
+        rootPath: null,
+        revealLine: 65,
+        revealEndLine: 79,
+        revealRequestId: 1,
+      },
+    ]);
+
+    useRightPanelStore.getState().openFile(refA, "src/index.ts", 79, 65);
+
+    expect(
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).surfaces,
+    ).toEqual([
+      {
+        id: "file::src/index.ts",
+        kind: "file",
+        relativePath: "src/index.ts",
+        rootPath: null,
+        revealLine: 79,
+        revealEndLine: null,
+        revealRequestId: 2,
+      },
+    ]);
   });
 
   it("removes persisted file surfaces when their workspace no longer exists", () => {
@@ -413,17 +501,19 @@ describe("rightPanelStore", () => {
     useRightPanelStore.getState().openFile(refA, "src/index.ts");
     useRightPanelStore.getState().openTerminal(refA, "term-1");
 
-    useRightPanelStore.getState().closeOtherSurfaces(refA, "file:src/index.ts");
+    useRightPanelStore.getState().closeOtherSurfaces(refA, "file::src/index.ts");
 
     expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
       isOpen: true,
-      activeSurfaceId: "file:src/index.ts",
+      activeSurfaceId: "file::src/index.ts",
       surfaces: [
         {
-          id: "file:src/index.ts",
+          id: "file::src/index.ts",
           kind: "file",
           relativePath: "src/index.ts",
+          rootPath: null,
           revealLine: null,
+          revealEndLine: null,
           revealRequestId: 1,
         },
       ],

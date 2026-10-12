@@ -51,6 +51,9 @@ import {
   ProjectSearchEntriesError,
   ProjectWatchError,
   ProjectWriteFileError,
+  ClaudeBinaryInstallFailedError,
+  type ClaudeBinaryInstallProgressEvent,
+  DEFAULT_CLAUDE_BINARY_PATH,
   RelayClientInstallFailedError,
   type RelayClientInstallProgressEvent,
   type GraphCommandFailedError,
@@ -95,6 +98,8 @@ import {
   observeRpcStreamEffect as instrumentRpcStreamEffect,
 } from "./observability/RpcInstrumentation.ts";
 import { wsThreadEventDeliveryLag } from "./observability/Metrics.ts";
+import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
+import { ClaudeManagedBinary } from "./provider/Drivers/ClaudeManagedBinary.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
@@ -343,6 +348,13 @@ const PROVIDER_STATUS_DEBOUNCE_MS = 200;
 // Matches the event store's default page size (DEFAULT_READ_FROM_SEQUENCE_LIMIT).
 const SHELL_RESUME_MAX_GAP = 1_000;
 
+// Same guard for thread resumes. The client seeds afterSequence from its
+// persisted cache, which can be arbitrarily stale (days offline), and the
+// per-thread filter runs after reading — so an unbounded replay is a full
+// tail scan of the global event log per resumed thread. Past this gap a
+// single thread-detail snapshot is cheaper and bounded.
+const THREAD_RESUME_MAX_GAP = 1_000;
+
 const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [ORCHESTRATION_WS_METHODS.dispatchCommand, AuthOrchestrationOperateScope],
   [ORCHESTRATION_WS_METHODS.getTurnDiff, AuthOrchestrationReadScope],
@@ -368,6 +380,8 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.serverSignalProcess, AuthOrchestrationOperateScope],
   [WS_METHODS.cloudGetRelayClientStatus, AuthRelayWriteScope],
   [WS_METHODS.cloudInstallRelayClient, AuthRelayWriteScope],
+  [WS_METHODS.claudeGetBinaryStatus, AuthOrchestrationReadScope],
+  [WS_METHODS.claudeInstallBinary, AuthOrchestrationOperateScope],
   [WS_METHODS.graphRuntimeStatus, AuthOrchestrationReadScope],
   [WS_METHODS.graphInstallRuntime, AuthOrchestrationOperateScope],
   [WS_METHODS.graphStatus, AuthOrchestrationReadScope],
@@ -398,6 +412,9 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.lspDefinition, AuthOrchestrationReadScope],
   [WS_METHODS.lspReferences, AuthOrchestrationReadScope],
   [WS_METHODS.lspRename, AuthOrchestrationReadScope],
+  [WS_METHODS.lspCodeActions, AuthOrchestrationReadScope],
+  [WS_METHODS.lspResolveCodeAction, AuthOrchestrationReadScope],
+  [WS_METHODS.lspSemanticTokens, AuthOrchestrationReadScope],
   [WS_METHODS.lspFormat, AuthOrchestrationReadScope],
   [WS_METHODS.lspServerStatus, AuthOrchestrationReadScope],
   [WS_METHODS.subscribeLspDiagnostics, AuthOrchestrationReadScope],
@@ -411,6 +428,8 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.gitResolvePullRequest, AuthOrchestrationOperateScope],
   [WS_METHODS.gitPreparePullRequestThread, AuthOrchestrationOperateScope],
   [WS_METHODS.vcsListRefs, AuthOrchestrationReadScope],
+  [WS_METHODS.vcsGetFileBaseline, AuthOrchestrationReadScope],
+  [WS_METHODS.vcsGetFileStatuses, AuthOrchestrationReadScope],
   [WS_METHODS.vcsCreateWorktree, AuthOrchestrationOperateScope],
   [WS_METHODS.vcsRemoveWorktree, AuthOrchestrationOperateScope],
   [WS_METHODS.vcsCreateRef, AuthOrchestrationOperateScope],
@@ -537,6 +556,7 @@ const makeWsRpcLayer = (
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const relayClient = yield* RelayClient.RelayClient;
+      const claudeManagedBinary = yield* ClaudeManagedBinary;
       const graphifyRuntime = yield* GraphifyRuntime;
       const graphService = yield* GraphService;
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
@@ -1081,6 +1101,9 @@ const makeWsRpcLayer = (
                 interactionMode: bootstrap.createThread.interactionMode,
                 branch: bootstrap.createThread.branch,
                 worktreePath: bootstrap.createThread.worktreePath,
+                ...(bootstrap.createThread.additionalRoots !== undefined
+                  ? { additionalRoots: bootstrap.createThread.additionalRoots }
+                  : {}),
                 createdAt: bootstrap.createThread.createdAt,
               });
               createdThread = true;
@@ -1158,13 +1181,21 @@ const makeWsRpcLayer = (
       };
 
       const loadServerConfig = Effect.gen(function* () {
-        const keybindingsConfig = yield* keybindings.loadConfigState;
-        const providers = yield* providerRegistry.getProviders;
-        const settings = ServerSettings.redactServerSettingsForClient(
-          yield* serverSettings.getSettings,
-        );
-        const environment = yield* serverEnvironment.getDescriptor;
-        const auth = yield* serverAuth.getDescriptor();
+        // These independent reads used to serialize the client's first snapshot.
+        // Keep concurrency bounded on small machines.
+        const [keybindingsConfig, providers, rawSettings, environment, auth, availableEditors] =
+          yield* Effect.all(
+            [
+              keybindings.loadConfigState,
+              providerRegistry.getProviders,
+              serverSettings.getSettings,
+              serverEnvironment.getDescriptor,
+              serverAuth.getDescriptor(),
+              externalLauncher.resolveAvailableEditors(),
+            ],
+            { concurrency: 4 },
+          );
+        const settings = ServerSettings.redactServerSettingsForClient(rawSettings);
 
         return {
           environment,
@@ -1174,7 +1205,7 @@ const makeWsRpcLayer = (
           keybindings: keybindingsConfig.keybindings,
           issues: keybindingsConfig.issues,
           providers,
-          availableEditors: yield* externalLauncher.resolveAvailableEditors(),
+          availableEditors,
           observability: {
             logsDirectoryPath: config.logsDir,
             localTracingEnabled: true,
@@ -1518,38 +1549,45 @@ const makeWsRpcLayer = (
               // catch-up followed by the buffered/ongoing live events. Overlapping
               // events are deduped by sequence on the client.
               //
-              // Read the full range after the cursor (not the store's default
-              // page-bounded limit): the range is normally tiny (a fresh HTTP
-              // snapshot sequence) and the per-thread filter runs after reading,
-              // so a global cap could otherwise omit this thread's events.
+              // Replay the exact range up to the head captured below (not the
+              // store's default page-bounded limit): the range is normally tiny
+              // (a fresh HTTP snapshot sequence) and the per-thread filter runs
+              // after reading, so a smaller cap could omit this thread's events.
+              // If the cursor is too far behind (stale cache after time offline),
+              // fall through to the snapshot path instead of tail-scanning the
+              // global event log — the client resets from any snapshot item.
               if (input.afterSequence !== undefined) {
                 const afterSequence = input.afterSequence;
-                const catchUpStream = orchestrationEngine
-                  .readEvents(afterSequence, Number.MAX_SAFE_INTEGER)
-                  .pipe(
-                    Stream.filter(isThisThreadDetailEvent),
-                    Stream.map((event) => ({
-                      kind: "event" as const,
-                      event: projectActivityEvent(event),
-                    })),
-                    Stream.mapError(
-                      (cause) =>
-                        new OrchestrationGetSnapshotError({
-                          message: `Failed to replay thread ${input.threadId} events`,
-                          cause,
-                        }),
-                    ),
-                  );
-                const afterCatchUp =
-                  input.requestCompletionMarker === true
-                    ? Stream.concat(
-                        Stream.fromEffect(
-                          Queue.offer(liveBuffer, { kind: "synchronized" as const }),
-                        ).pipe(Stream.drain),
-                        bufferedLiveStream,
-                      )
-                    : bufferedLiveStream;
-                return Stream.concat(catchUpStream, afterCatchUp);
+                const headSequence = yield* orchestrationEngine.latestSequence;
+                const replayGap = headSequence - afterSequence;
+                if (replayGap >= 0 && replayGap <= THREAD_RESUME_MAX_GAP) {
+                  const catchUpStream = orchestrationEngine
+                    .readEvents(afterSequence, replayGap)
+                    .pipe(
+                      Stream.filter(isThisThreadDetailEvent),
+                      Stream.map((event) => ({
+                        kind: "event" as const,
+                        event: projectActivityEvent(event),
+                      })),
+                      Stream.mapError(
+                        (cause) =>
+                          new OrchestrationGetSnapshotError({
+                            message: `Failed to replay thread ${input.threadId} events`,
+                            cause,
+                          }),
+                      ),
+                    );
+                  const afterCatchUp =
+                    input.requestCompletionMarker === true
+                      ? Stream.concat(
+                          Stream.fromEffect(
+                            Queue.offer(liveBuffer, { kind: "synchronized" as const }),
+                          ).pipe(Stream.drain),
+                          bufferedLiveStream,
+                        )
+                      : bufferedLiveStream;
+                  return Stream.concat(catchUpStream, afterCatchUp);
+                }
               }
 
               const snapshot = yield* projectionSnapshotQuery
@@ -1724,6 +1762,48 @@ const makeWsRpcLayer = (
                   ),
             ),
             { "rpc.aggregate": "cloud" },
+          ),
+        [WS_METHODS.claudeGetBinaryStatus]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.claudeGetBinaryStatus,
+            // Status for the default (auto) resolution chain: instances with an
+            // explicit binaryPath never need the managed download dialog.
+            Effect.gen(function* () {
+              const environment = yield* HostProcessEnvironment;
+              return yield* claudeManagedBinary.status(DEFAULT_CLAUDE_BINARY_PATH, environment);
+            }),
+            { "rpc.aggregate": "claude" },
+          ),
+        [WS_METHODS.claudeInstallBinary]: (_input) =>
+          observeRpcStream(
+            WS_METHODS.claudeInstallBinary,
+            Stream.callback<ClaudeBinaryInstallProgressEvent, ClaudeBinaryInstallFailedError>(
+              (queue) =>
+                claudeManagedBinary
+                  .installWithProgress((progress) =>
+                    Queue.offer(queue, { type: "progress", ...progress }).pipe(Effect.asVoid),
+                  )
+                  .pipe(
+                    Effect.flatMap((status) =>
+                      Queue.offer(queue, {
+                        type: "complete",
+                        status,
+                      }),
+                    ),
+                    Effect.catchTag("ClaudeBinaryInstallError", (error) =>
+                      Queue.fail(
+                        queue,
+                        new ClaudeBinaryInstallFailedError({
+                          reason: error.reason,
+                          message: error.message,
+                        }),
+                      ),
+                    ),
+                    Effect.andThen(Queue.end(queue)),
+                    Effect.forkScoped,
+                  ),
+            ),
+            { "rpc.aggregate": "claude" },
           ),
         [WS_METHODS.graphRuntimeStatus]: (_input) =>
           observeRpcEffect(WS_METHODS.graphRuntimeStatus, graphifyRuntime.status, {
@@ -1965,6 +2045,18 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.lspFormat, lspManager.format(input), {
             "rpc.aggregate": "lsp",
           }),
+        [WS_METHODS.lspCodeActions]: (input) =>
+          observeRpcEffect(WS_METHODS.lspCodeActions, lspManager.codeActions(input), {
+            "rpc.aggregate": "lsp",
+          }),
+        [WS_METHODS.lspResolveCodeAction]: (input) =>
+          observeRpcEffect(WS_METHODS.lspResolveCodeAction, lspManager.resolveCodeAction(input), {
+            "rpc.aggregate": "lsp",
+          }),
+        [WS_METHODS.lspSemanticTokens]: (input) =>
+          observeRpcEffect(WS_METHODS.lspSemanticTokens, lspManager.semanticTokens(input), {
+            "rpc.aggregate": "lsp",
+          }),
         [WS_METHODS.lspServerStatus]: (input) =>
           observeRpcEffect(WS_METHODS.lspServerStatus, lspManager.serverStatus(input), {
             "rpc.aggregate": "lsp",
@@ -2130,6 +2222,14 @@ const makeWsRpcLayer = (
           ),
         [WS_METHODS.vcsListRefs]: (input) =>
           observeRpcEffect(WS_METHODS.vcsListRefs, gitWorkflow.listRefs(input), {
+            "rpc.aggregate": "vcs",
+          }),
+        [WS_METHODS.vcsGetFileBaseline]: (input) =>
+          observeRpcEffect(WS_METHODS.vcsGetFileBaseline, gitWorkflow.getFileBaseline(input), {
+            "rpc.aggregate": "vcs",
+          }),
+        [WS_METHODS.vcsGetFileStatuses]: (input) =>
+          observeRpcEffect(WS_METHODS.vcsGetFileStatuses, gitWorkflow.getFileStatuses(input), {
             "rpc.aggregate": "vcs",
           }),
         [WS_METHODS.vcsCreateWorktree]: (input) =>

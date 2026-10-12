@@ -13,11 +13,16 @@ import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { Atom } from "effect/unstable/reactivity";
 
-import { createEnvironmentRpcCommand, createEnvironmentSubscriptionAtomFamily } from "./runtime.ts";
+import {
+  createEnvironmentRpcCommand,
+  createEnvironmentRpcQueryAtomFamily,
+  createEnvironmentSubscriptionAtomFamily,
+} from "./runtime.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import { safeErrorLogAttributes } from "../errors/safeLog.ts";
 import { EnvironmentCacheStore } from "../platform/persistence.ts";
+import { pauseWhileDocumentHidden } from "../platform/visibility.ts";
 import { request, subscribe, type EnvironmentRpcInput } from "../rpc/client.ts";
 import { followStreamInEnvironment } from "./runtime.ts";
 import { vcsCommandConcurrency, vcsCommandScheduler } from "./vcsCommandScheduler.ts";
@@ -148,10 +153,16 @@ export function createVcsEnvironmentAtoms<R, E>(
   const listRefsByEnvironment = Atom.family((environmentId: EnvironmentId) =>
     Atom.family((inputKey: string) => {
       const input = JSON.parse(inputKey) as VcsListRefsInput;
+      // Every subscribed list revalidates on an interval, so an idle grace
+      // keeps polling the server after the picker closes. Drop filtered and
+      // paginated lists (minted per keystroke and page) immediately; keep a
+      // short grace only for the unfiltered first page so reopening the
+      // picker stays warm.
+      const idleTtlMs = input.query === undefined && input.cursor === undefined ? 15_000 : 0;
       return runtime
         .atom(cachedVcsRefsChanges(environmentId, input))
         .pipe(
-          Atom.setIdleTTL(5 * 60_000),
+          Atom.setIdleTTL(idleTtlMs),
           Atom.withLabel(`environment-data:vcs:list-refs:${environmentId}:${inputKey}`),
         );
     }),
@@ -165,8 +176,15 @@ export function createVcsEnvironmentAtoms<R, E>(
     listRefs,
     status: createEnvironmentSubscriptionAtomFamily(runtime, {
       label: "environment-data:vcs:status",
+      // Every status subscriber retains a server-side remote poller that runs
+      // `git fetch` on an interval, so drop the subscription once the window
+      // has been hidden for a while — the poller is retain-counted and stops
+      // with the last subscriber, and resubscribing on return to visible
+      // starts from a fresh snapshot (which fully rebuilds the status).
       subscribe: (input: EnvironmentRpcInput<typeof WS_METHODS.subscribeVcsStatus>) =>
-        subscribe(WS_METHODS.subscribeVcsStatus, input).pipe(
+        pauseWhileDocumentHidden(subscribe(WS_METHODS.subscribeVcsStatus, input), {
+          hiddenGrace: "2 minutes",
+        }).pipe(
           Stream.mapAccum(
             () => null as VcsStatusResult | null,
             (current, event) => {
@@ -175,6 +193,28 @@ export function createVcsEnvironmentAtoms<R, E>(
             },
           ),
         ),
+    }),
+    /**
+     * HEAD + index baseline blobs for one file, used by the editor's git diff
+     * gutter. The short stale time absorbs watcher/status refresh bursts; the
+     * client no-ops downstream when the returned oids are unchanged.
+     */
+    fileBaseline: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:vcs:file-baseline",
+      tag: WS_METHODS.vcsGetFileBaseline,
+      staleTimeMs: 3_000,
+      idleTtlMs: 60_000,
+    }),
+    /**
+     * Per-path git status for one workspace root, used by the file explorer's
+     * change decorations. Refreshed by the file watcher and the status stream,
+     * so the stale time only exists to collapse those bursts.
+     */
+    fileStatuses: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:vcs:file-statuses",
+      tag: WS_METHODS.vcsGetFileStatuses,
+      staleTimeMs: 3_000,
+      idleTtlMs: 60_000,
     }),
     pull: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:vcs:pull",

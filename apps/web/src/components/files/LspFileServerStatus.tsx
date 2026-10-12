@@ -37,7 +37,7 @@ export function LspFileServerStatus({
   const extension = relativePath.slice(dotIndex).toLowerCase();
   // Each extension binds to exactly one server (resolveRegistry semantics);
   // a server only appears here once its first didOpen spawned it, and a
-  // crash after running removes it again — both render as quiet.
+  // crash remains visible as a failure while retry backoff is active.
   const server = status.servers.find((candidate) => candidate.extensions.includes(extension));
   if (server === undefined || server.state === "running") return null;
 

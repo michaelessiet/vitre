@@ -31,7 +31,7 @@ import { createModelCapabilities } from "@t3tools/shared/model";
 import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
 
 import { checkCodexProviderStatus, type CodexAppServerProviderSnapshot } from "./CodexProvider.ts";
-import { checkClaudeProviderStatus } from "./ClaudeProvider.ts";
+import { checkClaudeProviderStatus, parseClaudeInitializationModels } from "./ClaudeProvider.ts";
 import * as OpenCodeRuntime from "../opencodeRuntime.ts";
 import * as ProviderEventLoggers from "./ProviderEventLoggers.ts";
 import { ProviderInstanceRegistryHydrationLive } from "./ProviderInstanceRegistryHydration.ts";
@@ -1792,6 +1792,46 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
     // ── checkClaudeProviderStatus tests ──────────────────────────
 
     describe("checkClaudeProviderStatus", () => {
+      it.effect(
+        "publishes newly discovered models and passes the CLI version to the cache resolver",
+        () =>
+          Effect.gen(function* () {
+            const models = parseClaudeInitializationModels([
+              {
+                value: "fable[1m]",
+                resolvedModel: "claude-fable-5-1",
+                displayName: "Fable",
+                description: "Fable 5.1",
+                supportedEffortLevels: ["high", "xhigh"],
+              },
+              { value: "future", displayName: "A future model", description: "" },
+            ]);
+            let version: string | null = null;
+            const status = yield* checkClaudeProviderStatus(
+              defaultClaudeSettings,
+              (_, currentVersion) => {
+                version = currentVersion;
+                return Effect.succeed({
+                  email: undefined,
+                  subscriptionType: "pro",
+                  tokenSource: "oauth",
+                  apiProvider: "firstParty",
+                  slashCommands: [],
+                  models,
+                });
+              },
+            );
+            assert.equal(version, "2.1.267");
+            assert.deepEqual(
+              status.models.map((model) => model.slug),
+              ["claude-fable-5-1", "future"],
+            );
+            assert.equal(status.models[0]?.name, "Claude Fable 5.1");
+            assert.equal(status.status, "ready");
+          }).pipe(
+            Effect.provide(mockSpawnerLayer(() => ({ stdout: "2.1.267\n", stderr: "", code: 0 }))),
+          ),
+      );
       it.effect("returns ready when claude is installed and authenticated", () =>
         Effect.gen(function* () {
           const status = yield* checkClaudeProviderStatus(
@@ -2276,7 +2316,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           assert.strictEqual(status.auth.status, "unknown");
           assert.strictEqual(
             status.message,
-            "Claude Agent CLI (`claude`) is not installed or not on PATH.",
+            "Claude Code is not installed. Download it from the Claude provider settings or install it from https://claude.com/claude-code.",
           );
         }).pipe(Effect.provide(failingSpawnerLayer("spawn claude ENOENT"))),
       );

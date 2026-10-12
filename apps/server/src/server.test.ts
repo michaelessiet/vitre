@@ -16,6 +16,7 @@ import {
   GitCommandError,
   KeybindingRule,
   MessageId,
+  DEFAULT_CLAUDE_BINARY_PATH,
   ExternalLauncherCommandNotFoundError,
   type OrchestrationThreadShell,
   TerminalNotRunningError,
@@ -124,6 +125,7 @@ import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as CloudManagedEndpointRuntime from "./cloud/ManagedEndpointRuntime.ts";
 import * as CloudCliTokenManager from "./cloud/CliTokenManager.ts";
+import * as ClaudeManagedBinary from "./provider/Drivers/ClaudeManagedBinary.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
@@ -158,6 +160,7 @@ const makeDefaultOrchestrationReadModel = () => {
         id: defaultProjectId,
         title: "Default Project",
         workspaceRoot: "/tmp/default-project",
+        additionalRoots: [],
         defaultModelSelection,
         scripts: [],
         createdAt: now,
@@ -170,6 +173,7 @@ const makeDefaultOrchestrationReadModel = () => {
         id: defaultThreadId,
         projectId: defaultProjectId,
         title: "Default Thread",
+        additionalRoots: [],
         modelSelection: defaultModelSelection,
         interactionMode: "default" as const,
         runtimeMode: "full-access" as const,
@@ -200,6 +204,7 @@ const makeDefaultOrchestrationThreadShell = (
     id: defaultThreadId,
     projectId: defaultProjectId,
     title: "Default Thread",
+    additionalRoots: [],
     modelSelection: defaultModelSelection,
     runtimeMode: "full-access",
     interactionMode: "default",
@@ -365,6 +370,7 @@ const buildAppUnderTest = (options?: {
       CloudManagedEndpointRuntime.CloudManagedEndpointRuntime["Service"]
     >;
     relayClient?: Partial<RelayClient.RelayClient["Service"]>;
+    claudeManagedBinary?: Partial<ClaudeManagedBinary.ClaudeManagedBinary["Service"]>;
     processRunner?: Partial<ProcessRunner.ProcessRunner["Service"]>;
     cloudCliTokenManager?: Partial<CloudCliTokenManager.CloudCliTokenManager["Service"]>;
   };
@@ -543,6 +549,7 @@ const buildAppUnderTest = (options?: {
       WorkspaceContentSearch.layer.pipe(Layer.provide(WorkspacePaths.layer)),
       LspManager.layer.pipe(
         Layer.provide(WorkspacePaths.layer),
+        Layer.provide(WorkspaceWatcher.layer.pipe(Layer.provide(WorkspacePaths.layer))),
         Layer.provide(serverSettingsLayer),
       ),
       ProjectFaviconResolver.layer.pipe(
@@ -862,6 +869,29 @@ const buildAppUnderTest = (options?: {
             install: Effect.die("unused relay-client install"),
             installWithProgress: () => Effect.die("unused relay-client install"),
             ...options?.layers?.relayClient,
+          }),
+        ),
+      ),
+      Layer.provide(
+        Layer.succeed(
+          ClaudeManagedBinary.ClaudeManagedBinary,
+          ClaudeManagedBinary.ClaudeManagedBinary.of({
+            // Mirror the real precedence for explicit paths so tests that
+            // point binaryPath at a fake executable keep spawning it.
+            status: (binaryPath) =>
+              Effect.succeed(
+                binaryPath !== DEFAULT_CLAUDE_BINARY_PATH
+                  ? {
+                      status: "available",
+                      executablePath: binaryPath,
+                      source: "explicit",
+                      version: "0.0.0-test",
+                    }
+                  : { status: "missing", version: "0.0.0-test", binarySizeBytes: 0 },
+              ),
+            install: Effect.die("unused claude binary install"),
+            installWithProgress: () => Effect.die("unused claude binary install"),
+            ...options?.layers?.claudeManagedBinary,
           }),
         ),
       ),
@@ -5759,6 +5789,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             id: ProjectId.make("project-a"),
             title: "Project A",
             workspaceRoot: "/tmp/project-a",
+            additionalRoots: [],
             defaultModelSelection,
             scripts: [],
             createdAt: now,
@@ -5771,6 +5802,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             id: ThreadId.make("thread-1"),
             projectId: ProjectId.make("project-a"),
             title: "Thread A",
+            additionalRoots: [],
             modelSelection: defaultModelSelection,
             interactionMode: "default" as const,
             runtimeMode: "full-access" as const,
@@ -6156,6 +6188,107 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       assert.equal(Option.getOrThrow(first).kind, "snapshot");
       assert.equal(readEventsCalls, 0);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("subscribeThread sends a fresh snapshot instead of replaying a large gap", () =>
+    Effect.gen(function* () {
+      let readEventsCalls = 0;
+      const thread = makeDefaultOrchestrationReadModel().threads[0]!;
+
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            // Head is far ahead of the client's afterSequence (gap > 1000).
+            latestSequence: Effect.succeed(100_000),
+            readEvents: () =>
+              Stream.sync(() => {
+                readEventsCalls += 1;
+                return {} as OrchestrationEvent;
+              }),
+          },
+          projectionSnapshotQuery: {
+            getThreadDetailSnapshot: () =>
+              Effect.succeed(Option.some({ snapshotSequence: 100_000, thread })),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const items = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.subscribeThread]({
+            threadId: defaultThreadId,
+            afterSequence: 5,
+            requestCompletionMarker: true,
+          }).pipe(Stream.take(2), Stream.runCollect),
+        ),
+      );
+
+      const [first, second] = Array.from(items);
+      // Large gap => fresh snapshot, and the unbounded replay is never started.
+      assert.equal(first?.kind, "snapshot");
+      assert.equal(second?.kind, "synchronized");
+      assert.equal(readEventsCalls, 0);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("subscribeThread bounds the catch-up replay to the captured head", () =>
+    Effect.gen(function* () {
+      let replayLimit: number | undefined;
+      const now = "2026-01-01T00:00:01.000Z";
+      const messageEvent = (sequence: number) =>
+        ({
+          sequence,
+          eventId: EventId.make(`event-message-${sequence}`),
+          aggregateKind: "thread",
+          aggregateId: defaultThreadId,
+          occurredAt: now,
+          commandId: null,
+          causationEventId: null,
+          correlationId: null,
+          metadata: {},
+          type: "thread.message-sent",
+          payload: {
+            threadId: defaultThreadId,
+            messageId: MessageId.make(`message-${sequence}`),
+            role: "user",
+            text: "First message",
+            turnId: null,
+            streaming: false,
+            createdAt: now,
+            updatedAt: now,
+          },
+        }) satisfies Extract<OrchestrationEvent, { type: "thread.message-sent" }>;
+
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            latestSequence: Effect.succeed(2),
+            readEvents: (_afterSequence, limit) => {
+              replayLimit = limit;
+              return Stream.fromIterable([messageEvent(1), messageEvent(2)]);
+            },
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const items = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.subscribeThread]({
+            threadId: defaultThreadId,
+            afterSequence: 0,
+            requestCompletionMarker: true,
+          }).pipe(Stream.take(3), Stream.runCollect),
+        ),
+      );
+
+      const collected = Array.from(items);
+      assert.equal(collected[0]?.kind, "event");
+      assert.equal(collected[1]?.kind, "event");
+      assert.deepEqual(collected[2], { kind: "synchronized" });
+      assert.equal(replayLimit, 2);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -6558,6 +6691,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                   projectId: defaultProjectId,
                   title: "Default Project",
                   workspaceRoot: "/tmp/default-project",
+                  additionalRoots: [],
                   defaultModelSelection,
                   scripts: [],
                   createdAt: "2026-04-05T00:00:00.000Z",

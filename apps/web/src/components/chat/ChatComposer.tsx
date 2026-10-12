@@ -20,6 +20,7 @@ import {
 } from "@t3tools/contracts";
 import type { EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
 import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
+import { serializeComposerThreadReference } from "@t3tools/shared/threadReferences";
 import { createModelSelection, normalizeModelSlug } from "@t3tools/shared/model";
 import {
   memo,
@@ -65,7 +66,8 @@ import {
   insertInlineTerminalContextPlaceholder,
   removeInlineTerminalContextPlaceholder,
 } from "../../lib/terminalContext";
-import { useComposerPathSearch } from "../../lib/composerPathSearchState";
+import { useMultiRootComposerPathSearch } from "../../state/queries";
+import type { ThreadRoot } from "../../state/threadRoots";
 import { type ElementContextDraft } from "../../lib/elementContext";
 import { ComposerPendingElementContexts } from "./ComposerPendingElementContexts";
 import { ComposerPendingReviewComments } from "./ComposerPendingReviewComments";
@@ -94,6 +96,8 @@ import {
 import { ContextWindowMeter } from "./ContextWindowMeter";
 import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { basenameOfPath } from "../../pierre-icons";
+import { useProjects, useThreadShells } from "../../state/entities";
+import { formatRelativeTimeLabel } from "../../timestampFormat";
 import { cn, randomUUID } from "~/lib/utils";
 import { Separator } from "../ui/separator";
 
@@ -576,6 +580,8 @@ export interface ChatComposerProps {
   keybindings: ResolvedKeybindingsConfig;
   terminalOpen: boolean;
   gitCwd: string | null;
+  /** Effective workspace roots (primary first); empty when unknown. */
+  threadRoots: ReadonlyArray<ThreadRoot>;
 
   // Refs the parent needs kept in sync
   promptRef: React.RefObject<string>;
@@ -666,6 +672,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     keybindings,
     terminalOpen,
     gitCwd,
+    threadRoots,
     promptRef,
     composerRef,
     composerImagesRef,
@@ -1016,23 +1023,101 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const composerTriggerKind = composerTrigger?.kind ?? null;
   const pathTriggerQuery = composerTrigger?.kind === "path" ? composerTrigger.query : "";
   const isPathTrigger = composerTriggerKind === "path";
-  const workspaceEntries = useComposerPathSearch({
+  // Fall back to the single git cwd when the thread's roots are not known
+  // (e.g. home-route composers without a resolved project).
+  const mentionRoots = useMemo<ReadonlyArray<ThreadRoot>>(
+    () =>
+      threadRoots.length > 0
+        ? threadRoots
+        : gitCwd !== null
+          ? [{ path: gitCwd, label: basenameOfPath(gitCwd), isPrimary: true, source: "primary" }]
+          : [],
+    [gitCwd, threadRoots],
+  );
+  const workspaceEntries = useMultiRootComposerPathSearch({
     environmentId,
-    cwd: isPathTrigger ? gitCwd : null,
+    roots: isPathTrigger ? mentionRoots : [],
     query: isPathTrigger ? pathTriggerQuery : null,
   });
+  const threadShells = useThreadShells();
+  const projects = useProjects();
 
   const composerMenuItems = useMemo<ComposerCommandItem[]>(() => {
     if (!composerTrigger) return [];
+    if (composerTrigger.kind === "thread") {
+      const query = composerTrigger.query.trim().toLowerCase();
+      // Any thread in the environment is referencible; the server resolves
+      // references from the environment-wide projection store regardless of
+      // project. The active thread's project only affects ranking and labels.
+      const activeShell =
+        activeThreadId === null
+          ? undefined
+          : threadShells.find(
+              (shell) => shell.environmentId === environmentId && shell.id === activeThreadId,
+            );
+      const projectTitleById = new Map(
+        projects
+          .filter((project) => project.environmentId === environmentId)
+          .map((project) => [project.id, project.title]),
+      );
+      return threadShells
+        .filter(
+          (shell) =>
+            shell.environmentId === environmentId &&
+            shell.id !== activeThreadId &&
+            shell.archivedAt === null &&
+            (query.length === 0 || shell.title.toLowerCase().includes(query)),
+        )
+        .sort((left, right) => {
+          if (query.length > 0) {
+            const leftStarts = left.title.toLowerCase().startsWith(query) ? 0 : 1;
+            const rightStarts = right.title.toLowerCase().startsWith(query) ? 0 : 1;
+            if (leftStarts !== rightStarts) return leftStarts - rightStarts;
+          }
+          if (activeShell !== undefined) {
+            const leftSameProject = left.projectId === activeShell.projectId ? 0 : 1;
+            const rightSameProject = right.projectId === activeShell.projectId ? 0 : 1;
+            if (leftSameProject !== rightSameProject) return leftSameProject - rightSameProject;
+          }
+          return right.updatedAt.localeCompare(left.updatedAt);
+        })
+        .slice(0, 20)
+        .map((shell) => {
+          const crossProjectTitle =
+            activeShell === undefined || shell.projectId === activeShell.projectId
+              ? undefined
+              : projectTitleById.get(shell.projectId);
+          const relativeTime = formatRelativeTimeLabel(shell.updatedAt);
+          return {
+            id: `thread:${shell.environmentId}:${shell.id}`,
+            type: "thread" as const,
+            threadId: shell.id,
+            title: shell.title,
+            label: shell.title,
+            description: crossProjectTitle
+              ? `${crossProjectTitle} · ${relativeTime}`
+              : relativeTime,
+          };
+        });
+    }
     if (composerTrigger.kind === "path") {
-      return workspaceEntries.entries.map((entry) => ({
-        id: `path:${entry.kind}:${entry.path}`,
-        type: "path",
-        path: entry.path,
-        pathKind: entry.kind,
-        label: basenameOfPath(entry.path),
-        description: entry.path.slice(0, Math.max(0, entry.path.lastIndexOf("/"))),
-      }));
+      const showRootLabels = mentionRoots.length > 1;
+      return workspaceEntries.entries.map(({ entry, root }) => {
+        const parentPath = entry.path.slice(0, Math.max(0, entry.path.lastIndexOf("/")));
+        return {
+          id: `path:${root.isPrimary ? "" : root.path}:${entry.kind}:${entry.path}`,
+          type: "path",
+          path: entry.path,
+          pathKind: entry.kind,
+          rootPath: root.isPrimary ? null : root.path,
+          label: basenameOfPath(entry.path),
+          description: showRootLabels
+            ? parentPath.length > 0
+              ? `${root.label} · ${parentPath}`
+              : root.label
+            : parentPath,
+        };
+      });
     }
     if (composerTrigger.kind === "slash-command") {
       const builtInSlashCommandItems = [
@@ -1091,7 +1176,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       );
     }
     return [];
-  }, [composerTrigger, selectedProvider, selectedProviderStatus, workspaceEntries.entries]);
+  }, [
+    activeThreadId,
+    composerTrigger,
+    environmentId,
+    mentionRoots.length,
+    projects,
+    selectedProvider,
+    selectedProviderStatus,
+    threadShells,
+    workspaceEntries.entries,
+  ]);
 
   const composerMenuOpen = Boolean(composerTrigger);
   const composerMenuSearchKey = composerTrigger
@@ -1160,6 +1255,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const composerMenuEmptyState = useMemo(() => {
     if (composerTriggerKind === "skill") {
       return "No skills found. Try / to browse provider commands.";
+    }
+    if (composerTriggerKind === "thread") {
+      return "No matching chats.";
     }
     return composerTriggerKind === "path"
       ? "No matching files or folders."
@@ -1648,7 +1746,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       const { snapshot, trigger } = resolveActiveComposerTrigger();
       if (!trigger) return;
       if (item.type === "path") {
-        const replacement = `${serializeComposerFileLink(item.path)} `;
+        // Primary-root entries keep the legacy relative form; entries from
+        // attached roots serialize as absolute paths so every consumer
+        // (agent tools, link resolution) finds them without root context.
+        const mentionPath = item.rootPath === null ? item.path : `${item.rootPath}/${item.path}`;
+        const replacement = `${serializeComposerFileLink(mentionPath)} `;
         const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
           snapshot.value,
           trigger.rangeEnd,
@@ -1706,6 +1808,27 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       }
       if (item.type === "skill") {
         const replacement = `$${item.skill.name} `;
+        const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
+          snapshot.value,
+          trigger.rangeEnd,
+          replacement,
+        );
+        const applied = applyPromptReplacement(
+          trigger.rangeStart,
+          replacementRangeEnd,
+          replacement,
+          { expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd) },
+        );
+        if (applied) {
+          setComposerHighlightedItemId(null);
+        }
+        return;
+      }
+      if (item.type === "thread") {
+        const replacement = `${serializeComposerThreadReference({
+          threadId: item.threadId,
+          title: item.title,
+        })} `;
         const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
           snapshot.value,
           trigger.rangeEnd,

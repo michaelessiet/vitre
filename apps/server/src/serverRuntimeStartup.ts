@@ -68,6 +68,12 @@ export class ServerRuntimeStartup extends Context.Service<
   }
 >()("t3/serverRuntimeStartup") {}
 
+/** Publish HTTP readiness only after the request handlers have been installed. */
+export const markHttpReadyAfterServing = <A, E, R>(serving: Layer.Layer<A, E, R>) =>
+  serving.pipe(
+    Layer.tap(() => Effect.flatMap(ServerRuntimeStartup, (startup) => startup.markHttpListening)),
+  );
+
 interface QueuedCommand {
   readonly run: Effect.Effect<void, never>;
 }
@@ -130,6 +136,16 @@ export const makeCommandGate = Effect.gen(function* () {
         return yield* Deferred.await(result);
       }),
   } satisfies CommandGate;
+});
+
+/** Optional maintenance owns a scoped fiber and cannot delay command readiness. */
+export const launchOptionalStartup = Effect.fn("launchOptionalStartup")(function* <E, R>(
+  work: Effect.Effect<void, E, R>,
+) {
+  yield* work.pipe(
+    Effect.catchCause((cause) => Effect.logWarning("optional startup failed", { cause })),
+    Effect.forkScoped,
+  );
 });
 
 export const recordStartupHeartbeat = Effect.gen(function* () {
@@ -347,12 +363,6 @@ export const make = Effect.gen(function* () {
       Effect.gen(function* () {
         yield* orchestrationReactor.start().pipe(Scope.provide(reactorScope));
         yield* providerSessionReaper.start().pipe(Scope.provide(reactorScope));
-        // Runs even with the feature off: the store may still hold entries
-        // from before it was switched off, and those should still expire.
-        yield* graphStoreSweep.start().pipe(Scope.provide(reactorScope));
-        // Also unconditional, but for the opposite reason: its first act is to
-        // read the setting, and with auto-rebuild off it subscribes to nothing.
-        yield* graphAutoRebuild.start().pipe(Scope.provide(reactorScope));
       }),
     );
 
@@ -442,6 +452,16 @@ export const make = Effect.gen(function* () {
       yield* commandGate.signalCommandReady;
       yield* Effect.logDebug("startup phase: waiting for http listener");
       yield* runStartupPhase("http.wait", Deferred.await(httpListening));
+      if (process.env.VITRE_READY_SIGNAL === "1") {
+        process.stdout.write("VITRE_BACKEND_READY_V1\n");
+      }
+      yield* launchOptionalStartup(
+        Effect.gen(function* () {
+          // Cleanup still runs when indexing is disabled, after core readiness.
+          yield* graphStoreSweep.start().pipe(Scope.provide(reactorScope));
+          yield* graphAutoRebuild.start().pipe(Scope.provide(reactorScope));
+        }),
+      );
       yield* Effect.logDebug("startup phase: publishing ready event");
       yield* runStartupPhase(
         "ready.publish",

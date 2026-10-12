@@ -4,6 +4,8 @@ import {
   EventId,
   type ModelSelection,
   type OrchestrationEvent,
+  type OrchestrationThread,
+  PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   ProviderDriverKind,
   type ProjectId,
   type OrchestrationSession,
@@ -13,6 +15,7 @@ import {
   type TurnId,
 } from "@t3tools/contracts";
 import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@t3tools/shared/git";
+import { collectThreadReferences } from "@t3tools/shared/threadReferences";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
@@ -25,7 +28,10 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
-import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
+import {
+  resolveThreadWorkspaceCwd,
+  resolveThreadWorkspaceRoots,
+} from "../../checkpointing/Utils.ts";
 import { increment, orchestrationEventsProcessedTotal } from "../../observability/Metrics.ts";
 import { ProviderAdapterRequestError } from "../../provider/Errors.ts";
 import type { ProviderServiceError } from "../../provider/Errors.ts";
@@ -62,6 +68,47 @@ function toNonEmptyProviderInput(value: string | undefined): string | undefined 
   return normalized && normalized.length > 0 ? normalized : undefined;
 }
 
+// `#thread` references inlined into a turn. Per-reference size comes from the
+// `threadReferenceMaxChars` server setting; these bound everything else so the
+// combined provider input stays under PROVIDER_SEND_TURN_MAX_INPUT_CHARS.
+const MAX_THREAD_REFERENCES_PER_TURN = 4;
+const THREAD_REFERENCE_INPUT_SLACK_CHARS = 2_000;
+const MIN_USEFUL_THREAD_REFERENCE_CHARS = 200;
+const THREAD_REFERENCE_TRUNCATION_NOTE =
+  "[Earlier messages omitted: this referenced conversation exceeds the configured size limit.]\n";
+const THREAD_REFERENCE_PREAMBLE =
+  "The user referenced other conversations with #mentions. Read-only snapshots of those conversations follow; treat them as background context.";
+
+function escapeThreadReferenceAttribute(value: string): string {
+  return value.replaceAll("&", "&amp;").replaceAll('"', "&quot;");
+}
+
+function formatThreadReferenceTranscript(thread: OrchestrationThread, maxChars: number): string {
+  const parts: string[] = [];
+  for (const message of thread.messages) {
+    if (message.streaming) continue;
+    const text = message.text.trim();
+    if (text.length === 0) continue;
+    const label =
+      message.role === "user" ? "User" : message.role === "assistant" ? "Assistant" : "System";
+    parts.push(`${label}:\n${text}`);
+  }
+  let transcript = parts.join("\n\n");
+  if (transcript.length > maxChars) {
+    const keepChars = Math.max(0, maxChars - THREAD_REFERENCE_TRUNCATION_NOTE.length);
+    // Keep the transcript tail: the most recent exchange is what a reference
+    // usually points at.
+    transcript = `${THREAD_REFERENCE_TRUNCATION_NOTE}…${transcript.slice(transcript.length - keepChars)}`;
+  }
+  return transcript;
+}
+
+function buildThreadReferenceSection(thread: OrchestrationThread, transcript: string): string {
+  const id = escapeThreadReferenceAttribute(thread.id);
+  const title = escapeThreadReferenceAttribute(thread.title);
+  return `<referenced-conversation id="${id}" title="${title}">\n${transcript}\n</referenced-conversation>`;
+}
+
 function mapProviderSessionStatusToOrchestrationStatus(
   status: "connecting" | "ready" | "running" | "error" | "closed",
 ): OrchestrationSession["status"] {
@@ -82,6 +129,20 @@ function mapProviderSessionStatusToOrchestrationStatus(
 
 const turnStartKeyForEvent = (event: ProviderIntentEvent): string =>
   event.commandId !== null ? `command:${event.commandId}` : `event:${event.eventId}`;
+
+function areSameStringSets(left: ReadonlyArray<string>, right: ReadonlyArray<string>): boolean {
+  const leftSet = new Set(left);
+  const rightSet = new Set(right);
+  if (leftSet.size !== rightSet.size) {
+    return false;
+  }
+  for (const value of leftSet) {
+    if (!rightSet.has(value)) {
+      return false;
+    }
+  }
+  return true;
+}
 
 const HANDLED_TURN_START_KEY_MAX = 10_000;
 const HANDLED_TURN_START_KEY_TTL = Duration.minutes(30);
@@ -488,10 +549,12 @@ const make = Effect.gen(function* () {
       }
     }
     const project = yield* resolveProject(thread.projectId);
-    const effectiveCwd = resolveThreadWorkspaceCwd({
+    const workspaceRoots = resolveThreadWorkspaceRoots({
       thread,
       projects: project ? [project] : [],
     });
+    const effectiveCwd = workspaceRoots.primary;
+    const additionalDirectories = workspaceRoots.additional;
 
     const startProviderSession = (input?: {
       readonly resumeCursor?: unknown;
@@ -502,6 +565,7 @@ const make = Effect.gen(function* () {
         ...(preferredProvider ? { provider: preferredProvider } : {}),
         providerInstanceId: desiredInstanceId,
         ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+        ...(additionalDirectories.length > 0 ? { additionalDirectories } : {}),
         modelSelection: desiredModelSelection,
         ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
         runtimeMode: desiredRuntimeMode,
@@ -541,6 +605,13 @@ const make = Effect.gen(function* () {
     if (existingSessionThreadId) {
       const runtimeModeChanged = thread.runtimeMode !== thread.session?.runtimeMode;
       const cwdChanged = effectiveCwd !== activeSession?.cwd;
+      // Sessions echo the reactor-computed additionalDirectories verbatim
+      // (see ProviderService.startSession), so a set comparison here never
+      // oscillates against adapter-side path normalization.
+      const rootsChanged = !areSameStringSets(
+        additionalDirectories,
+        activeSession?.additionalDirectories ?? [],
+      );
       const sessionModelSwitch = (yield* providerService.getCapabilities(desiredInstanceId))
         .sessionModelSwitch;
       const modelChanged =
@@ -559,6 +630,7 @@ const make = Effect.gen(function* () {
       if (
         !runtimeModeChanged &&
         !cwdChanged &&
+        !rootsChanged &&
         !instanceChanged &&
         !shouldRestartForModelChange &&
         !shouldRestartForModelSelectionChange
@@ -582,6 +654,9 @@ const make = Effect.gen(function* () {
         previousCwd: activeSession?.cwd,
         desiredCwd: effectiveCwd,
         cwdChanged,
+        previousAdditionalDirectories: activeSession?.additionalDirectories,
+        desiredAdditionalDirectories: additionalDirectories,
+        rootsChanged,
         modelChanged,
         instanceChanged,
         shouldRestartForModelChange,
@@ -608,6 +683,119 @@ const make = Effect.gen(function* () {
     return startedSession.threadId;
   });
 
+  /**
+   * Resolve `#thread` references embedded in the outgoing message text and
+   * append their transcripts to the provider input. Provider-agnostic by
+   * design: the extra context rides along inside the plain-text input, so
+   * every adapter picks it up without changes. Resolution failures degrade to
+   * an inline unavailability note rather than failing the turn.
+   */
+  const appendThreadReferenceSections = Effect.fnUntraced(function* (input: {
+    readonly threadId: ThreadId;
+    readonly messageText: string;
+  }) {
+    const references = collectThreadReferences(input.messageText);
+    if (references.length === 0) {
+      return input.messageText;
+    }
+
+    const referencedThreadIds: ThreadId[] = [];
+    for (const reference of references) {
+      const referencedThreadId = ThreadId.make(reference.threadId);
+      if (referencedThreadId === input.threadId) continue;
+      if (referencedThreadIds.includes(referencedThreadId)) continue;
+      referencedThreadIds.push(referencedThreadId);
+    }
+    const limitedThreadIds = referencedThreadIds.slice(0, MAX_THREAD_REFERENCES_PER_TURN);
+    if (limitedThreadIds.length === 0) {
+      return input.messageText;
+    }
+    if (limitedThreadIds.length < referencedThreadIds.length) {
+      yield* Effect.logWarning("provider command reactor dropped excess thread references", {
+        threadId: input.threadId,
+        referenced: referencedThreadIds.length,
+        limit: MAX_THREAD_REFERENCES_PER_TURN,
+      });
+    }
+
+    const { threadReferenceMaxChars } = yield* serverSettingsService.getSettings;
+    const availableChars =
+      PROVIDER_SEND_TURN_MAX_INPUT_CHARS -
+      input.messageText.length -
+      THREAD_REFERENCE_INPUT_SLACK_CHARS;
+    const perReferenceChars = Math.min(
+      threadReferenceMaxChars,
+      Math.floor(availableChars / limitedThreadIds.length),
+    );
+    if (perReferenceChars < MIN_USEFUL_THREAD_REFERENCE_CHARS) {
+      yield* Effect.logWarning(
+        "provider command reactor skipped thread references: no input budget left",
+        { threadId: input.threadId, availableChars },
+      );
+      return input.messageText;
+    }
+
+    const sections: string[] = [];
+    for (const referencedThreadId of limitedThreadIds) {
+      const detail = yield* projectionSnapshotQuery.getThreadDetailById(referencedThreadId).pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("provider command reactor failed to resolve thread reference", {
+            threadId: input.threadId,
+            referencedThreadId,
+            cause: String(cause),
+          }).pipe(Effect.as(Option.none())),
+        ),
+      );
+      if (Option.isNone(detail)) {
+        sections.push(
+          `<referenced-conversation id="${escapeThreadReferenceAttribute(referencedThreadId)}" unavailable="true">\nThis referenced conversation could not be loaded.\n</referenced-conversation>`,
+        );
+        continue;
+      }
+      const transcript = formatThreadReferenceTranscript(detail.value, perReferenceChars);
+      if (transcript.length === 0) continue;
+      sections.push(buildThreadReferenceSection(detail.value, transcript));
+    }
+    if (sections.length === 0) {
+      return input.messageText;
+    }
+    return [input.messageText, THREAD_REFERENCE_PREAMBLE, ...sections].join("\n\n");
+  });
+
+  /**
+   * Providers without native multi-root support still learn about attached
+   * workspace roots through a plain-text section appended to the outgoing
+   * turn input. Best-effort: resolution failures degrade to the original
+   * message rather than failing the turn.
+   */
+  const appendAttachedWorkspacesSection = Effect.fnUntraced(function* (input: {
+    readonly thread: OrchestrationThread;
+    readonly messageText: string;
+  }) {
+    const project = yield* resolveProject(input.thread.projectId).pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning(
+          "provider command reactor failed to resolve project for attached workspaces note",
+          { threadId: input.thread.id, cause: String(cause) },
+        ).pipe(Effect.as(undefined)),
+      ),
+    );
+    const roots = resolveThreadWorkspaceRoots({
+      thread: input.thread,
+      projects: project ? [project] : [],
+    });
+    if (roots.additional.length === 0) {
+      return input.messageText;
+    }
+    return [
+      input.messageText,
+      [
+        "Additional repositories attached to this conversation (read and edit files there using absolute paths):",
+        ...roots.additional.map((path) => `- ${path}`),
+      ].join("\n"),
+    ].join("\n\n");
+  });
+
   const buildSendTurnRequestForThread = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly messageText: string;
@@ -630,23 +818,38 @@ const make = Effect.gen(function* () {
       threadModelSelections.set(input.threadId, input.modelSelection);
     }
     const normalizedInput = toNonEmptyProviderInput(input.messageText);
+    const inputWithThreadReferences =
+      normalizedInput === undefined
+        ? undefined
+        : yield* appendThreadReferenceSections({
+            threadId: input.threadId,
+            messageText: normalizedInput,
+          });
     const normalizedAttachments = input.attachments ?? [];
     const activeSession = yield* providerService
       .listSessions()
       .pipe(
         Effect.map((sessions) => sessions.find((session) => session.threadId === input.threadId)),
       );
-    const sessionModelSwitch =
+    const sessionCapabilities =
       activeSession === undefined
-        ? "in-session"
+        ? undefined
         : activeSession.providerInstanceId === undefined
           ? yield* new ProviderAdapterRequestError({
               provider: providerErrorLabel(activeSession.provider),
               method: "thread.turn.start",
               detail: `Active provider session '${activeSession.threadId}' is missing a provider instance id.`,
             })
-          : (yield* providerService.getCapabilities(activeSession.providerInstanceId))
-              .sessionModelSwitch;
+          : yield* providerService.getCapabilities(activeSession.providerInstanceId);
+    const sessionModelSwitch = sessionCapabilities?.sessionModelSwitch ?? "in-session";
+    const inputWithWorkspaceSections =
+      inputWithThreadReferences !== undefined &&
+      sessionCapabilities?.additionalDirectories === "unsupported"
+        ? yield* appendAttachedWorkspacesSection({
+            thread,
+            messageText: inputWithThreadReferences,
+          })
+        : inputWithThreadReferences;
     const requestedModelSelection =
       input.modelSelection ?? threadModelSelections.get(input.threadId) ?? thread.modelSelection;
     const modelForTurn =
@@ -661,7 +864,7 @@ const make = Effect.gen(function* () {
 
     return {
       threadId: input.threadId,
-      ...(normalizedInput ? { input: normalizedInput } : {}),
+      ...(inputWithWorkspaceSections ? { input: inputWithWorkspaceSections } : {}),
       ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
       ...(modelForTurn !== undefined ? { modelSelection: modelForTurn } : {}),
       ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
