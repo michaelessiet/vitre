@@ -10,9 +10,32 @@ import {
   buildClaudeCapabilitiesProbeQueryOptions,
   CLAUDE_CAPABILITIES_PROBE_SETTING_SOURCES,
   probeClaudeCapabilities,
+  parseClaudeInitializationModels,
 } from "./ClaudeProvider.ts";
 
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
+
+it("deduplicates resolved aliases while retaining future and older CLI model identifiers", () => {
+  const models = parseClaudeInitializationModels([
+    {
+      value: "default",
+      resolvedModel: "claude-opus-5[1m]",
+      displayName: "Default",
+      description: "",
+      supportsFastMode: true,
+    },
+    { value: "opus[1m]", resolvedModel: "claude-opus-5[1m]", displayName: "Opus", description: "" },
+    { value: "future-model", displayName: "Future Model", description: "" },
+    { value: " ", displayName: "Empty", description: "" },
+  ]);
+  assert.deepEqual(
+    models.map(({ slug, name }) => ({ slug, name })),
+    [
+      { slug: "claude-opus-5[1m]", name: "Claude Opus 5 (1M)" },
+      { slug: "future-model", name: "Future Model" },
+    ],
+  );
+});
 
 it("isolates Claude capability probes without dropping workspace setting sources", () => {
   const abortController = new AbortController();
@@ -83,7 +106,7 @@ it.layer(NodeServices.layer)("Claude capability probe SDK boundary", (it) => {
           "        agents: [],",
           '        output_style: "default",',
           '        available_output_styles: ["default"],',
-          "        models: [],",
+          '        models: [{ value: "fable[1m]", resolvedModel: "claude-fable-5-1", displayName: "Fable", description: "Fable 5.1", supportedEffortLevels: ["high", "xhigh"] }],',
           '        account: { email: "dev@example.com", subscriptionType: "pro", tokenSource: "oauth" },',
           "      },",
           "    },",
@@ -106,6 +129,15 @@ it.layer(NodeServices.layer)("Claude capability probe SDK boundary", (it) => {
       );
 
       assert.deepEqual(capabilities, {
+        models: parseClaudeInitializationModels([
+          {
+            value: "fable[1m]",
+            resolvedModel: "claude-fable-5-1",
+            displayName: "Fable",
+            description: "Fable 5.1",
+            supportedEffortLevels: ["high", "xhigh"],
+          },
+        ]),
         email: "dev@example.com",
         subscriptionType: "pro",
         tokenSource: "oauth",
