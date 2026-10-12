@@ -80,7 +80,11 @@ const requestDesktopShutdownAndWait = Effect.fn("desktop.lifecycle.requestShutdo
   > {
     const shutdown = yield* DesktopShutdown.DesktopShutdown;
     const desktopWindow = yield* DesktopWindow.DesktopWindow;
+    // Persist bounds while the windows are still on screen, then hide them so
+    // the app looks gone immediately. Everything after this point is invisible
+    // teardown, bounded by QUIT_BACKEND_STOP_GRACE.
     yield* desktopWindow.flushMainWindowBounds;
+    yield* desktopWindow.hideAllWindows;
     yield* shutdown.request;
     yield* shutdown.awaitComplete;
   },

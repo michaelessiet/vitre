@@ -1,4 +1,5 @@
 import * as Cause from "effect/Cause";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -25,6 +26,14 @@ import * as DesktopShellEnvironment from "../shell/DesktopShellEnvironment.ts";
 import * as DesktopState from "./DesktopState.ts";
 import * as DesktopUpdates from "../updates/DesktopUpdates.ts";
 import * as DesktopWslBackend from "../wsl/DesktopWslBackend.ts";
+
+/**
+ * Ceiling on how long quitting waits for a backend to exit after SIGTERM before
+ * hard-killing its process group. Without a deadline here, quit is hostage to
+ * the slowest finalizer in the server (and to any language server or agent
+ * sidecar wedged inside it), which is how quit came to take ~3 seconds.
+ */
+const QUIT_BACKEND_STOP_GRACE = Duration.millis(600);
 
 const DEFAULT_DESKTOP_BACKEND_PORT = 3773;
 const MAX_TCP_PORT = 65_535;
@@ -268,9 +277,11 @@ const scopedProgram = Effect.scoped(
         // finalizer means it gets hard-killed by the OS instead of
         // receiving SIGTERM + grace. Stops run concurrently.
         const instances = yield* pool.list;
-        yield* Effect.forEach(instances, (instance) => instance.stop(), {
-          concurrency: "unbounded",
-        });
+        yield* Effect.forEach(
+          instances,
+          (instance) => instance.stop({ timeout: QUIT_BACKEND_STOP_GRACE }),
+          { concurrency: "unbounded" },
+        );
       }).pipe(Effect.ensuring(shutdown.markComplete)),
     );
 

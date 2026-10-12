@@ -79,6 +79,12 @@ export class DesktopWindow extends Context.Service<
     // produce a stranded window pointing at nothing.
     readonly handleBackendNotReady: Effect.Effect<void>;
     readonly flushMainWindowBounds: Effect.Effect<void>;
+    /**
+     * Hide every window without destroying it. Used on `before-quit` so the app
+     * disappears immediately instead of sitting on screen for the whole backend
+     * teardown.
+     */
+    readonly hideAllWindows: Effect.Effect<void>;
     readonly dispatchMenuAction: (action: string) => Effect.Effect<void, DesktopWindowError>;
     readonly syncAppearance: Effect.Effect<void>;
   }
@@ -765,6 +771,7 @@ export const make = Effect.gen(function* () {
     flushMainWindowBounds: Effect.suspend(() => flushMainWindowBounds).pipe(
       Effect.withSpan("desktop.window.flushMainWindowBounds"),
     ),
+    hideAllWindows: electronWindow.hideAll.pipe(Effect.withSpan("desktop.window.hideAllWindows")),
     dispatchMenuAction: Effect.fn("desktop.window.dispatchMenuAction")(function* (action) {
       yield* Effect.annotateCurrentSpan({ action });
       const existingWindow = yield* focusedMainWindow;

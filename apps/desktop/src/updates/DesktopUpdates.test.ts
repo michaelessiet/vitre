@@ -126,6 +126,7 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
         sentStates.push(state as DesktopUpdateState);
       }),
     destroyAll: Effect.void,
+    hideAll: Effect.void,
     syncAllAppearance: () => Effect.void,
   } satisfies ElectronWindow.ElectronWindow["Service"]);
 

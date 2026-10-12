@@ -37,6 +37,7 @@ const ElectronWindowOperation = Schema.Literals([
   "reveal-window",
   "send-window-message",
   "destroy-window",
+  "hide-window",
 ]);
 
 export class ElectronWindowCreateError extends Schema.TaggedErrorClass<ElectronWindowCreateError>()(
@@ -89,6 +90,8 @@ export class ElectronWindow extends Context.Service<
     readonly reveal: (window: Electron.BrowserWindow) => Effect.Effect<void>;
     readonly sendAll: (channel: string, ...args: readonly unknown[]) => Effect.Effect<void>;
     readonly destroyAll: Effect.Effect<void>;
+    /** Hide every live window without destroying it, for an instant-looking quit. */
+    readonly hideAll: Effect.Effect<void>;
     readonly syncAllAppearance: <E, R>(
       sync: (window: Electron.BrowserWindow) => Effect.Effect<void, E, R>,
     ) => Effect.Effect<void, E, R>;
@@ -269,6 +272,27 @@ export const make = Effect.gen(function* () {
               cause,
             }),
         }).pipe(Effect.orDie);
+      }
+    }),
+    hideAll: Effect.gen(function* () {
+      for (const window of yield* listWindows) {
+        if (yield* isWindowDestroyed(window)) {
+          continue;
+        }
+        // Best-effort and never fatal: this only exists so quitting looks
+        // instant, so a window that refuses to hide must not block the quit it
+        // is decorating.
+        yield* Effect.try({
+          try: () => window.hide(),
+          catch: (cause) =>
+            new ElectronWindowOperationError({
+              operation: "hide-window",
+              platform,
+              windowId: window.id,
+              channel: null,
+              cause,
+            }),
+        }).pipe(Effect.ignore);
       }
     }),
     syncAllAppearance: Effect.fn("desktop.electron.window.syncAllAppearance")(function* <E, R>(

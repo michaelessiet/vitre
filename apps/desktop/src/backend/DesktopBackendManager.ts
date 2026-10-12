@@ -264,6 +264,36 @@ const withActiveRun =
 const calculateRestartDelay = (attempt: number): Duration.Duration =>
   Duration.min(Duration.times(INITIAL_RESTART_DELAY, 2 ** attempt), MAX_RESTART_DELAY);
 
+const { logWarning: logCloseRunWarning } =
+  DesktopObservability.makeComponentLogger("desktop-backend-close");
+
+/**
+ * Hard-stop the backend's process group.
+ *
+ * The child is spawned detached, so it leads its own process group and a
+ * negative-pid signal reaches the server plus every descendant it did not
+ * itself detach (language servers, ptys). Best-effort: the group is already
+ * gone in the common case.
+ */
+const forceKillRunGroup = (run: ActiveBackendRun): Effect.Effect<void> =>
+  Option.match(run.pid, {
+    onNone: () => Effect.void,
+    onSome: (pid) =>
+      logCloseRunWarning("backend did not exit within the shutdown grace; sending SIGKILL", {
+        pid,
+      }).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            try {
+              process.kill(-pid, "SIGKILL");
+            } catch {
+              // Already reaped between the deadline firing and this signal.
+            }
+          }),
+        ),
+      ),
+  });
+
 const closeRun = (
   run: ActiveBackendRun,
   options?: { readonly timeout?: Duration.Duration },
@@ -273,10 +303,25 @@ const closeRun = (
     onSome: (fiber) => Fiber.await(fiber).pipe(Effect.asVoid),
   });
   const close = Scope.close(run.scope, Exit.void).pipe(Effect.andThen(waitForFiber));
+  const timeout = options?.timeout;
+  if (timeout === undefined) {
+    return close.pipe(Effect.ignore);
+  }
 
-  return (
-    options?.timeout ? close.pipe(Effect.timeoutOption(options.timeout), Effect.asVoid) : close
-  ).pipe(Effect.ignore);
+  // Deliberately not `Effect.timeoutOption(close)`. The spawner's release runs
+  // SIGTERM and then an unbounded `Deferred.await(exitSignal)` inside a
+  // finalizer, which is uninterruptible — racing a timer against it would still
+  // block until the child exited on its own. Instead, arm a deadline that
+  // SIGKILLs the process group, which makes the exit the release is waiting for
+  // actually happen. Disarmed as soon as the child exits on time.
+  return Effect.gen(function* () {
+    const deadline = yield* Effect.sleep(timeout).pipe(
+      Effect.andThen(forceKillRunGroup(run)),
+      Effect.forkChild({ startImmediately: true }),
+    );
+    yield* close;
+    yield* Fiber.interrupt(deadline);
+  }).pipe(Effect.ignore);
 };
 
 const waitForHttpReady = (

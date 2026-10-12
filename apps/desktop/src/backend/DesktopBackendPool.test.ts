@@ -90,6 +90,7 @@ function makePoolLayer(
           handleBackendReady: () => Effect.void,
           handleBackendNotReady: Effect.void,
           flushMainWindowBounds: Effect.void,
+          hideAllWindows: Effect.void,
           dispatchMenuAction: () => Effect.die("unexpected menu action"),
           syncAppearance: Effect.void,
         } satisfies DesktopWindow.DesktopWindow["Service"]),

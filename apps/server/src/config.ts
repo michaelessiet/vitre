@@ -44,6 +44,13 @@ export interface ServerDerivedPaths {
   readonly providerEventLogPath: string;
   readonly terminalLogsDir: string;
   readonly anonymousIdPath: string;
+  /**
+   * Telemetry events that were still buffered at shutdown. Quitting must not
+   * block on a cold TLS handshake to PostHog, so the shutdown path spills the
+   * buffer here and the next boot picks it up instead of flushing over the
+   * network.
+   */
+  readonly pendingTelemetryPath: string;
   readonly environmentIdPath: string;
   readonly serverRuntimeStatePath: string;
   readonly secretsDir: string;
@@ -129,6 +136,7 @@ export const deriveServerPaths = Effect.fn(function* (
     providerEventLogPath: join(providerLogsDir, "events.log"),
     terminalLogsDir: join(logsDir, "terminals"),
     anonymousIdPath: join(stateDir, "anonymous-id"),
+    pendingTelemetryPath: join(stateDir, "pending-telemetry.json"),
     environmentIdPath: join(stateDir, "environment-id"),
     serverRuntimeStatePath: join(stateDir, "server-runtime.json"),
     secretsDir: join(stateDir, "secrets"),
