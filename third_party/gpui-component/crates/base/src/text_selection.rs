@@ -827,6 +827,8 @@ struct WindowSelectionState {
     anchor: Option<SelectionEndpoint>,
     cursor: Option<SelectionEndpoint>,
     pending_extension_anchor: Option<SelectionEndpoint>,
+    /// Original word/line endpoints stay fixed while a drag changes direction.
+    multi_click_anchor: Option<(SelectionEndpoint, SelectionEndpoint, usize)>,
     is_selecting: bool,
     did_hit_text: bool,
     frame_generation: u64,
@@ -1020,6 +1022,7 @@ impl WindowSelectionState {
     /// Ends the current gesture and keeps its selection visible.
     pub fn end(&mut self, cx: &mut App) {
         self.pending_extension_anchor = None;
+        self.multi_click_anchor = None;
         if !self.is_selecting {
             return;
         }
@@ -1042,6 +1045,7 @@ impl WindowSelectionState {
         self.stop_anchor_auto_scroll(cx);
         self.anchor = None;
         self.cursor = None;
+        self.multi_click_anchor = None;
         self.pending_extension_anchor = None;
         self.is_selecting = false;
         self.did_hit_text = false;
@@ -1108,6 +1112,7 @@ impl WindowSelectionState {
         self.stop_anchor_auto_scroll(cx);
         self.anchor = None;
         self.cursor = None;
+        self.multi_click_anchor = None;
         self.pending_extension_anchor = None;
         self.is_selecting = false;
         self.did_hit_text = false;
@@ -1182,8 +1187,9 @@ impl WindowSelectionState {
         };
         self.anchor = Some(to_endpoint(anchor));
         self.cursor = Some(to_endpoint(cursor));
+        self.multi_click_anchor = Some((to_endpoint(anchor), to_endpoint(cursor), click_count));
         self.did_hit_text = true;
-        self.is_selecting = false;
+        self.is_selecting = true;
         participant.update(cx, |state, cx| state.focus(window, cx));
         self.publish_snapshots(cx);
     }
@@ -1246,8 +1252,28 @@ impl WindowSelectionState {
         if !self.is_selecting {
             return;
         }
-        let endpoint = self.endpoint(position, window, cx);
+        let mut endpoint = self.endpoint(position, window, cx);
         self.did_hit_text |= endpoint.inside_text;
+        if let Some((start, end, clicks)) = self.multi_click_anchor.clone()
+            && let Some(participant) = endpoint.participant.as_ref().and_then(|p| p.upgrade())
+            && let Some((word_start, word_end)) =
+                points_for_multi_click(&participant.read(cx).runs, position, clicks)
+            && let Some(origin) = start.resolve(&self.participants)
+        {
+            let backwards =
+                word_start.y < origin.y || (word_start.y == origin.y && word_start.x < origin.x);
+            let registration = &self.participants[&participant.entity_id()].registration;
+            endpoint.point = if backwards { word_start } else { word_end }
+                - registration.bounds.origin
+                - registration.scroll_offset;
+            // Resolve the snapped position on the next content-key pass.
+            endpoint.content_key_resolver = participant
+                .read(cx)
+                .content_key_resolver
+                .clone()
+                .map(|resolver| (resolver, endpoint.point));
+            self.anchor = Some(if backwards { end } else { start });
+        }
         self.cursor = Some(endpoint);
         self.update_anchor_auto_scroll(position, cx);
         self.publish_snapshots(cx);
@@ -3361,6 +3387,59 @@ mod tests {
         );
         cx.update(|window, cx| assert!(TextSelection::has_selection(window, cx)));
         assert_eq!(clear_count.get(), 3);
+    }
+
+    #[gpui::test]
+    fn double_click_drag_extends_by_whole_words_and_reverses(cx: &mut TestAppContext) {
+        let (text, layout) = laid_out_runs(&["alpha beta gamma"], cx).pop().unwrap();
+        let (view, cx) = cx.add_window_view(|_, cx| DoubleSelectionElementView {
+            selection: TextSelectionHandle::new("", cx),
+        });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            view.read(cx)
+                .selection
+                .clone()
+                .update_runs(&[text_run(0, text.clone(), layout.clone())], cx);
+        });
+        cx.simulate_event(MouseDownEvent {
+            position: layout.position_for_index(7).unwrap(),
+            modifiers: Default::default(),
+            button: MouseButton::Left,
+            click_count: 2,
+            first_mouse: false,
+        });
+        for (index, expected) in [(13, "beta gamma"), (2, "alpha beta"), (7, "beta")] {
+            cx.simulate_mouse_move(
+                layout.position_for_index(index).unwrap(),
+                Some(MouseButton::Left),
+                Default::default(),
+            );
+            cx.update(|window, cx| {
+                view.read(cx)
+                    .selection
+                    .clone()
+                    .update_runs(&[text_run(0, text.clone(), layout.clone())], cx);
+                assert_eq!(TextSelection::selected_text(window, cx), expected);
+            });
+        }
+        cx.simulate_mouse_up(
+            layout.position_for_index(7).unwrap(),
+            MouseButton::Left,
+            Default::default(),
+        );
+        cx.simulate_mouse_move(
+            layout.position_for_index(13).unwrap(),
+            None,
+            Default::default(),
+        );
+        cx.update(|window, cx| {
+            view.read(cx)
+                .selection
+                .clone()
+                .update_runs(&[text_run(0, text.clone(), layout.clone())], cx);
+            assert_eq!(TextSelection::selected_text(window, cx), "beta");
+        });
     }
 
     #[gpui::test]

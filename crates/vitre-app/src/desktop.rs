@@ -28,6 +28,35 @@ pub fn init(cx: &mut App) {
         gpui::KeyBinding::new(&crate::modified("="), ZoomIn, Some("!Preview")),
         gpui::KeyBinding::new(&crate::modified("-"), ZoomOut, Some("!Preview")),
         gpui::KeyBinding::new(&crate::modified("0"), ResetZoom, Some("!Preview")),
+        // Register these before constructing the native menu so AppKit owns
+        // the key equivalents even when an embedded WKWebView is first responder.
+        gpui::KeyBinding::new(
+            &crate::modified("shift-["),
+            crate::chat::RightPanelPreviousSurface,
+            None,
+        ),
+        gpui::KeyBinding::new(
+            &crate::modified("shift-]"),
+            crate::chat::RightPanelNextSurface,
+            None,
+        ),
+    ]);
+    let mut view_items = vec![
+        MenuItem::action("Command Palette", crate::chat::CommandPaletteToggle),
+        MenuItem::action("Toggle Sidebar", crate::chat::SidebarToggle),
+    ];
+    if crate::platform_capabilities::BROWSER {
+        view_items.push(MenuItem::action(
+            "Toggle Browser",
+            crate::chat::PreviewToggle,
+        ));
+    }
+    view_items.extend([
+        MenuItem::action("Toggle Terminal", crate::chat::TerminalToggle),
+        MenuItem::Separator,
+        MenuItem::action("Zoom In", ZoomIn),
+        MenuItem::action("Zoom Out", ZoomOut),
+        MenuItem::action("Actual Size", ResetZoom),
     ]);
     cx.set_menus([
         Menu::new("Vitre").items([
@@ -52,17 +81,16 @@ pub fn init(cx: &mut App) {
             MenuItem::os_action("Paste", input::Paste, gpui::OsAction::Paste),
             MenuItem::os_action("Select All", input::SelectAll, gpui::OsAction::SelectAll),
         ]),
-        Menu::new("View").items([
-            MenuItem::action("Command Palette", crate::chat::CommandPaletteToggle),
-            MenuItem::action("Toggle Sidebar", crate::chat::SidebarToggle),
-            MenuItem::action("Toggle Browser", crate::chat::PreviewToggle),
-            MenuItem::action("Toggle Terminal", crate::chat::TerminalToggle),
+        Menu::new("View").items(view_items),
+        Menu::new("Window").items([
+            MenuItem::action(
+                "Previous Right Sidebar Tab",
+                crate::chat::RightPanelPreviousSurface,
+            ),
+            MenuItem::action("Next Right Sidebar Tab", crate::chat::RightPanelNextSurface),
             MenuItem::Separator,
-            MenuItem::action("Zoom In", ZoomIn),
-            MenuItem::action("Zoom Out", ZoomOut),
-            MenuItem::action("Actual Size", ResetZoom),
+            MenuItem::action("Minimize", Minimize),
         ]),
-        Menu::new("Window").items([MenuItem::action("Minimize", Minimize)]),
     ]);
 }
 

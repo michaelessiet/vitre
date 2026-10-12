@@ -9,7 +9,9 @@ use vitre_rpc::TypedStreamEvent;
 
 impl ChatApp {
     pub(super) fn sync_preview_automation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !crate::client_settings::ClientSettings::get(cx).preview_automation_enabled {
+        if !crate::platform_capabilities::BROWSER
+            || !crate::client_settings::ClientSettings::get(cx).preview_automation_enabled
+        {
             self.preview_automation_task = None;
             return;
         }
@@ -25,7 +27,7 @@ impl ChatApp {
                 let handle=sessions.borrow_and_update().clone();
                 let Some(handle)=handle else{if sessions.changed().await.is_err(){return;}continue;};
                 let client_id=PreviewAutomationClientId(format!("vitre-{}",std::process::id()));
-                let host=PreviewAutomationHost{client_id:client_id.clone(),environment_id:handle.config.environment.environment_id.clone(),supported_operations:Some(Some(vec![PreviewAutomationOperation::Status,PreviewAutomationOperation::Open,PreviewAutomationOperation::Navigate,PreviewAutomationOperation::Snapshot,PreviewAutomationOperation::Click,PreviewAutomationOperation::Type,PreviewAutomationOperation::Press,PreviewAutomationOperation::Scroll,PreviewAutomationOperation::Evaluate,PreviewAutomationOperation::WaitFor,PreviewAutomationOperation::Resize,PreviewAutomationOperation::SetColorScheme,PreviewAutomationOperation::RecordingStart,PreviewAutomationOperation::RecordingStop]))};
+                let host=PreviewAutomationHost{client_id:client_id.clone(),environment_id:handle.config.environment.environment_id.clone(),supported_operations:Some(Some(crate::platform_capabilities::automation_operations()))};
                 let Ok(mut stream)=handle.session.subscribe_typed::<PreviewAutomationConnect>(&host)else{return};
                 let mut connection=None;
                 let mut last_focus=None;
@@ -148,6 +150,9 @@ impl ChatApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<Entity<PreviewPanel>, String> {
+        if !crate::platform_capabilities::BROWSER {
+            return Err(crate::platform_capabilities::BROWSER_UNAVAILABLE.into());
+        }
         let client = self.client.clone().expect("connected automation host");
         let environment = client
             .sessions()

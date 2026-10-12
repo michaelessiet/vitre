@@ -69,26 +69,29 @@ pub(crate) async fn capture(name: &str, cx: &mut gpui::AsyncWindowContext) -> Re
     })
     .map_err(|e| e.to_string())?;
     let path = format!("/tmp/vitre-ui-{name}.png");
-    let pid = std::process::id();
     Tokio::spawn_result(cx, async move {
         tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-            let script = format!(r#"import AppKit
-let pid: Int32 = {pid}
-NSRunningApplication(processIdentifier: pid)?.activate(options: [.activateAllWindows])
-let windows = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
-let owned = windows.filter {{ $0[kCGWindowOwnerPID as String] as? Int32 == pid && $0[kCGWindowLayer as String] as? Int == 0 }}
-func area(_ w: [String: Any]) -> Double {{ let b = w[kCGWindowBounds as String] as? [String: Double] ?? [:]; return (b["Width"] ?? 0) * (b["Height"] ?? 0) }}
-if let w = owned.max(by: {{area($0) < area($1)}}) {{ print(w[kCGWindowNumber as String] as! Int) }}"#);
-            let output = std::process::Command::new("swift").args(["-e", &script]).output()?;
-            anyhow::ensure!(output.status.success(), "window capture lookup failed");
-            let id = String::from_utf8(output.stdout)?;
-            anyhow::ensure!(!id.trim().is_empty(), "native window not found");
-            let status = std::process::Command::new("screencapture").args(["-x", "-l", id.trim(), &path]).status()?;
-            anyhow::ensure!(status.success(), "screenshot failed");
-            eprintln!("[vitre-ui-test] screenshot {path}");
-            Ok(())
-        }).await?
-    }).await.map_err(|e| e.to_string())
+            #[cfg(target_os = "macos")]
+            {
+                use std::ffi::{CString, c_char, c_int};
+                unsafe extern "C" {
+                    fn vitre_capture_own_window(output_path: *const c_char) -> c_int;
+                }
+                let output_path = CString::new(path.as_str())?;
+                let status = unsafe { vitre_capture_own_window(output_path.as_ptr()) };
+                anyhow::ensure!(status == 0, "Vitre window capture failed (status {status})");
+                eprintln!("[vitre-ui-test] screenshot {path}");
+                Ok(())
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                anyhow::bail!("native window capture is only available on macOS");
+            }
+        })
+        .await?
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 impl ChatApp {
@@ -108,18 +111,33 @@ impl ChatApp {
                 key("cmd-z", cx).await?;
                 if editor.read_with(cx, |s, _| s.value()) != original {return Err("Undo did not restore the file".into());}
                 capture("editor", cx).await?;
+                let marketing_capture = std::env::var_os("VITRE_MARKETING_CAPTURE").is_some();
                 this.update_in(cx, |a, w, cx| {
-                    if a.dock_open() {a.toggle_right_panel(w, cx);}
+                    if !marketing_capture && a.dock_open() {a.toggle_right_panel(w, cx);}
                     // Visual-only chat data; no paid provider turn and no durable messages.
                     let view = Arc::make_mut(a.thread.as_mut().unwrap().state.view.as_mut().unwrap());
-                    view.messages = (0..6).map(|i| serde_json::from_value(serde_json::json!({
+                    let marketing_messages = [
+                        "Give the workspace a calmer first impression.",
+                        "I opened `src/components/Workspace.tsx` beside this thread. The layout is ready for us to refine.",
+                        "Keep the editor close while we work through the details.",
+                        "The conversation and file stay together. We can inspect the diff next.",
+                    ];
+                    view.messages = (0..(if marketing_capture { marketing_messages.len() } else { 6 })).map(|i| serde_json::from_value(serde_json::json!({
                         "id": format!("ui-message-{i}"), "role": if i % 2 == 0 {"user"} else {"assistant"},
-                        "text": if i % 2 == 0 {format!("Refine workspace section {}", i / 2 + 1)} else {"Use `cargo test` to verify the change. The `café` value and `src/components/Workspace.tsx` should remain readable on glass.\n\nThe editor supports **line commands**, undo, and Unicode selections.".into()},
+                        "text": if marketing_capture {
+                            marketing_messages[i].to_string()
+                        } else if i % 2 == 0 {format!("If a tick fails more than 3 times please skip it and move to the next. Let's fast track the catch up. The only chain that is being indexed for now is Plasma mainnet. Section {}.", i / 2 + 1)} else {"Use `cargo test` to verify the change. The `café` value and `src/components/Workspace.tsx` should remain readable on glass.\n\nThe editor supports **line commands**, undo, and Unicode selections.".into()},
                         "createdAt": now_iso(), "updatedAt": now_iso(), "streaming": false, "turnId": null
                     })).unwrap()).collect();
                     a.rebuild_timeline(cx); cx.notify();
                 }).map_err(|e| e.to_string())?;
                 executor.timer(Duration::from_millis(800)).await;
+                if marketing_capture {
+                    executor.timer(Duration::from_secs(5)).await;
+                    capture("workspace", cx).await?;
+                    this.update_in(cx, |a, w, cx| { if a.dock_open() { a.toggle_right_panel(w, cx); } }).map_err(|e| e.to_string())?;
+                    executor.timer(Duration::from_millis(400)).await;
+                }
                 capture("chat", cx).await?;
                 this.update(cx, |a, cx| {a.sidebar_visible = false; cx.notify();}).map_err(|e| e.to_string())?;
                 executor.timer(Duration::from_millis(600)).await;

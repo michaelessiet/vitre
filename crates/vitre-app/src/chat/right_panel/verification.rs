@@ -2,6 +2,7 @@
 use super::*;
 use crate::chat::ui_verification;
 use gpui::AsyncWindowContext;
+use std::sync::Arc;
 use std::time::Duration;
 
 const SOURCE: &str = "src/components/Workspace.tsx";
@@ -60,6 +61,31 @@ impl ChatApp {
                     let stable = app.update(cx, |app, _| app.dock_reveal_epoch == epoch).map_err(|e| e.to_string())?;
                     if !stable { eprintln!("[vitre-tabs-test] REGRESSION: tab switching restarted dock entrance"); }
 
+                    // Standard macOS tab chords work even while focus is in the
+                    // chat composer rather than inside the right panel.
+                    let (original_id, previous_id) = app.update(cx, |app, _| {
+                        let key = app.dock_thread_key().unwrap();
+                        let state = app.right_panel.map.thread(&key);
+                        let original = state.active_surface_id.clone().unwrap();
+                        let index = state.surfaces.iter().position(|surface| surface.id() == original).unwrap();
+                        let previous = state.surfaces[(index + state.surfaces.len() - 1) % state.surfaces.len()].id().to_string();
+                        (original, previous)
+                    }).map_err(|e| e.to_string())?;
+                    app.update_in(cx, |app, w, cx| app.composer.focus_handle(cx).focus(w, cx)).map_err(|e| e.to_string())?;
+                    ui_verification::key("cmd-shift-[", cx).await?;
+                    let selected_previous = app.update(cx, |app, _| {
+                        let key = app.dock_thread_key().unwrap();
+                        app.right_panel.map.thread(&key).active_surface_id.as_deref() == Some(&previous_id)
+                    }).map_err(|e| e.to_string())?;
+                    if !selected_previous { return Err("Cmd+Shift+[ did not select the previous right-panel tab from composer focus".into()); }
+                    ui_verification::key("cmd-shift-]", cx).await?;
+                    let restored_original = app.update(cx, |app, _| {
+                        let key = app.dock_thread_key().unwrap();
+                        app.right_panel.map.thread(&key).active_surface_id.as_deref() == Some(&original_id)
+                    }).map_err(|e| e.to_string())?;
+                    if !restored_original { return Err("Cmd+Shift+] did not restore the next right-panel tab from composer focus".into()); }
+                    wait_for_file(&app, SOURCE, "export function Workspace", cx).await?;
+
                     // Feed a resolved cross-file location through the editor's real
                     // definition-navigation callback. No language-server install needed.
                     let (show, uri) = app.update(cx, |app, cx| {
@@ -93,6 +119,40 @@ impl ChatApp {
                     executor.timer(Duration::from_millis(700)).await;
                     wait_for_file(&app, SOURCE, "export function Workspace", cx).await?;
                     ui_verification::capture(if maximized {"tabs-overlay"} else {"tabs-inline"}, cx).await?;
+                    app.update_in(cx, |app, w, cx| {
+                        let implemented_plan = serde_json::from_value(serde_json::json!({
+                            "createdAt": "2026-09-18T12:00:00.000Z",
+                            "id": "verified-accepted-plan",
+                            "implementationThreadId": app.thread.as_ref().unwrap().id.0.clone(),
+                            "implementedAt": "2026-09-18T12:00:01.000Z",
+                            "planMarkdown": "# Verify accepted plans\n\n1. Leave the chat timeline\n2. Render in the right sidebar",
+                            "turnId": "verified-plan-turn",
+                            "updatedAt": "2026-09-18T12:00:01.000Z"
+                        })).unwrap();
+                        let view = Arc::make_mut(
+                            app.thread
+                                .as_mut()
+                                .unwrap()
+                                .state
+                                .view
+                                .as_mut()
+                                .unwrap(),
+                        );
+                        view.proposed_plans = Some(Some(vec![implemented_plan]));
+                        app.rebuild_timeline(cx);
+                        app.open_workspace_surface(SurfaceKind::Plan, w, cx);
+                    }).map_err(|e| e.to_string())?;
+                    executor.timer(Duration::from_millis(300)).await;
+                    let accepted_plan_moved = app.update(cx, |app, _| {
+                        let key = app.dock_thread_key().unwrap();
+                        app.right_panel.map.active_surface(&key).is_some_and(|surface| surface.kind() == SurfaceKind::Plan)
+                            && app.sidebar_proposed_plan().is_some_and(|plan| plan.id == "verified-accepted-plan")
+                            && !app.timeline.iter().any(|row| matches!(row, crate::chat::TimelineRow::ProposedPlan(_)))
+                    }).map_err(|e| e.to_string())?;
+                    if !accepted_plan_moved {
+                        return Err("Accepted plan did not move from the chat timeline into the Plan dock surface".into());
+                    }
+                    ui_verification::capture(if maximized {"plan-overlay"} else {"plan-inline"}, cx).await?;
                 }
                 Ok::<_, String>(())
             };
@@ -101,7 +161,7 @@ impl ChatApp {
                 _ = executor.timer(Duration::from_secs(50)) => Err("Dock verification timed out".into()),
             };
             match result {
-                Ok(()) => eprintln!("[vitre-tabs-test] PASS: stable dock animation, tree/file switching, definition navigation and Cmd+W fallback, rapid tab switching; inline and overlay layouts"),
+                Ok(()) => eprintln!("[vitre-tabs-test] PASS: Cmd+Shift+[ / ] traversal from composer focus, stable dock animation, tree/file switching, definition navigation and Cmd+W fallback, rapid tab switching; inline and overlay layouts"),
                 Err(error) => eprintln!("[vitre-tabs-test] FAIL: {error}"),
             }
         }).detach();

@@ -10,9 +10,11 @@ mod git_gutter;
 mod glass;
 mod graph;
 mod icons;
+mod image_render;
 mod keymap;
 mod lsp;
 mod palette;
+mod platform_capabilities;
 mod search;
 mod settings;
 mod sidebar_prefs;
@@ -24,8 +26,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
-    App, AppContext as _, KeyBinding, Styled as _, TitlebarOptions, WindowBackgroundAppearance,
-    WindowOptions, point, px, size,
+    App, AppContext as _, KeyBinding, Styled as _, TitlebarOptions, WindowOptions, point, px, size,
 };
 use gpui_component::{Root, Theme, ThemeRegistry};
 use serde_json::Value;
@@ -370,10 +371,11 @@ fn main() {
                     appears_transparent: true,
                     traffic_light_position: Some(point(px(16.), px(18.))),
                 }),
-                window_background: WindowBackgroundAppearance::Blurred,
+                window_background: glass::window_background(),
                 ..Default::default()
             },
             |window, cx| {
+                glass::install_window_effect(window);
                 // The theme setting decides whether the OS gets a vote:
                 // "System" follows the window appearance, light/dark pin the
                 // corresponding Vitre palette and ignore it (Electron's

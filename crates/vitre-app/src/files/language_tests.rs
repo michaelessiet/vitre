@@ -5,7 +5,8 @@ use gpui_component::highlighter::{HighlightTheme, LanguageRegistry, SyntaxHighli
 use ropey::Rope;
 
 fn assert_token_style(language: &str, source: &str, token: &str, expected: &str) {
-    let mut highlighter = SyntaxHighlighter::new(language);
+    let mut highlighter = SyntaxHighlighter::try_new(language)
+        .unwrap_or_else(|error| panic!("{language}: {error:#}"));
     assert!(highlighter.update(None, &Rope::from(source), None));
     let tree = highlighter.tree().expect("configured grammar must parse");
     assert!(
@@ -107,12 +108,19 @@ fn language_support_bundled_queries_compile() {
                 "empty highlighting for {language}"
             );
         }
-        // Constructor validates the complete query, including injections.
-        let mut highlighter = SyntaxHighlighter::new(&language);
+        // Parse non-empty text: inert fallback highlighters also report success.
+        let mut highlighter = SyntaxHighlighter::try_new(&language)
+            .unwrap_or_else(|error| panic!("{language}: {error:#}"));
         assert!(
-            highlighter.update(None, &Rope::from(""), None),
+            highlighter.update(None, &Rope::from("\n"), None),
             "{language}"
         );
+        if config.has_grammar() {
+            assert!(
+                highlighter.tree().is_some(),
+                "{language} silently fell back to plain text"
+            );
+        }
     }
 }
 
@@ -151,4 +159,24 @@ fn language_support_other_grammars_and_nested_theme_categories() {
         colors.style("string.special")
     );
     assert!(colors.style("comment.doc").is_some());
+}
+
+#[test]
+fn language_support_kotlin_source_and_scripts() {
+    let source = "package example\n\n// Greeting\ndata class Greeting(val name: String)\n\nfun greet(name: String): String {\n    val count = 42\n    return \"Hello\"\n}\n";
+    for path in ["src/Greeting.kt", "build.gradle.kts", "Main.KT"] {
+        let language = language_for_path(path);
+        for (token, category) in [
+            ("package", "keyword"),
+            ("// Greeting", "comment"),
+            ("class", "keyword"),
+            ("fun", "keyword"),
+            ("greet", "function"),
+            ("String", "type"),
+            ("42", "number"),
+            ("\"Hello\"", "string"),
+        ] {
+            assert_token_style(&language, source, token, category);
+        }
+    }
 }

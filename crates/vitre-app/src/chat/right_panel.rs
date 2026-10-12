@@ -225,6 +225,9 @@ impl ChatApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !crate::platform_capabilities::BROWSER {
+            return;
+        }
         if self.settings.is_some()
             || self.quick_search.is_some()
             || self.model_picker.is_some()
@@ -578,6 +581,11 @@ impl ChatApp {
     }
 
     pub(super) fn preview_toggle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !crate::platform_capabilities::BROWSER {
+            self.last_error = Some(crate::platform_capabilities::BROWSER_UNAVAILABLE.into());
+            cx.notify();
+            return;
+        }
         let Some(key) = self.dock_thread_key() else {
             return;
         };
@@ -704,6 +712,9 @@ impl ChatApp {
                 self.after_dock_change(true, window, cx);
             }
             SurfaceKind::Preview => {
+                if !crate::platform_capabilities::BROWSER {
+                    return;
+                }
                 let Some(key) = self.dock_thread_key() else {
                     return;
                 };
@@ -882,8 +893,8 @@ impl ChatApp {
     }
 
     /// `rightPanel.nextSurface` / `previousSurface` (`mod+shift+]` / `[`),
-    /// wrapping. Falls through with no active surface; claims the chord as a
-    /// no-op with a single tab (Electron does both).
+    /// wrapping. Falls through while the panel is hidden or has no active
+    /// surface; claims the chord as a no-op with a single tab.
     pub(super) fn dock_cycle_surface(
         &mut self,
         delta: isize,
@@ -895,6 +906,10 @@ impl ChatApp {
             return;
         };
         let state = self.right_panel.map.thread(&key);
+        if !state.is_open {
+            cx.propagate();
+            return;
+        }
         let Some(active) = state.active_surface_id.clone() else {
             cx.propagate();
             return;
@@ -1081,9 +1096,36 @@ impl ChatApp {
     /// What the add-menu and the empty state offer, in Electron's order.
     /// Graph is *hidden* (not disabled): Vitre does not surface the
     /// knowledge-graph setting, and Electron hides the entry when it is off.
+    #[cfg(test)]
+    pub(super) fn offered_surface_kinds(&self) -> Vec<SurfaceKind> {
+        self.dock_surface_offers().iter().map(|s| s.kind).collect()
+    }
+
     fn dock_surface_offers(&self) -> Vec<SurfaceOffer> {
         let project_open = self.search_root().is_some();
-        vec![
+        let plan_available = self.sidebar_proposed_plan().is_some()
+            || self
+                .thread
+                .as_ref()
+                .and_then(|thread| thread.state.view.as_ref())
+                .and_then(|view| {
+                    vitre_state::session_logic::derive_active_plan_state(
+                        &view.activities,
+                        view.latest_turn.as_ref().map(|turn| &turn.turn_id),
+                    )
+                })
+                .is_some();
+        let mut offers = Vec::new();
+        if plan_available {
+            offers.push(SurfaceOffer {
+                kind: SurfaceKind::Plan,
+                label: "Plan",
+                description: "Review the accepted plan and tracked steps.",
+                icon: || Icon::new(IconName::BookOpen),
+                disabled: None,
+            });
+        }
+        offers.extend([
             SurfaceOffer {
                 kind: SurfaceKind::Preview,
                 label: "Browser",
@@ -1129,7 +1171,11 @@ impl ChatApp {
                 disabled: (!project_open)
                     .then(|| "The diff panel is only available when a project is open.".into()),
             },
-        ]
+        ]);
+        offers.retain(|offer| {
+            offer.kind != SurfaceKind::Preview || crate::platform_capabilities::BROWSER
+        });
+        offers
     }
 
     /// The dock: tab strip + the active surface (or the empty-state cards).
@@ -1421,7 +1467,14 @@ impl ChatApp {
             }
             SurfaceKind::Preview => match self.active_preview_panel(cx) {
                 Some(panel) => div().size_full().child(panel).into_any_element(),
-                None => dock_placeholder("Connecting browser preview…", cx),
+                None => dock_placeholder(
+                    if crate::platform_capabilities::BROWSER {
+                        "Connecting browser preview…"
+                    } else {
+                        crate::platform_capabilities::BROWSER_UNAVAILABLE
+                    },
+                    cx,
+                ),
             },
             SurfaceKind::Graph => match self
                 .search_root()
@@ -1430,9 +1483,7 @@ impl ChatApp {
                 Some(panel) => div().size_full().child(panel).into_any_element(),
                 None => dock_placeholder("Open a project to explore its graph.", cx),
             },
-            SurfaceKind::Plan => {
-                dock_placeholder("This surface is not yet available in Vitre.", cx)
-            }
+            SurfaceKind::Plan => self.render_dock_plan(cx),
         }
     }
 
