@@ -7,6 +7,9 @@ describe("RelayApi security", () => {
   it("describes DPoP access tokens using the HTTP DPoP authorization scheme", () => {
     const document = OpenApi.fromApi(RelayApi);
 
+    expect(document.info.title).toBe("Vitre Relay API");
+    expect(document.info.description).toContain("Vitre environments");
+
     expect(document.components.securitySchemes?.relayDpop).toEqual({
       type: "http",
       scheme: "DPoP",

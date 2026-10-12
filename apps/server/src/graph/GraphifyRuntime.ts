@@ -1,7 +1,7 @@
 /**
  * GraphifyRuntime - detect, report and (on request) install the graphify CLI.
  *
- * graphify is a Python tool; T3 Code is a Node product and does not ship it.
+ * graphify is a Python tool; Vitre is a Node product and does not ship it.
  * This service is the whole story of that gap: it probes for an existing
  * install, tells the settings page exactly what is missing, and installs one
  * only when the user presses a button. Nothing here runs until the
@@ -394,7 +394,7 @@ export const make = Effect.gen(function* () {
             // looked instead.
             return yield* new GraphRuntimeUnavailableError({
               detail:
-                "graphify was installed but could not be run afterwards. T3 Code looked in " +
+                "graphify was installed but could not be run afterwards. Vitre looked in " +
                 `${venvExecutable(config.graphRuntimeDir, "graphify", platform)}, on PATH, ` +
                 "and in uv's tool directory. Set an explicit graphify path in settings if it " +
                 "landed somewhere else.",

@@ -29,7 +29,7 @@ export const MIN_PYTHON_MINOR = 10;
  *
  * - `setting`   — the explicit `knowledgeGraph.graphifyPath` override.
  * - `path`      — a `graphify` executable on PATH.
- * - `managed`   — the venv T3 Code created under its own data directory.
+ * - `managed`   — the venv Vitre created under its own data directory.
  * - `uv-tool`   — a `uv tool install graphifyy` the user did themselves, found
  *                 in uv's own bin directory.
  * - `module`    — `python3 -m graphify`, for a graphify installed into the
@@ -75,7 +75,7 @@ export function venvExecutable(venvRoot: string, name: string, platform: NodeJS.
 }
 
 /**
- * Environment that pins `uv tool install` to T3 Code's own directory.
+ * Environment that pins `uv tool install` to Vitre's own directory.
  *
  * Without this, uv installs into *its* defaults — the tool environment under
  * `~/.local/share/uv/tools` and the console script into `~/.local/bin` — and

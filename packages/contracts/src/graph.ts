@@ -3,7 +3,7 @@
  *
  * The graph feature wraps the external `graphify` tool, which turns a
  * workspace into a queryable knowledge graph. The feature is opt-in and
- * disabled by default: it depends on a Python runtime that T3 Code does not
+ * disabled by default: it depends on a Python runtime that Vitre does not
  * ship, so every schema here is designed to describe a *possibly absent*
  * capability without the rest of the app having to care.
  *
@@ -124,7 +124,7 @@ export type GraphSubgraph = typeof GraphSubgraph.Type;
  * Where the graphify runtime comes from.
  *
  * - `system`  — resolved from PATH / an interpreter the user already has.
- * - `managed` — a venv T3 Code created under its own data directory.
+ * - `managed` — a venv Vitre created under its own data directory.
  */
 export const GraphRuntimeSource = Schema.Literals(["system", "managed"]);
 export type GraphRuntimeSource = typeof GraphRuntimeSource.Type;
@@ -436,7 +436,7 @@ export class GraphCapabilityUnavailableError extends Schema.TaggedErrorClass<Gra
   {},
 ) {
   override get message(): string {
-    return "This agent session was not granted the knowledge-graph capability. Enable the knowledge graph in T3 Code settings and start a new session.";
+    return "This agent session was not granted the knowledge-graph capability. Enable the knowledge graph in Vitre settings and start a new session.";
   }
 }
 
@@ -459,7 +459,7 @@ export class GraphNodeNotFoundError extends Schema.TaggedErrorClass<GraphNodeNot
 }
 
 /**
- * The workspace is not a project T3 Code knows about.
+ * The workspace is not a project Vitre knows about.
  *
  * Graphs are keyed by `(projectId, branch)`, and `projectId` comes from an
  * exact match on `projection_projects.workspace_root`. A thread running in a
@@ -475,7 +475,7 @@ export class GraphWorkspaceUnknownError extends Schema.TaggedErrorClass<GraphWor
   },
 ) {
   override get message(): string {
-    return `'${this.cwd}' is not a T3 Code project, so no knowledge graph can be stored for it.`;
+    return `'${this.cwd}' is not a Vitre project, so no knowledge graph can be stored for it.`;
   }
 }
 

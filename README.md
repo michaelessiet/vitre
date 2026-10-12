@@ -1,92 +1,29 @@
-# T3 Code
+# [Vitre](https://github.com/michaelessiet/vitre)
 
-T3 Code is a minimal web GUI for coding agents (currently Codex, Claude, Cursor, and OpenCode, more coming soon).
+Vitre is an open source, native macOS workspace for coding with agents. It brings conversations, files, diffs, a terminal, and a browser preview into one focused window. The desktop client is built with Rust and GPUI and uses a bundled Node sidecar for provider sessions.
 
-## Installation
+Vitre is under active development. A local Apple Silicon build is available to contributors, but there is no signed public release or update feed yet.
 
-> [!WARNING]
-> T3 Code currently supports Codex, Claude, Cursor, and OpenCode.
-> Install and authenticate at least one provider before use:
->
-> - Codex: install [Codex CLI](https://developers.openai.com/codex/cli) and run `codex login`
-> - Claude: install [Claude Code](https://claude.com/product/claude-code) and run `claude auth login`
-> - Cursor: install [Cursor CLI](https://cursor.com/cli) and run `cursor-agent login`
-> - OpenCode: install [OpenCode](https://opencode.ai) and run `opencode auth login`
+## Run locally
 
-### Run without installing
+You need macOS, a Rust toolchain, Node.js 24, and [Vite+](https://viteplus.dev/guide/) (`vp`). Install dependencies, then start the native app:
 
 ```bash
-npx t3@latest
+vp install
+vp run dev:vitre
 ```
 
-Tip: Use `npx t3@latest --help` for the full CLI reference.
+The development runner builds the sidecar when needed. Use `vp run dev:vitre --rebuild` after changing server code. Configure and authenticate a supported coding agent before starting a conversation.
 
-### Desktop app
+## Project layout
 
-Install the latest version of the desktop app from [GitHub Releases](https://github.com/pingdotgg/t3code/releases), or from your favorite package registry:
+- `crates/vitre-app` — native desktop interface.
+- `crates/vitre-state`, `crates/vitre-client`, and `crates/vitre-rpc` — state and protocol layers.
+- `apps/server` — bundled provider and workspace sidecar.
+- `apps/marketing` — website and landing page.
 
-#### Windows (`winget`)
+See [Vitre handover](./docs/vitre-handover.md) for the current implementation status and open work.
 
-```bash
-winget install T3Tools.T3Code
-```
+## License
 
-#### macOS (Homebrew)
-
-```bash
-brew install --cask t3-code
-```
-
-#### Arch Linux (AUR)
-
-```bash
-yay -S t3code-bin
-```
-
-## Some notes
-
-We are very very early in this project. Expect bugs.
-
-We are not accepting contributions yet.
-
-There's no public docs site yet, checkout the miscellaneous markdown files in [docs](./docs).
-
-## Documentation
-
-- [Getting started](./docs/getting-started/quick-start.md)
-- [Remote access](./docs/user/remote-access.md)
-- [Keeping T3 Code in sync](./docs/user/server-updates.md)
-- [Architecture overview](./docs/architecture/overview.md)
-- [Provider guides](./docs/providers/codex.md)
-- [Operations](./docs/operations/ci.md)
-- [Reference](./docs/reference/encyclopedia.md)
-
-## If you REALLY want to contribute still.... read this first
-
-### Install `vp`
-
-T3 Code uses Vite+ so you'll need to install the global `vp` command-line tool.
-
-#### macOS / Linux
-
-```bash
-curl -fsSL https://vite.plus | bash
-```
-
-#### Windows
-
-```bash
-irm https://vite.plus/ps1 | iex
-```
-
-Checkout their getting started guide for more information: https://viteplus.dev/guide/
-
-### Install dependencies
-
-```bash
-vp i
-```
-
-Read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening an issue or PR.
-
-Need support? Join the [Discord](https://discord.gg/jn4EGJjrvv).
+Vitre is MIT licensed. See [LICENSE](./LICENSE).

@@ -18,8 +18,15 @@ Consumer: Stage B Rust emitter (`vitre-contracts-gen`) in `crates/vitre-contract
 
 - `scripts/vitre/build-dmg.sh` builds the current server bundle and release
   binary, deploys production Node dependencies, embeds the active Apple Silicon
-  Node runtime, ad-hoc signs `Vitre.app`, and creates a compressed DMG under
-  `release/`.
+  Node runtime, signs `Vitre.app`, and creates a compressed DMG under `release/`.
+  Set `VITRE_SIGNING_IDENTITY` to an Apple Development or Developer ID certificate
+  to keep macOS Screen Recording permission across rebuilds. The package build
+  requires this setting; `VITRE_SIGNING_IDENTITY=-` explicitly opts into a
+  disposable ad-hoc build whose permission identity changes with each rebuild.
+  Check available certificates with `security find-identity -v -p codesigning`.
+- `VITRE_SIGNING_IDENTITY="Apple Development: …" node apps/vitre/dev.mjs` also
+  runs local development through a signed `target/vitre-dev/Vitre.app`. Use the
+  same certificate for each rebuild so macOS keeps the permission grant.
 - Before creating the DMG, the script launches the packaged executable with an
   empty shell environment and a disposable `VITRE_HOME`. Its self-test must
   boot the embedded sidecar and complete token exchange, WebSocket setup,
@@ -27,3 +34,11 @@ Consumer: Stage B Rust emitter (`vitre-contracts-gen`) in `crates/vitre-contract
 - The local DMG is suitable for installation and full testing on this Mac, but
   it is not Developer ID signed or notarized. Public distribution still needs
   the M6 signing/notarization and update-feed work.
+
+## Native performance measurements
+
+`python3 scripts/vitre/measure-resources.py --output /tmp/vitre-performance/idle.json`
+measures three five-minute release idle runs with disposable homes. Run
+`cargo run --release -p vitre-state --example performance` for repeatable terminal
+and conversation publication microbenchmarks. See
+[the optimization status and measurement limits](../../docs/operations/vitre-performance.md).

@@ -3634,7 +3634,7 @@ mod tests {
         let (_sidecar, status) = tokio::sync::watch::channel(SupervisorStatus::Idle);
         let client = Arc::new(EnvironmentClient::start(status));
         drop(guard);
-        runtime.shutdown_background();
+        drop(runtime);
         cx.update(gpui_component::init);
         let (panel, cx) = cx.add_window_view(|window, cx| {
             FilesPanel::new(client, "/tmp/project".into(), window, cx)
@@ -3765,10 +3765,11 @@ mod tests {
         let (sidecar, status) = tokio::sync::watch::channel(SupervisorStatus::Idle);
         let client = Arc::new(EnvironmentClient::start(status));
         drop(guard);
+        // Wait for background tasks to stop before creating foreground tasks.
         // The client is inert from here on: its background tasks are aborted,
         // so nothing ever wakes the panel's foreground tasks from a tokio
         // worker — which gpui's test scheduler rejects as non-deterministic.
-        runtime.shutdown_background();
+        drop(runtime);
 
         cx.update(gpui_component::init);
         let (panel, cx) = cx.add_window_view(|window, cx| {

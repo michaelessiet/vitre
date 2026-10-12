@@ -55,7 +55,9 @@ jobs:
       # The licensing firewall's structural guarantee: exactly one gpui, ours.
       - name: Single gpui instance
         run: |
-          COUNT=$(cargo tree -i gpui --prefix none | grep -c "^gpui v")
+          # Cargo can print the same package for distinct dependency contexts.
+          # Count unique package identities, not repeated tree roots.
+          COUNT=$(cargo tree -i gpui --prefix none | grep "^gpui v" | sort -u | wc -l | tr -d '[:space:]')
           echo "gpui instances: $COUNT"
           test "$COUNT" -eq 1
 

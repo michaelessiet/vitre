@@ -220,7 +220,7 @@ export const GraphToolkitRegistrationLive = McpServer.toolkit(GraphToolkit).pipe
 );
 
 const McpTransportLive = McpServer.layerHttp({
-  name: "T3 Code",
+  name: "Vitre",
   version: packageJson.version,
   path: "/mcp",
 }).pipe(Layer.provide(McpAuthMiddlewareLive));

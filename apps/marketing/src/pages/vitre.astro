@@ -1,0 +1,164 @@
+---
+const VITRE_REPOSITORY_URL = "https://github.com/michaelessiet/vitre";
+import "../styles/vitre.css";
+
+const chapters = [
+  {
+    number: "01",
+    title: "Find your thread.",
+    body: "Keep project conversations together, then return to a question with its context still in reach.",
+    note: "Projects & conversations",
+  },
+  {
+    number: "02",
+    title: "Review the real change.",
+    body: "Read the code, inspect the diff, and check the details before you move on.",
+    note: "Editor & diffs",
+  },
+  {
+    number: "03",
+    title: "Keep the result close.",
+    body: "Run a command and open the preview beside your work. Go from what changed to what it does.",
+    note: "Terminal & preview",
+  },
+];
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f8f7f3" />
+    <meta name="description" content="Vitre is a native macOS workspace for building with coding agents. Keep conversations, code, diffs, terminal, and preview together." />
+    <link rel="icon" type="image/png" href="/vitre/icon.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet" />
+    <title>Vitre — Make room for the work</title>
+  </head>
+  <body>
+    <div class="site-shell">
+      <header class="site-header">
+        <nav class="nav-inner" aria-label="Main navigation">
+          <a class="wordmark" href="/" aria-label="Vitre home"><img src="/vitre/icon.png" width="32" height="32" alt="" /><span>vitre</span></a>
+          <div class="nav-links"><a href="#inside">Inside Vitre</a><a href="#approach">The idea</a><a href={VITRE_REPOSITORY_URL} target="_blank" rel="noopener noreferrer">GitHub</a></div>
+          <a class="nav-button" href="#workspace">Take a look</a>
+        </nav>
+      </header>
+
+      <main>
+        <section class="hero" aria-labelledby="hero-title">
+          <div class="hero-inner">
+            <div class="hero-copy">
+              <p class="eyebrow"><span class="eyebrow-spark" aria-hidden="true">✳</span> A native home for the way you build</p>
+              <h1 id="hero-title">Make room<br />for the <em>work.</em></h1>
+              <p class="hero-lede">A native Mac workspace for building with coding agents. Conversations, files, diffs, terminal, and preview all have a place here.</p>
+              <div class="hero-actions"><a class="pill pill-dark" href="#workspace">Explore Vitre</a><a class="quiet-link" href={VITRE_REPOSITORY_URL} target="_blank" rel="noopener noreferrer">Follow the project</a></div>
+              <p class="hero-footnote"><span></span> Built for macOS. Open source. In progress.</p>
+            </div>
+            <div class="hero-visual" aria-label="Vitre app icon artwork">
+              <span class="hero-doodle doodle-star" aria-hidden="true">✳</span>
+              <span class="hero-doodle doodle-loop" aria-hidden="true">∿</span>
+              <span class="hero-doodle doodle-plus" aria-hidden="true">＋</span>
+              <span class="hero-doodle doodle-dot" aria-hidden="true"></span>
+              <span class="hero-doodle doodle-flower" aria-hidden="true">✿</span>
+              <div class="icon-disc"><img src="/vitre/icon-large.png" width="540" height="540" alt="" /></div>
+            </div>
+          </div>
+          <div class="hero-index"><span>01 / A DIFFERENT KIND OF DESKTOP</span><span>SCROLL TO EXPLORE</span></div>
+        </section>
+
+        <div class="ticker" aria-hidden="true"><div class="ticker-track"><span>CONVERSATIONS</span><i>✳</i><span>FILES</span><i>✳</i><span>DIFFS</span><i>✳</i><span>TERMINAL</span><i>✳</i><span>PREVIEW</span><i>✳</i><span>CONVERSATIONS</span><i>✳</i><span>FILES</span><i>✳</i><span>DIFFS</span><i>✳</i><span>TERMINAL</span><i>✳</i><span>PREVIEW</span><i>✳</i></div></div>
+
+        <section id="workspace" class="workspace-showcase" aria-labelledby="workspace-title">
+          <div class="showcase-inner">
+            <div class="showcase-intro reveal">
+              <div><p class="section-label">A LOOK INSIDE</p><h2 id="workspace-title">The whole picture,<br /><em>in one place.</em></h2></div>
+              <p>Meet the actual Vitre workspace. Your conversation stays beside the files you’re shaping, so the next step is always in view.</p>
+            </div>
+            <figure class="showcase-figure reveal">
+              <div class="showcase-frame"><a href="/vitre/workspace.png" target="_blank" rel="noopener noreferrer" aria-label="Open full-size screenshot of the Vitre workspace"><img src="/vitre/workspace.png" width="2800" height="1700" loading="lazy" decoding="async" alt="Vitre on macOS, with projects and conversations on the left, a coding conversation in the center, and a TypeScript editor and file tree on the right" /></a></div>
+              <figcaption><span>VITRE ON MACOS · CAPTURED FROM A SAMPLE WORKSPACE</span><span class="showcase-desktop-hint">SELECT TO VIEW FULL SIZE</span><span class="showcase-mobile-hint">SELECT TO VIEW FULL SIZE</span></figcaption>
+            </figure>
+          </div>
+        </section>
+
+        <section class="motion-section section-wrap" aria-labelledby="motion-title">
+          <div class="motion-heading reveal"><p class="section-label">THE WORKFLOW</p><h2 id="motion-title">From a thought<br />to <em>something real.</em></h2><p>Keep the conversation, the changes, and the result in the same place.</p></div>
+          <div class="motion-art" role="group" aria-label="Vitre workspace motion graphic">
+            <div class="motion-art-header" aria-hidden="true"><span class="motion-phase motion-phase-projects">01 <strong>Projects</strong></span><span class="motion-phase motion-phase-conversation">02 <strong>Conversation</strong></span><span class="motion-phase motion-phase-editor">03 <strong>Editor</strong></span></div>
+            <div class="motion-art-scene">
+              <div class="motion-art-halo" aria-hidden="true"></div>
+              <div class="motion-art-window" role="img" aria-label="The Vitre project rail, conversation, and editor appear in sequence, then form the full workspace">
+                <img class="motion-panel motion-panel-projects" src="/vitre/workspace.png" width="2800" height="1700" alt="" aria-hidden="true" loading="lazy" decoding="async" />
+                <img class="motion-panel motion-panel-conversation" src="/vitre/workspace.png" width="2800" height="1700" alt="" aria-hidden="true" loading="lazy" decoding="async" />
+                <img class="motion-panel motion-panel-editor" src="/vitre/workspace.png" width="2800" height="1700" alt="" aria-hidden="true" loading="lazy" decoding="async" />
+              </div>
+            </div>
+            <div class="motion-art-footer"><p>Everything you need to stay in the flow.</p><div class="motion-art-controls"><span class="motion-progress" aria-hidden="true"><span></span></span><button class="motion-toggle" type="button" aria-label="Pause motion graphic">Pause</button></div></div>
+          </div>
+        </section>
+
+        <section id="inside" class="inside section-wrap" aria-labelledby="inside-title">
+          <div class="inside-intro reveal"><p class="section-label">01 — INSIDE VITRE</p><h2 id="inside-title">The details stay<br /><em>in view.</em></h2><p>Move between a conversation, the files it changed, and the result you can run. Vitre keeps the context connected.</p></div>
+          <div class="chapter-list">
+            {chapters.map((chapter) => (
+              <article class="chapter reveal">
+                <span class="chapter-number">{chapter.number}</span>
+                <div class="chapter-content"><h3>{chapter.title}</h3><p>{chapter.body}</p></div>
+                <span class="chapter-note">{chapter.note}</span>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section id="approach" class="approach" aria-labelledby="approach-title">
+          <div class="approach-inner"><div class="approach-heading reveal"><p class="section-label">02 — THE IDEA</p><h2 id="approach-title">At home<br /><em>on your Mac.</em></h2></div><div class="approach-side reveal"><p>Vitre is built with Rust and GPUI. A native window, a focused workspace, and the tools you need without a stack of browser tabs.</p><a class="approach-link" href={VITRE_REPOSITORY_URL} target="_blank" rel="noopener noreferrer">See how it’s built</a></div></div>
+          <div class="approach-bottom"><span>NATIVE BY DESIGN</span><span>OPEN TO EVERYONE</span><span>ALWAYS IN PROGRESS</span></div>
+        </section>
+
+        <section class="last-call section-wrap" aria-labelledby="last-title"><div class="last-mark" aria-hidden="true"><img src="/vitre/icon.png" width="72" height="72" alt="" /></div><p class="section-label">COME ALONG</p><h2 id="last-title">See where Vitre<br /><em>goes next.</em></h2><p>Vitre is taking shape in the open. Explore the code and follow the work.</p><a class="pill pill-dark" href={VITRE_REPOSITORY_URL} target="_blank" rel="noopener noreferrer">Explore the project</a></section>
+      </main>
+
+      <footer class="site-footer"><a class="wordmark" href="/"><img src="/vitre/icon.png" width="28" height="28" alt="" /><span>vitre</span></a><span>Made for the work you love.</span><a href={VITRE_REPOSITORY_URL} target="_blank" rel="noopener noreferrer">GitHub</a><span>© {new Date().getFullYear()} Vitre</span></footer>
+    </div>
+    <script>
+      const targets = document.querySelectorAll<HTMLElement>(".reveal");
+      if ("IntersectionObserver" in window) {
+        const observer = new IntersectionObserver((entries) => {
+          entries.forEach((entry) => {
+            if (!entry.isIntersecting) return;
+            entry.target.classList.add("visible");
+            observer.unobserve(entry.target);
+          });
+        }, { threshold: 0.08, rootMargin: "0px 0px -24px 0px" });
+        targets.forEach((target) => observer.observe(target));
+      } else {
+        targets.forEach((target) => target.classList.add("visible"));
+      }
+
+      const motionArt = document.querySelector<HTMLElement>(".motion-art");
+      const motionToggle = document.querySelector<HTMLButtonElement>(".motion-toggle");
+      const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+      motionArt?.classList.add("has-motion");
+      let motionInView = false;
+      let manuallyPaused = false;
+      const syncMotion = () => {
+        motionArt?.classList.toggle("is-playing", motionInView && !manuallyPaused && !reducedMotion.matches && !document.hidden);
+        if (!motionToggle) return;
+        motionToggle.disabled = reducedMotion.matches;
+        motionToggle.textContent = reducedMotion.matches ? "Motion off" : manuallyPaused ? "Play" : "Pause";
+        motionToggle.setAttribute("aria-label", reducedMotion.matches ? "Motion disabled by system preference" : manuallyPaused ? "Play motion graphic" : "Pause motion graphic");
+      };
+      motionToggle?.addEventListener("click", () => { manuallyPaused = !manuallyPaused; syncMotion(); });
+      if (motionArt && "IntersectionObserver" in window) {
+        const motionObserver = new IntersectionObserver(([entry]) => { motionInView = entry.isIntersecting; syncMotion(); }, { threshold: 0.15 });
+        motionObserver.observe(motionArt);
+      } else { motionInView = true; }
+      document.addEventListener("visibilitychange", syncMotion);
+      reducedMotion.addEventListener("change", syncMotion);
+      syncMotion();
+    </script>
+  </body>
+</html>

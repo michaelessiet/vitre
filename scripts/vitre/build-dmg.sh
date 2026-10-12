@@ -4,7 +4,7 @@ set -eu
 REPO_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$REPO_ROOT"
 
-for tool in cargo codesign ditto hdiutil node plutil pnpm; do
+for tool in cargo codesign ditto hdiutil iconutil node plutil pnpm sips; do
   command -v "$tool" >/dev/null 2>&1 || {
     echo "missing required tool: $tool" >&2
     exit 1
@@ -17,6 +17,13 @@ if [ "$ARCH" != "arm64" ]; then
   exit 1
 fi
 
+SIGNING_IDENTITY=${VITRE_SIGNING_IDENTITY:-}
+if [ -z "$SIGNING_IDENTITY" ]; then
+  echo "[vitre-dmg] set VITRE_SIGNING_IDENTITY to a stable code-signing certificate" >&2
+  echo "[vitre-dmg] use VITRE_SIGNING_IDENTITY=- only for a disposable local build" >&2
+  exit 1
+fi
+
 VERSION=$(node -p "require('./apps/server/package.json').version")
 NODE_BINARY=${VITRE_NODE:-$(command -v node)}
 OUTPUT_DIR=${VITRE_RELEASE_DIR:-$REPO_ROOT/release}
@@ -25,6 +32,8 @@ BUILD_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/vitre-dmg.XXXXXX")
 APP="$BUILD_ROOT/Vitre.app"
 CONTENTS="$APP/Contents"
 RESOURCES="$CONTENTS/Resources"
+ICON_SOURCE="$REPO_ROOT/assets/vitre/icon.png"
+ICONSET="$BUILD_ROOT/AppIcon.iconset"
 DEPLOY_ROOT="$BUILD_ROOT/server-deploy"
 DMG_ROOT="$BUILD_ROOT/dmg"
 SELFTEST_HOME="$BUILD_ROOT/selftest-home"
@@ -53,19 +62,30 @@ ditto target/release/vitre "$CONTENTS/MacOS/Vitre"
 ditto "$NODE_BINARY" "$RESOURCES/node/bin/node"
 ditto "$DEPLOY_ROOT/dist" "$RESOURCES/server"
 ditto "$DEPLOY_ROOT/node_modules" "$RESOURCES/server/node_modules"
-ditto apps/desktop/resources/icon.icns "$RESOURCES/AppIcon.icns"
+mkdir -p "$ICONSET"
+for size in 16 32 128 256 512; do
+  double_size=$((size * 2))
+  sips -z "$size" "$size" "$ICON_SOURCE" --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
+  sips -z "$double_size" "$double_size" "$ICON_SOURCE" --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
+done
+iconutil -c icns "$ICONSET" -o "$RESOURCES/AppIcon.icns"
 ditto scripts/vitre/Info.plist "$CONTENTS/Info.plist"
 
 plutil -replace CFBundleShortVersionString -string "$VERSION" "$CONTENTS/Info.plist"
 plutil -replace CFBundleVersion -string "$(git rev-list --count HEAD)" "$CONTENTS/Info.plist"
 chmod 755 "$CONTENTS/MacOS/Vitre" "$RESOURCES/node/bin/node"
 
-echo "[vitre-dmg] ad-hoc signing bundle"
+if [ "$SIGNING_IDENTITY" = "-" ]; then
+  echo "[vitre-dmg] warning: ad-hoc signing changes Vitre's macOS permission identity on every build" >&2
+  echo "[vitre-dmg] set VITRE_SIGNING_IDENTITY to an Apple Development or Developer ID certificate to preserve Screen Recording access" >&2
+else
+  echo "[vitre-dmg] signing bundle with $SIGNING_IDENTITY"
+fi
 # The production pnpm tree contains internal symlinks. Let codesign seal that
 # tree as resources instead of recursively following every link as nested code.
-# Public distribution will replace this ad-hoc seal with the M6 Developer ID
-# signing/notarization pipeline.
-codesign --force --sign - --identifier com.t3tools.vitre "$APP"
+# Public distribution still needs Developer ID signing and notarization.
+BUNDLE_IDENTIFIER=$(plutil -extract CFBundleIdentifier raw -o - "$CONTENTS/Info.plist")
+codesign --force --sign "$SIGNING_IDENTITY" --identifier "$BUNDLE_IDENTIFIER" "$APP"
 codesign --verify --strict --verbose=2 "$APP"
 
 echo "[vitre-dmg] running packaged sidecar/auth/RPC self-test without shell PATH"

@@ -307,7 +307,7 @@ mod tests {
             );
             cx.update(|w, cx| w.draw(cx).clear(cx));
             assert_eq!(
-                cx.update(|w, cx| TextSelection::selected_text(w, cx)),
+                cx.update(TextSelection::selected_text),
                 format!("user {index} literal café 世界")
             );
         }
@@ -353,7 +353,7 @@ mod tests {
         );
         cx.update(|w, cx| w.draw(cx).clear(cx));
         assert_eq!(
-            cx.update(|w, cx| TextSelection::selected_text(w, cx)),
+            cx.update(TextSelection::selected_text),
             "**literal** <tag> café 世界"
         );
         cx.simulate_keystrokes("cmd-c");
