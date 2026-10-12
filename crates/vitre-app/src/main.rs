@@ -171,6 +171,9 @@ fn main() {
         selftest(config);
     }
 
+    // Overlap Node startup with native font and theme initialization.
+    let supervisor = Arc::new(Supervisor::start(config));
+    let status_rx = supervisor.status();
     let app = gpui_platform::application().with_assets(assets::VitreAssets);
     let (link_tx, mut link_rx) = tokio::sync::mpsc::unbounded_channel();
     app.on_open_urls(move |urls| {
@@ -350,8 +353,6 @@ fn main() {
         // connection arrives. Fixed copies here would survive a user's remove
         // or rebind and silently restore the old chord.
 
-        let supervisor = Arc::new(Supervisor::start(config));
-        let status_rx = supervisor.status();
         cx.on_app_quit(move |_| {
             supervisor.shutdown();
             async {}

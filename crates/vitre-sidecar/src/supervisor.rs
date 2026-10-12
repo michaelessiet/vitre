@@ -186,7 +186,8 @@ fn run_loop(
         let _ = status_tx.send(SupervisorStatus::Starting { attempt });
         eprintln!("[vitre] starting backend on 127.0.0.1:{port} (attempt {attempt})");
 
-        let mut child = match spawn_backend(&config, port, &bootstrap_token) {
+        let started_at = std::time::Instant::now();
+        let (mut child, ready) = match spawn_backend(&config, port, &bootstrap_token) {
             Ok(child) => child,
             Err(error) => {
                 eprintln!("[vitre] failed to spawn backend: {error}");
@@ -208,9 +209,12 @@ fn run_loop(
         #[cfg(unix)]
         SIGNAL_CHILD_PGID.store(child.id(), Ordering::SeqCst);
 
-        if wait_until_ready(port, &mut child, READINESS_TIMEOUT) {
+        if wait_until_ready(port, &mut child, &ready, READINESS_TIMEOUT) {
             backoff_ms = 500;
-            eprintln!("[vitre] backend ready at http://127.0.0.1:{port}");
+            eprintln!(
+                "[vitre] backend ready at http://127.0.0.1:{port} after {} ms",
+                started_at.elapsed().as_millis()
+            );
             let _ = status_tx.send(SupervisorStatus::Ready { info: info.clone() });
         } else {
             eprintln!("[vitre] backend did not become ready within the timeout");
