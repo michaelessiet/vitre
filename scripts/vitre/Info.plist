@@ -11,7 +11,7 @@
   <key>CFBundleIconFile</key>
   <string>AppIcon</string>
   <key>CFBundleIdentifier</key>
-  <string>com.t3tools.vitre</string>
+  <string>com.michaelessiet.vitre</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
@@ -30,7 +30,6 @@
       <key>CFBundleURLSchemes</key>
       <array>
         <string>vitre</string>
-        <string>t3code</string>
       </array>
     </dict>
   </array>
@@ -45,8 +44,10 @@
   </dict>
   <key>NSHighResolutionCapable</key>
   <true/>
+  <key>NSScreenCaptureUsageDescription</key>
+  <string>Vitre captures its workspace window for optional screenshots and visual verification.</string>
   <key>NSHumanReadableCopyright</key>
-  <string>Copyright © 2026 T3 Tools. MIT licensed.</string>
+  <string>Copyright © 2026 Vitre. MIT licensed.</string>
   <key>NSRequiresAquaSystemAppearance</key>
   <false/>
   <key>NSSupportsAutomaticGraphicsSwitching</key>

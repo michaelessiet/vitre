@@ -79,7 +79,7 @@ export function knowledgeGraphNote(input: KnowledgeGraphNoteInput): string {
 
   return `
 
-## T3 Code knowledge graph
+## Vitre knowledge graph
 
 A knowledge graph of this workspace already exists: ${input.nodeCount.toLocaleString("en-US")} nodes and ${input.edgeCount.toLocaleString("en-US")} edges extracted from ${builtFrom}, built ${describeAge(ageMs)}. The \`t3-code\` MCP server's \`graph_*\` tools read it, and reading it costs no file access.
 

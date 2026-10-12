@@ -556,9 +556,9 @@ export const makeServerLayer = Layer.unwrap(
           Effect.sleep("250 millis").pipe(
             Effect.andThen(reconcileDesiredCloudLink(`http://127.0.0.1:${address.port}`)),
             Effect.retry({ times: 4 }),
-            Effect.tap(() => Effect.logInfo("T3 Connect desired link reconciled on startup")),
+            Effect.tap(() => Effect.logInfo("Vitre Connect desired link reconciled on startup")),
             Effect.catch((cause) =>
-              Effect.logWarning("Failed to reconcile T3 Connect desired link on startup", {
+              Effect.logWarning("Failed to reconcile Vitre Connect desired link on startup", {
                 cause,
               }),
             ),

@@ -145,7 +145,7 @@ export const ClientSettingsSchema = Schema.Struct({
   wordWrap: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   /**
    * Open file links in a third-party editor (Cursor, VS Code, …) instead of
-   * the built-in editor. Off by default: files open inside T3 Code.
+   * the built-in editor. Off by default: files open inside Vitre.
    */
   openFilesInExternalEditor: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   /** Show the editor banner when the open file changed on disk under edits. */
@@ -398,7 +398,7 @@ export const OpenCodeSettings = makeProviderSettingsSchema(
       Schema.withDecodingDefault(Effect.succeed("")),
       Schema.annotateKey({
         title: "Server URL",
-        description: "Leave blank to let T3 Code spawn the server when needed.",
+        description: "Leave blank to let Vitre spawn the server when needed.",
         providerSettingsForm: {
           placeholder: "http://127.0.0.1:4096",
           clearWhenEmpty: "omit",
@@ -569,7 +569,7 @@ export type ObservabilitySettings = typeof ObservabilitySettings.Type;
  * Knowledge graph (graphify) settings.
  *
  * Off by default and gated on `enabled`: graphify is an external Python tool
- * that T3 Code does not ship, so nothing about the feature may cost anything
+ * that Vitre does not ship, so nothing about the feature may cost anything
  * — bundle size, subprocesses, disk — for users who never turn it on.
  */
 export const DEFAULT_GRAPH_RETENTION_DAYS = 60;
