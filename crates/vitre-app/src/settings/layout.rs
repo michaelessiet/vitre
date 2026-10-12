@@ -174,7 +174,7 @@ impl SettingsPanel {
                             .pl(px(100.))
                             .gap_3()
                             .child(Icon::new(IconName::PanelLeft).size_4())
-                            .child(div().text_sm().font_semibold().child("T3 Code")),
+                            .child(div().text_sm().font_semibold().child("Vitre")),
                     )
                     .child(nav)
                     .child(

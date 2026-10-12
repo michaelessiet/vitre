@@ -25,11 +25,54 @@ describe("LanguageServers", () => {
   });
 
   describe("resolveRegistry", () => {
-    it("returns the built-in registry when no custom servers are configured", () => {
+    it("includes the optional Kotlin default when no custom servers are configured", () => {
       const registry = resolveRegistry([]);
-      expect(new Set(registry.supportedExtensions)).toEqual(new Set(BUILTIN_EXTENSIONS));
+      expect(new Set(registry.supportedExtensions)).toEqual(
+        new Set([...BUILTIN_EXTENSIONS, ".kt", ".kts"]),
+      );
       expect(registry.bindingForPath("src/index.ts")?.languageId).toBe("typescript");
       expect(registry.bindingForPath("README.md")).toBe(null);
+      for (const path of ["src/Greeting.kt", "build.gradle.kts", "Main.KT"]) {
+        expect(registry.bindingForPath(path)).toMatchObject({
+          languageId: "kotlin",
+          server: { command: "kotlin-language-server", args: [], bundled: false },
+        });
+      }
+    });
+
+    it("preserves custom Kotlin server commands and extension ownership", () => {
+      for (const serverId of ["kotlin", "jetbrains-kotlin"]) {
+        const registry = resolveRegistry([
+          {
+            serverId,
+            displayName: "Custom Kotlin",
+            command: "my-kotlin-server",
+            args: ["--stdio"],
+            languageId: "kotlin",
+            extensions: [".kt", ".kts"],
+          },
+        ]);
+        expect(registry.bindingForPath("Main.kt")?.server.command).toBe("my-kotlin-server");
+        expect(registry.bindingForPath("build.gradle.kts")?.server.serverId).toBe(serverId);
+        expect(
+          registry.servers.filter((server) => server.command === "kotlin-language-server"),
+        ).toHaveLength(0);
+      }
+    });
+
+    it("adds only unclaimed Kotlin extensions beside a custom binding", () => {
+      const registry = resolveRegistry([
+        {
+          serverId: "scripts",
+          displayName: "Scripts",
+          command: "script-server",
+          args: [],
+          languageId: "kotlin",
+          extensions: [".kts"],
+        },
+      ]);
+      expect(registry.bindingForPath("Main.kt")?.server.command).toBe("kotlin-language-server");
+      expect(registry.bindingForPath("build.gradle.kts")?.server.command).toBe("script-server");
     });
 
     it("merges custom servers and binds their extensions", () => {

@@ -326,6 +326,11 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
       yield* writeKeybindingsConfig(keybindingsConfigPath, [
         { key: "mod+p", command: "quickSearch.open", when: "!terminalFocus" },
         { key: "mod+shift+k", command: "commandPalette.toggle", when: "!terminalFocus" },
+        {
+          key: "mod+shift+]",
+          command: "rightPanel.nextSurface",
+          when: "rightPanelFocus",
+        },
       ]);
 
       yield* Effect.gen(function* () {
@@ -343,6 +348,10 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
       const palette = byCommand.get("commandPalette.toggle");
       assert.equal(palette?.key, "mod+shift+k");
       assert.equal(palette?.when, "!terminalFocus");
+
+      const nextSurface = byCommand.get("rightPanel.nextSurface");
+      assert.equal(nextSurface?.key, "mod+shift+]");
+      assert.isUndefined(nextSurface?.when);
 
       // Exactly one rule per migrated command — a rewrite, not a duplicate.
       assert.lengthOf(

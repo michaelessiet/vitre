@@ -10,9 +10,11 @@ mod git_gutter;
 mod glass;
 mod graph;
 mod icons;
+mod image_render;
 mod keymap;
 mod lsp;
 mod palette;
+mod platform_capabilities;
 mod search;
 mod settings;
 mod sidebar_prefs;
@@ -24,8 +26,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
-    App, AppContext as _, KeyBinding, Styled as _, TitlebarOptions, WindowBackgroundAppearance,
-    WindowOptions, point, px, size,
+    App, AppContext as _, KeyBinding, Styled as _, TitlebarOptions, WindowOptions, point, px, size,
 };
 use gpui_component::{Root, Theme, ThemeRegistry};
 use serde_json::Value;
@@ -171,6 +172,9 @@ fn main() {
         selftest(config);
     }
 
+    // Overlap Node startup with native font and theme initialization.
+    let supervisor = Arc::new(Supervisor::start(config));
+    let status_rx = supervisor.status();
     let app = gpui_platform::application().with_assets(assets::VitreAssets);
     let (link_tx, mut link_rx) = tokio::sync::mpsc::unbounded_channel();
     app.on_open_urls(move |urls| {
@@ -350,9 +354,10 @@ fn main() {
         // connection arrives. Fixed copies here would survive a user's remove
         // or rebind and silently restore the old chord.
 
-        let supervisor = Arc::new(Supervisor::start(config));
-        let status_rx = supervisor.status();
-        cx.on_app_quit(move |_| {
+        cx.on_app_quit(move |cx| {
+            // GPUI closes windows only after invoking quit observers. Hide now
+            // so graceful sidecar cleanup does not leave a frozen window visible.
+            cx.hide();
             supervisor.shutdown();
             async {}
         })
@@ -370,10 +375,11 @@ fn main() {
                     appears_transparent: true,
                     traffic_light_position: Some(point(px(16.), px(18.))),
                 }),
-                window_background: WindowBackgroundAppearance::Blurred,
+                window_background: glass::window_background(),
                 ..Default::default()
             },
             |window, cx| {
+                glass::install_window_effect(window);
                 // The theme setting decides whether the OS gets a vote:
                 // "System" follows the window appearance, light/dark pin the
                 // corresponding Vitre palette and ignore it (Electron's

@@ -1,14 +1,10 @@
 //! One terminal pane: Electron's `TerminalViewport` (xterm.js instance) as a
 //! GPUI entity around an `alacritty_terminal::Term` used PTY-less — the Node
-//! sidecar owns the PTY, this view folds the `terminal.attach` stream into a
-//! buffer (vitre-state reducer), replays it through the VT parser, paints the
-//! grid, and turns keystrokes into `terminal.write` calls.
-//!
-//! The buffer replay protocol is the Electron one exactly (§2.2 of the port
-//! spec): on every version change, delta-append when the new buffer extends
-//! the old one, else `ESC c` full reset + rewrite; system messages are
-//! written locally as `\r\n[terminal] …\r\n`; `closed`/`exited` transitions
-//! fire the exit latch once and bubble to the drawer, which closes the tab.
+//! sidecar owns the PTY. Output events feed the VT parser directly; snapshots,
+//! restarts and explicit clears reset it. Retained history is never replayed
+//! because a busy terminal exceeded the server buffer limit. System messages
+//! are written locally; closed/exited transitions fire the exit latch once
+//! and bubble to the drawer, which closes the tab.
 //!
 //! Mouse selection drives Electron's `readSelectionAction` flow: drag (or
 //! double/triple-click) selects via alacritty's selection model, and on
@@ -52,7 +48,9 @@ use vitre_client::EnvironmentClient;
 use vitre_contracts::methods::{TerminalAttach, TerminalResize, TerminalWrite};
 use vitre_contracts::{TerminalAttachInput, TerminalResizeInput, TerminalWriteInput};
 use vitre_rpc::TypedStreamEvent;
-use vitre_state::terminal::{TerminalBufferState, TerminalClientStatus, apply_attach_event};
+use vitre_state::terminal::{
+    TerminalBufferState, TerminalClientStatus, TerminalPlayback, apply_playback_event,
+};
 use vitre_state::terminal_context::{TerminalContextSelection, normalize_terminal_context_text};
 
 use super::tnes;
@@ -376,9 +374,16 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) {
         for event in events {
-            apply_attach_event(&mut self.buffer, event);
+            match apply_playback_event(&mut self.buffer, event) {
+                TerminalPlayback::Append(bytes) => self.advance(bytes.as_bytes(), cx),
+                TerminalPlayback::Reset(bytes) => {
+                    self.advance(b"\x1bc", cx);
+                    self.advance(bytes.as_bytes(), cx);
+                }
+                TerminalPlayback::None => {}
+            }
+            self.reconcile(cx);
         }
-        self.reconcile(cx);
     }
 
     /// §2.2: apply the folded buffer to the Term when the version moved.
@@ -388,19 +393,6 @@ impl TerminalView {
             return;
         }
         let prev = std::mem::take(&mut self.prev);
-        if current.buffer.len() >= prev.buffer.len() && current.buffer.starts_with(&prev.buffer) {
-            let delta = current.buffer[prev.buffer.len()..].to_string();
-            if !delta.is_empty() {
-                self.advance(delta.as_bytes(), cx);
-            }
-        } else {
-            // RIS: full reset (also drops scrollback, like xterm's reset()).
-            self.advance(b"\x1bc", cx);
-            if !current.buffer.is_empty() {
-                let full = current.buffer.clone();
-                self.advance(full.as_bytes(), cx);
-            }
-        }
         if let Some(error) = &current.error
             && current.error != prev.error
         {

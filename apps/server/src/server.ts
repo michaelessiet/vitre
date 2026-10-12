@@ -464,15 +464,8 @@ export const makeServerLayer = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
 
-    yield* fixPath();
+    yield* fixPath(config.mode === "desktop" ? config.providerStatusCacheDir : undefined);
 
-    const httpListeningLayer = Layer.effectDiscard(
-      Effect.gen(function* () {
-        yield* HttpServer.HttpServer;
-        const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
-        yield* startup.markHttpListening;
-      }),
-    );
     const runtimeStateLayer = Layer.effectDiscard(
       Effect.acquireRelease(
         Effect.gen(function* () {
@@ -568,10 +561,11 @@ export const makeServerLayer = Layer.unwrap(
     );
 
     const serverApplicationLayer = Layer.mergeAll(
-      HttpRouter.serve(makeRoutesLayer, {
-        disableLogger: !config.logWebSocketEvents,
-      }),
-      httpListeningLayer,
+      ServerRuntimeStartup.markHttpReadyAfterServing(
+        HttpRouter.serve(makeRoutesLayer, {
+          disableLogger: !config.logWebSocketEvents,
+        }),
+      ),
       runtimeStateLayer,
       tailscaleServeLayer,
       cloudDesiredLinkReconcileLayer,

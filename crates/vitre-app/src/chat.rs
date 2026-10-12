@@ -9,13 +9,20 @@ mod branch_toolbar;
 mod changed_files;
 mod diff_panel;
 mod drafts;
+mod feedback;
+#[cfg(debug_assertions)]
+mod feedback_verification;
+mod file_links;
 mod git_actions;
+mod images;
 #[cfg(debug_assertions)]
 mod menu_verification;
 #[cfg(debug_assertions)]
 mod phase5_verification;
 mod plan_save;
+mod plan_timeline;
 mod polish;
+use feedback::CopyButton;
 #[cfg(debug_assertions)]
 mod polish_verification;
 mod preview;
@@ -27,6 +34,9 @@ mod preview_verification;
 mod project_actions;
 mod project_icons;
 mod project_scripts;
+mod question_reply;
+#[cfg(debug_assertions)]
+mod reasoning_verification;
 mod review_comments;
 mod right_panel;
 mod sidebar;
@@ -35,6 +45,9 @@ mod terminal_contexts;
 mod terminal_drawer;
 mod terminal_links;
 mod terminal_view;
+mod text;
+#[cfg(debug_assertions)]
+mod text_verification;
 mod thread_actions;
 #[cfg(test)]
 mod thread_actions_tests;
@@ -92,8 +105,8 @@ use vitre_state::local_dispatch::{LocalDispatchSnapshot, merge_optimistic_messag
 use vitre_state::review_comments::{ReviewCommentContext, append_review_comments_to_prompt};
 use vitre_state::session_logic::{
     ActivePlanState, ApprovalRequestKind, PendingApproval, PendingUserInput, PlanStepStatus,
-    derive_active_plan_state, derive_latest_context_window_snapshot, derive_pending_approvals,
-    derive_pending_user_inputs,
+    UserInputQuestion, derive_active_plan_state, derive_latest_context_window_snapshot,
+    derive_pending_approvals, derive_pending_user_inputs,
 };
 use vitre_state::terminal_context::{TerminalContextSelection, append_terminal_contexts_to_prompt};
 use vitre_state::work_log::{self, DerivedTimelineRow, TimelineDeriveInput, WorkLogEntry};
@@ -107,6 +120,7 @@ use crate::palette::command_palette::{
 pub use crate::palette::quick_search::QuickSearchMode;
 use crate::palette::quick_search::{QuickSearch, QuickSearchEvent};
 use crate::sidebar_prefs::SidebarPrefs;
+use text::chat_text;
 
 actions!(
     vitre,
@@ -190,6 +204,7 @@ pub struct ChatApp {
     draft_project: Option<ProjectId>,
     draft_model: Option<ModelSelection>,
     draft_mode: Option<ProviderInteractionMode>,
+    ask_mode: bool,
     draft_creating: bool,
     draft_send_after_create: Option<ThreadId>,
     graph_panels: HashMap<String, Entity<crate::graph::GraphPanel>>,
@@ -222,6 +237,7 @@ pub struct ChatApp {
     provider_snapshots: Vec<vitre_contracts::ServerProvider>,
     shell: ShellState,
     thread: Option<OpenThread>,
+    source_plan_thread: Option<SourcePlanThread>,
     composer: Entity<TextareaState>,
     last_error: Option<SharedString>,
     /// Immediate mode feedback while the shell-scoped event round-trips.
@@ -238,7 +254,9 @@ pub struct ChatApp {
     display_messages: Vec<OrchestrationMessage>,
     /// Visually paced prefixes for assistant messages that are still
     /// streaming. Protocol state remains authoritative in `display_messages`.
-    smoothed_assistant_text: HashMap<MessageId, String>,
+    smoothed_assistant_text: HashMap<MessageId, usize>,
+    message_markdown: HashMap<MessageId, text::MessageMarkdown>,
+    plan_markdown: HashMap<String, plan_timeline::PlanMarkdown>,
     smoothing_tick: Option<Task<()>>,
     /// The cleared composer state retained until the dispatch is acknowledged,
     /// so a transport failure can restore an untouched composer for retry.
@@ -247,6 +265,8 @@ pub struct ChatApp {
     responding: HashSet<String>,
     /// Local draft state for the active pending user-input request.
     input_draft: Option<InputDraft>,
+    input_answer: Entity<TextareaState>,
+    text_question_form: Option<question_reply::TextQuestionForm>,
     /// Files staged to send with the next turn (data-URL attachments).
     pending_attachments: Vec<PendingAttachment>,
     /// Signed server URLs (and optimistic data URLs) keyed by attachment id.
@@ -432,6 +452,35 @@ struct InputDraft {
     request_id: String,
     question_index: usize,
     selections: HashMap<String, Vec<String>>,
+    custom_answers: HashMap<String, String>,
+}
+
+fn user_input_answer(
+    question: &UserInputQuestion,
+    draft: &InputDraft,
+) -> Option<serde_json::Value> {
+    if let Some(answer) = draft
+        .custom_answers
+        .get(&question.id)
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
+        return Some(serde_json::Value::String(answer.to_string()));
+    }
+    let selected = draft.selections.get(&question.id)?;
+    if question.multi_select {
+        (!selected.is_empty()).then(|| {
+            serde_json::Value::Array(
+                selected
+                    .iter()
+                    .cloned()
+                    .map(serde_json::Value::String)
+                    .collect(),
+            )
+        })
+    } else {
+        selected.first().cloned().map(serde_json::Value::String)
+    }
 }
 
 /// A file staged in the composer, already encoded as the wire's data-URL
@@ -472,6 +521,7 @@ struct MentionState {
 enum ComposerMenuItem {
     Model,
     InteractionMode(ProviderInteractionMode),
+    AskMode,
     ProviderCommand {
         name: String,
         description: String,
@@ -505,6 +555,14 @@ enum ComposerTriggerKind {
 struct OpenThread {
     id: ThreadId,
     /// Keeps the sync task alive; dropped (aborted) on reselection.
+    _handle: ThreadHandle,
+    state: ThreadState,
+}
+
+struct SourcePlanThread {
+    thread_id: ThreadId,
+    plan_id: String,
+    /// Keeps the source thread synchronized while its plan is shown in the dock.
     _handle: ThreadHandle,
     state: ThreadState,
 }
@@ -1107,7 +1165,7 @@ impl Render for ImageLightbox {
             )
             .child(
                 h_flex()
-                    .min_h(px(560.))
+                    .h((window.viewport_size().height - px(220.)).clamp(px(120.), px(560.)))
                     .items_center()
                     .gap_2()
                     .child(
@@ -1118,11 +1176,11 @@ impl Render for ImageLightbox {
                             .on_click(cx.listener(|this, _, _, cx| this.step(-1, cx))),
                     )
                     .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .h_full()
-                            .child(img(url).size_full().object_fit(ObjectFit::Contain)),
+                        div().flex_1().min_w_0().h_full().child(
+                            img(images::full_source(url))
+                                .size_full()
+                                .object_fit(ObjectFit::Contain),
+                        ),
                     )
                     .child(
                         Button::new("lightbox-next")
@@ -1266,6 +1324,24 @@ fn proposed_plan_title(markdown: &str) -> Option<String> {
     })
 }
 
+fn proposed_plan_is_implemented(plan: &OrchestrationThreadProposedPlans) -> bool {
+    matches!(plan.implemented_at, Some(Some(Some(_))))
+}
+
+fn ask_mode_prompt(ask: bool, prompt: &str) -> String {
+    if !ask {
+        return prompt.to_string();
+    }
+    format!(
+        "<vitre_ask_mode>\nFor this turn, use Ask mode: answer questions about the codebase and explain your findings. Use available tools, skills, and MCP integrations when useful, and carry out actions the user explicitly requests. Do not infer a request to implement code changes from a question or explanation request. Respect existing permissions and approval requirements. These mode instructions apply only to this turn.\n</vitre_ask_mode>\n\n{prompt}"
+    )
+}
+
+fn displayed_user_prompt(prompt: &str) -> &str {
+    let prefix = ask_mode_prompt(true, "");
+    prompt.strip_prefix(&prefix).unwrap_or(prompt)
+}
+
 fn collapsed_plan_markdown(markdown: &str) -> String {
     let mut lines = Vec::new();
     let mut visible = 0usize;
@@ -1279,7 +1355,14 @@ fn collapsed_plan_markdown(markdown: &str) -> String {
         }
         lines.push(line);
     }
-    lines.join("\n")
+    let preview = lines.join("\n");
+    // A minified paragraph or code line can be arbitrarily long even when
+    // there are fewer than eight lines. Bound that preview too, on UTF-8 edges.
+    if let Some((end, _)) = preview.char_indices().nth(900) {
+        format!("{}…", &preview[..end])
+    } else {
+        preview
+    }
 }
 
 fn resolve_interaction_mode(
@@ -1369,6 +1452,14 @@ fn parse_user_inline_segments(text: &str, skills: &HashSet<String>) -> Vec<UserI
     segments
 }
 
+fn render_user_plain_text(text: String) -> gpui::Div {
+    div()
+        .min_w_0()
+        .max_w_full()
+        .whitespace_normal()
+        .child(chat_text(text))
+}
+
 fn plan_filename(markdown: &str) -> String {
     let stem = proposed_plan_title(markdown)
         .unwrap_or_else(|| "plan".into())
@@ -1382,8 +1473,36 @@ fn plan_filename(markdown: &str) -> String {
 
 /// Add the desktop chat affordances gpui-component deliberately leaves to
 /// callers: language + copy for fenced code, and copy/expand for tables.
-fn assistant_markdown(id: SharedString, source: SharedString) -> impl IntoElement {
+fn assistant_markdown(
+    id: SharedString,
+    source: SharedString,
+    chat: Option<gpui::WeakEntity<ChatApp>>,
+) -> impl IntoElement {
+    assistant_markdown_with_state(id, source, chat, None)
+}
+
+fn assistant_markdown_with_state(
+    id: SharedString,
+    source: SharedString,
+    chat: Option<gpui::WeakEntity<ChatApp>>,
+    state: Option<Entity<gpui_component::text::TextViewState>>,
+) -> impl IntoElement {
+    assistant_markdown_view(id, source, chat, state, false)
+}
+
+fn assistant_markdown_view(
+    id: SharedString,
+    source: SharedString,
+    chat: Option<gpui::WeakEntity<ChatApp>>,
+    state: Option<Entity<gpui_component::text::TextViewState>>,
+    scrollable: bool,
+) -> impl IntoElement {
     let copy_source = source.clone();
+    let table_chat = chat.clone();
+    let view = state
+        .as_ref()
+        .map(TextView::new)
+        .unwrap_or_else(|| TextView::markdown(id.clone(), source));
     div()
         .id(id.clone())
         .debug_selector({
@@ -1391,8 +1510,14 @@ fn assistant_markdown(id: SharedString, source: SharedString) -> impl IntoElemen
             move || format!("markdown-context-{id}")
         })
         .w_full()
+        .when(scrollable, |this| this.h_full())
         .child(
-            TextView::markdown(id, source)
+            view.scrollable(scrollable)
+                .on_link_click(move |url, _, window, cx| {
+                    if let Some(chat) = &chat {
+                        let _ = chat.update(cx, |chat, cx| chat.open_chat_link(url, window, cx));
+                    }
+                })
                 .selectable(true)
                 .code_block_actions(|block, _, cx| {
                     let code = block.code().to_string();
@@ -1407,18 +1532,10 @@ fn assistant_markdown(id: SharedString, source: SharedString) -> impl IntoElemen
                                 .text_color(cx.theme().muted_foreground)
                                 .child(language),
                         )
-                        .child(
-                            Button::new("copy-code")
-                                .ghost()
-                                .xsmall()
-                                .icon(Icon::new(IconName::Copy))
-                                .tooltip("Copy code")
-                                .on_click(move |_, _, cx| {
-                                    cx.write_to_clipboard(ClipboardItem::new_string(code.clone()));
-                                }),
-                        )
+                        .child(CopyButton::new("copy-code", code.clone(), "Copy code"))
                 })
-                .table_actions(|table, _, _| {
+                .table_actions(move |table, _, _| {
+                    let table_chat = table_chat.clone();
                     let markdown = table.markdown.clone();
                     let csv = table_to_csv(table);
                     let expanded = table.clone();
@@ -1427,24 +1544,16 @@ fn assistant_markdown(id: SharedString, source: SharedString) -> impl IntoElemen
                         .justify_end()
                         .gap_1()
                         .child(
-                            Button::new("copy-table-markdown")
-                                .ghost()
-                                .xsmall()
-                                .label("Copy MD")
-                                .on_click(move |_, _, cx| {
-                                    cx.write_to_clipboard(ClipboardItem::new_string(
-                                        markdown.clone(),
-                                    ));
-                                }),
+                            CopyButton::new(
+                                "copy-table-markdown",
+                                markdown.clone(),
+                                "Copy table as Markdown",
+                            )
+                            .label("Copy MD"),
                         )
                         .child(
-                            Button::new("copy-table-csv")
-                                .ghost()
-                                .xsmall()
-                                .label("Copy CSV")
-                                .on_click(move |_, _, cx| {
-                                    cx.write_to_clipboard(ClipboardItem::new_string(csv.clone()));
-                                }),
+                            CopyButton::new("copy-table-csv", csv.clone(), "Copy table as CSV")
+                                .label("Copy CSV"),
                         )
                         .child(
                             Button::new("expand-table")
@@ -1454,7 +1563,9 @@ fn assistant_markdown(id: SharedString, source: SharedString) -> impl IntoElemen
                                 .tooltip("Expand table")
                                 .on_click(move |_, window, cx| {
                                     let source: SharedString = expanded.markdown.clone().into();
+                                    let table_chat = table_chat.clone();
                                     window.open_dialog(cx, move |dialog, _, _| {
+                                        let table_chat = table_chat.clone();
                                         dialog.title("Table").w(px(900.)).content({
                                             let source = source.clone();
                                             move |content, _, _| {
@@ -1463,6 +1574,19 @@ fn assistant_markdown(id: SharedString, source: SharedString) -> impl IntoElemen
                                                         "expanded-table",
                                                         source.clone(),
                                                     )
+                                                    .on_link_click({
+                                                        let chat = table_chat.clone();
+                                                        move |url, _, window, cx| {
+                                                            if let Some(chat) = &chat {
+                                                                let _ =
+                                                                    chat.update(cx, |chat, cx| {
+                                                                        chat.open_chat_link(
+                                                                            url, window, cx,
+                                                                        )
+                                                                    });
+                                                            }
+                                                        }
+                                                    })
                                                     .selectable(true),
                                                 )
                                             }
@@ -1629,7 +1753,7 @@ fn format_mention(path: &str) -> String {
 
 /// The lucide icon a work-log entry renders with (Electron
 /// `workEntryIconName`, mapped from name strings to the vendored assets).
-fn work_entry_icon(entry: &WorkLogEntry) -> Icon {
+pub(crate) fn work_entry_icon(entry: &WorkLogEntry) -> Icon {
     match work_log::work_entry_icon_name(entry) {
         "message-circle" => Icon::new(VitreIcon::MessageCircle),
         "terminal" => Icon::new(VitreIcon::Terminal),
@@ -1817,6 +1941,16 @@ impl ChatApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        Self::new_with_backend(home, status_rx, true, window, cx)
+    }
+
+    fn new_with_backend(
+        home: &Path,
+        status_rx: watch::Receiver<SupervisorStatus>,
+        connect_backend: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let sidebar = SidebarPrefs::load(home);
         let right_panel = right_panel::RightPanelPrefs::load(home);
         // Panel width persists on drag end only (`Resized` fires once per
@@ -1826,6 +1960,11 @@ impl ChatApp {
             TextareaState::new(window, cx)
                 .placeholder("Ask anything, @tag files/folders, $use skills, or / for commands")
                 .auto_grow(1, 8)
+        });
+        let input_answer = cx.new(|cx| {
+            TextareaState::new(window, cx)
+                .placeholder("Type your answer…")
+                .auto_grow(1, 4)
         });
         let mut subscriptions = vec![cx.subscribe_in(
             &composer,
@@ -1847,6 +1986,29 @@ impl ChatApp {
                 _ => {}
             },
         )];
+        subscriptions.push(cx.subscribe_in(
+            &input_answer,
+            window,
+            |this: &mut Self, input, event: &InputEvent, _, cx| {
+                if matches!(event, InputEvent::Change) {
+                    let value = input.read(cx).value().to_string();
+                    let question = this.active_pending_user_input().and_then(|pending| {
+                        this.input_draft
+                            .as_ref()
+                            .and_then(|draft| pending.questions.get(draft.question_index).cloned())
+                    });
+                    if let (Some(draft), Some(question)) = (&mut this.input_draft, question) {
+                        draft
+                            .custom_answers
+                            .insert(question.id.clone(), value.clone());
+                        if !value.trim().is_empty() {
+                            draft.selections.remove(&question.id);
+                        }
+                    }
+                    cx.notify();
+                }
+            },
+        ));
         subscriptions.push(cx.subscribe(
             &sidebar_resize,
             |this: &mut Self, state, _: &gpui_component::resizable::ResizablePanelEvent, cx| {
@@ -1890,76 +2052,79 @@ impl ChatApp {
 
         // Start the environment client on the tokio runtime, then follow the
         // shell channel for the lifetime of the window.
-        cx.spawn(async move |this, cx| {
-            let client = cx
-                .update(|cx| {
-                    Tokio::spawn_result(cx, async move {
-                        Ok(Arc::new(EnvironmentClient::start(status_rx)))
+        if connect_backend {
+            cx.spawn(async move |this, cx| {
+                let client = cx
+                    .update(|cx| {
+                        Tokio::spawn_result(cx, async move {
+                            Ok(Arc::new(EnvironmentClient::start(status_rx)))
+                        })
                     })
-                })
-                .await;
-            let client = match client {
-                Ok(client) => client,
-                Err(error) => {
-                    let _ = this.update(cx, |app, cx| {
-                        app.last_error = Some(format!("client start failed: {error:#}").into());
-                        cx.notify();
-                    });
-                    return;
-                }
-            };
-            let mut shell_rx = client.shell();
-            if this
-                .update(cx, |app, cx| {
-                    app.client = Some(client.clone());
-                    // Settings opened in the sub-second window before the
-                    // client existed would otherwise sit on "not connected"
-                    // for as long as it stayed open.
-                    if let Some(settings) = app.settings.clone() {
-                        settings.update(cx, |panel, cx| panel.attach_client(client, cx));
+                    .await;
+                let client = match client {
+                    Ok(client) => client,
+                    Err(error) => {
+                        let _ = this.update(cx, |app, cx| {
+                            app.last_error = Some(format!("client start failed: {error:#}").into());
+                            cx.notify();
+                        });
+                        return;
                     }
-                    app.spawn_terminal_metadata_loop(cx);
-                    app.spawn_server_keymap_loop(cx);
-                    cx.notify();
-                })
-                .is_err()
-            {
-                return;
-            }
-            loop {
-                let state = shell_rx.borrow_and_update().clone();
+                };
+                let mut shell_rx = client.shell();
                 if this
                     .update(cx, |app, cx| {
-                        app.shell = state;
-                        if let Some((thread_id, pending)) = &app.pending_interaction_mode
-                            && app.shell_thread(thread_id).is_some_and(|thread| {
-                                thread
-                                    .interaction_mode
-                                    .as_ref()
-                                    .and_then(|mode| mode.as_ref())
-                                    == Some(pending)
-                            })
-                        {
-                            app.pending_interaction_mode = None;
+                        app.client = Some(client.clone());
+                        // Settings opened in the sub-second window before the
+                        // client existed would otherwise sit on "not connected"
+                        // for as long as it stayed open.
+                        if let Some(settings) = app.settings.clone() {
+                            settings
+                                .update(cx, |panel, cx| panel.attach_client(client.clone(), cx));
                         }
-                        // The open thread's row keeps its "seen" stamp current
-                        // so a turn finishing under your eyes doesn't light up
-                        // as unread.
-                        app.sync_thread_visit();
-                        app.rebuild_sidebar();
-                        app.maybe_open_debug_thread(cx);
+                        app.spawn_terminal_metadata_loop(cx);
+                        app.spawn_server_keymap_loop(cx);
                         cx.notify();
                     })
                     .is_err()
                 {
                     return;
                 }
-                if shell_rx.changed().await.is_err() {
-                    return;
+                loop {
+                    let state = shell_rx.borrow_and_update().clone();
+                    if this
+                        .update(cx, |app, cx| {
+                            app.shell = state;
+                            if let Some((thread_id, pending)) = &app.pending_interaction_mode
+                                && app.shell_thread(thread_id).is_some_and(|thread| {
+                                    thread
+                                        .interaction_mode
+                                        .as_ref()
+                                        .and_then(|mode| mode.as_ref())
+                                        == Some(pending)
+                                })
+                            {
+                                app.pending_interaction_mode = None;
+                            }
+                            // The open thread's row keeps its "seen" stamp current
+                            // so a turn finishing under your eyes doesn't light up
+                            // as unread.
+                            app.sync_thread_visit();
+                            app.rebuild_sidebar();
+                            app.maybe_open_debug_thread(cx);
+                            cx.notify();
+                        })
+                        .is_err()
+                    {
+                        return;
+                    }
+                    if shell_rx.changed().await.is_err() {
+                        return;
+                    }
                 }
-            }
-        })
-        .detach();
+            })
+            .detach();
+        }
 
         // Seed the focus path so the palette shortcuts land before the user
         // has clicked anything.
@@ -1994,6 +2159,7 @@ impl ChatApp {
             draft_project: None,
             draft_model: None,
             draft_mode: None,
+            ask_mode: false,
             draft_creating: false,
             draft_send_after_create: None,
             graph_panels: HashMap::new(),
@@ -2019,6 +2185,7 @@ impl ChatApp {
             provider_snapshots: Vec::new(),
             shell: ShellState::default(),
             thread: None,
+            source_plan_thread: None,
             composer,
             last_error: None,
             pending_interaction_mode: None,
@@ -2026,10 +2193,14 @@ impl ChatApp {
             optimistic_user_messages: Vec::new(),
             display_messages: Vec::new(),
             smoothed_assistant_text: HashMap::new(),
+            message_markdown: HashMap::new(),
+            plan_markdown: HashMap::new(),
             smoothing_tick: None,
             pending_send: None,
             responding: HashSet::new(),
             input_draft: None,
+            input_answer,
+            text_question_form: None,
             pending_attachments: Vec::new(),
             attachment_urls: HashMap::new(),
             attachment_urls_loading: HashSet::new(),
@@ -2374,6 +2545,13 @@ impl ChatApp {
         cx.notify();
     }
 
+    fn active_surface(&self) -> Option<AnyElement> {
+        if let Some(panel) = self.settings.as_ref() {
+            return Some(panel.clone().into_any_element());
+        }
+        None
+    }
+
     /// The sidebar's FolderPlus button: the palette opened straight into the
     /// add-project flow (Electron's `openCommandPalette({open:"add-project"})`).
     pub fn open_add_project(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -2530,7 +2708,7 @@ impl ChatApp {
     fn ensure_files_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         /// How many background roots to keep warm (each holds a watch loop).
         const FILES_CACHE_ROOTS: usize = 4;
-        let (Some(client), Some(cwd)) = (self.client.clone(), self.search_root()) else {
+        let (Some(client), Some(cwd)) = (self.client.clone(), self.file_viewer_root()) else {
             return;
         };
         if self
@@ -2580,7 +2758,7 @@ impl ChatApp {
                 crate::files::FilesEvent::Opened(path) => {
                     if let Some(key) = app.dock_thread_key() {
                         let cwd = source.read(cx).cwd().to_string();
-                        if app.search_root().as_ref() != Some(&cwd) { return; }
+                        if app.file_viewer_root().as_ref() != Some(&cwd) { return; }
                         let root = Some(cwd).filter(|r| Some(r) != app.open_project_root().as_ref());
                         if app.right_panel.map.active_surface(&key).is_some_and(|s| matches!(s, vitre_state::right_panel::RightPanelSurface::File { relative_path, root_path, .. } if relative_path == path && root_path == &root)) { return; }
                         app.right_panel.map.open_file(&key, path, None, None, root.as_deref());
@@ -2833,7 +3011,14 @@ impl ChatApp {
             let _ = this.update(cx, |app, cx| { app.responding.remove(&operation); cx.notify(); });
             match result {
                 Ok(_) => {
-                    let _ = this.update(cx, |app, cx| app.select_thread(thread_id, cx));
+                    let _ = this.update_in(cx, |app, window, cx| {
+                        app.select_thread(thread_id, cx);
+                        app.open_workspace_surface(
+                            vitre_state::right_panel::SurfaceKind::Plan,
+                            window,
+                            cx,
+                        );
+                    });
                 }
                 Err(error) => {
                     let _ = this.update_in(cx, |app, window, cx| {
@@ -2900,6 +3085,8 @@ impl ChatApp {
         self.local_dispatch = None;
         self.optimistic_user_messages.clear();
         self.display_messages.clear();
+        self.message_markdown.clear();
+        self.plan_markdown.clear();
         self.smoothed_assistant_text.clear();
         self.smoothing_tick = None;
         self.pending_send = None;
@@ -2907,6 +3094,7 @@ impl ChatApp {
         self.pending_interaction_mode = None;
         self.pending_timeline_anchor = None;
         self.expanded_user_messages.clear();
+        self.source_plan_thread = None;
         // Thread switch ≙ every changed-files card unmounting: the next
         // thread's cards re-run their auto-expand decision on first sight.
         self.changed_files.clear_local();
@@ -2952,6 +3140,7 @@ impl ChatApp {
                         // (`FollowMode::Tail`) and re-engages when the user
                         // scrolls back down, so this only has to resync rows.
                         app.rebuild_timeline(cx);
+                        app.sync_source_plan_thread(cx);
                         false
                     })
                     .unwrap_or(true);
@@ -2962,6 +3151,117 @@ impl ChatApp {
         })
         .detach();
         cx.notify();
+    }
+
+    /// Drop the open thread and return to the home view — Electron's
+    /// navigate-to-`/` after deleting the last thread of a project. The same
+    /// per-thread teardown as `select_thread`, with nothing opened after.
+    fn sync_source_plan_thread(&mut self, cx: &mut Context<Self>) {
+        let source = self
+            .thread
+            .as_ref()
+            .and_then(|open| open.state.view.as_ref().map(|view| (&open.id, view)))
+            .and_then(|(thread_id, view)| {
+                view.latest_turn
+                    .as_ref()
+                    .and_then(|turn| turn.source_proposed_plan.as_ref())
+                    .and_then(|source| source.as_ref())
+                    .map(|source| (thread_id.clone(), source.clone()))
+            });
+        let Some((current_thread_id, source)) = source else {
+            return;
+        };
+        if source.thread_id == current_thread_id {
+            self.source_plan_thread = None;
+            return;
+        }
+        if self.source_plan_thread.as_ref().is_some_and(|current| {
+            current.thread_id == source.thread_id && current.plan_id == source.plan_id.0
+        }) {
+            return;
+        }
+        let Some(client) = self.client.clone() else {
+            return;
+        };
+        let source_thread_id = source.thread_id;
+        let source_plan_id = source.plan_id.0;
+        let handle = client.open_thread(source_thread_id.clone());
+        let mut state_rx = handle.state();
+        self.source_plan_thread = Some(SourcePlanThread {
+            thread_id: source_thread_id.clone(),
+            plan_id: source_plan_id.clone(),
+            _handle: handle,
+            state: ThreadState::default(),
+        });
+        cx.spawn(async move |this, cx| {
+            loop {
+                let state = state_rx.borrow_and_update().clone();
+                let stop = this
+                    .update(cx, |app, cx| {
+                        let Some(source) = &mut app.source_plan_thread else {
+                            return true;
+                        };
+                        if source.thread_id != source_thread_id || source.plan_id != source_plan_id
+                        {
+                            return true;
+                        }
+                        source.state = state;
+                        cx.notify();
+                        false
+                    })
+                    .unwrap_or(true);
+                if stop || state_rx.changed().await.is_err() {
+                    return;
+                }
+            }
+        })
+        .detach();
+    }
+
+    pub(super) fn sidebar_proposed_plan(&self) -> Option<&OrchestrationThreadProposedPlans> {
+        let open = self.thread.as_ref()?;
+        let view = open.state.view.as_ref()?;
+        if let Some(source) = view
+            .latest_turn
+            .as_ref()
+            .and_then(|turn| turn.source_proposed_plan.as_ref())
+            .and_then(|source| source.as_ref())
+        {
+            let plans = if source.thread_id == open.id {
+                view.proposed_plans
+                    .as_ref()
+                    .and_then(|plans| plans.as_ref())
+            } else {
+                self.source_plan_thread
+                    .as_ref()
+                    .filter(|thread| {
+                        thread.thread_id == source.thread_id && thread.plan_id == source.plan_id.0
+                    })
+                    .and_then(|thread| thread.state.view.as_ref())
+                    .and_then(|view| view.proposed_plans.as_ref())
+                    .and_then(|plans| plans.as_ref())
+            };
+            if let Some(plan) =
+                plans.and_then(|plans| plans.iter().find(|plan| plan.id == source.plan_id.0))
+            {
+                return Some(plan);
+            }
+        }
+        if let Some(plan) = self.source_plan_thread.as_ref().and_then(|source| {
+            source
+                .state
+                .view
+                .as_ref()
+                .and_then(|view| view.proposed_plans.as_ref())
+                .and_then(|plans| plans.as_ref())
+                .and_then(|plans| plans.iter().find(|plan| plan.id == source.plan_id))
+        }) {
+            return Some(plan);
+        }
+        view.proposed_plans
+            .as_ref()
+            .and_then(|plans| plans.as_ref())
+            .and_then(|plans| plans.iter().max_by_key(|plan| &plan.updated_at.0))
     }
 
     /// Drop the open thread and return to the home view — Electron's
@@ -2982,6 +3282,8 @@ impl ChatApp {
         self.local_dispatch = None;
         self.optimistic_user_messages.clear();
         self.display_messages.clear();
+        self.message_markdown.clear();
+        self.plan_markdown.clear();
         self.smoothed_assistant_text.clear();
         self.smoothing_tick = None;
         self.pending_send = None;
@@ -2996,6 +3298,7 @@ impl ChatApp {
         self.terminal_views.clear();
         self.terminal_view_subs.clear();
         self.terminal_drag = None;
+        self.source_plan_thread = None;
         self.thread = None;
         self.rebuild_sidebar();
         self.sync_git_status(cx);
@@ -3042,7 +3345,7 @@ impl ChatApp {
         let raw_text = self.composer.read(cx).value().trim().to_string();
         let actionable_plan = self
             .shell_thread(&thread_id)
-            .is_some_and(|thread| thread.has_actionable_proposed_plan)
+            .is_some_and(|thread| thread.has_actionable_proposed_plan && !self.ask_mode)
             .then(|| {
                 view.proposed_plans
                     .as_ref()
@@ -3060,9 +3363,15 @@ impl ChatApp {
             && self.pending_terminal_contexts.is_empty()
             && self.pending_review_comments.is_empty()
         {
+            if raw_text.eq_ignore_ascii_case("/ask") {
+                self.composer
+                    .update(cx, |input, cx| input.clean(window, cx));
+                self.set_ask_mode(cx);
+                return;
+            }
             let standalone_mode = match raw_text.to_ascii_lowercase().as_str() {
                 "/plan" => Some(ProviderInteractionMode::Plan),
-                "/default" => Some(ProviderInteractionMode::Default),
+                "/default" | "/build" => Some(ProviderInteractionMode::Default),
                 _ => None,
             };
             if let Some(mode) = standalone_mode {
@@ -3115,6 +3424,7 @@ impl ChatApp {
         } else {
             (raw_text.clone(), selected_interaction_mode, None)
         };
+        let prompt_text = ask_mode_prompt(self.ask_mode, &prompt_text);
         let text = append_review_comments_to_prompt(
             &append_terminal_contexts_to_prompt(&prompt_text, &terminal_contexts),
             &review_comments,
@@ -3200,6 +3510,7 @@ impl ChatApp {
         self.pending_timeline_anchor = Some(message_id.clone());
         self.rebuild_timeline(cx);
 
+        let implementing_plan = source_proposed_plan.is_some();
         let command = ClientOrchestrationCommand::ThreadTurnStart {
             bootstrap: None,
             command_id: CommandId(fresh_id("vitre-cmd")),
@@ -3219,12 +3530,25 @@ impl ChatApp {
             r#type: Default::default(),
         };
         cx.spawn_in(window, async move |this, cx| {
-            if let Err(error) = client.dispatch(&command).await {
-                let _ = this.update_in(cx, |app, window, cx| {
-                    app.rollback_send(&message_id, window, cx);
-                    app.last_error = Some(format!("send failed: {}", error.user_message()).into());
-                    cx.notify();
-                });
+            match client.dispatch(&command).await {
+                Ok(_) if implementing_plan => {
+                    let _ = this.update_in(cx, |app, window, cx| {
+                        app.open_workspace_surface(
+                            vitre_state::right_panel::SurfaceKind::Plan,
+                            window,
+                            cx,
+                        );
+                    });
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    let _ = this.update_in(cx, |app, window, cx| {
+                        app.rollback_send(&message_id, window, cx);
+                        app.last_error =
+                            Some(format!("send failed: {}", error.user_message()).into());
+                        cx.notify();
+                    });
+                }
             }
         })
         .detach();
@@ -3394,12 +3718,18 @@ impl ChatApp {
                 request_id: request_id.to_string(),
                 question_index: 0,
                 selections: HashMap::new(),
+                custom_answers: HashMap::new(),
             });
         }
         self.input_draft.as_mut().expect("draft just ensured")
     }
 
-    fn toggle_user_input_option(&mut self, option_label: String, cx: &mut Context<Self>) {
+    fn toggle_user_input_option(
+        &mut self,
+        option_label: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(pending) = self.active_pending_user_input() else {
             return;
         };
@@ -3409,6 +3739,7 @@ impl ChatApp {
         let draft = self.input_draft_mut(&pending.request_id);
         let index = draft.question_index.min(pending.questions.len() - 1);
         let question = &pending.questions[index];
+        draft.custom_answers.remove(&question.id);
         let selections = draft.selections.entry(question.id.clone()).or_default();
         if question.multi_select {
             if let Some(position) = selections.iter().position(|label| *label == option_label) {
@@ -3421,15 +3752,18 @@ impl ChatApp {
             // Single-select answers advance immediately (Electron auto-advances
             // 200ms after the click).
             *selections = vec![option_label];
-            self.advance_user_input(cx);
+        }
+        self.input_answer
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        if !question.multi_select {
+            self.advance_user_input(window, cx);
         }
     }
 
     /// Move to the next question, or submit `ThreadUserInputRespond` from the
     /// last one. Answers mirror `resolvePendingUserInputAnswer`: label array
-    /// for multi-select questions, single label string otherwise. (Custom
-    /// free-text answers are a post-parity iteration.)
-    fn advance_user_input(&mut self, cx: &mut Context<Self>) {
+    /// for multi-select questions, single label string otherwise.
+    fn advance_user_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(pending) = self.active_pending_user_input() else {
             return;
         };
@@ -3442,26 +3776,38 @@ impl ChatApp {
         let thread_id = open.id.clone();
         let draft = self.input_draft_mut(&pending.request_id);
         let index = draft.question_index.min(pending.questions.len() - 1);
+        if user_input_answer(&pending.questions[index], draft).is_none() {
+            return;
+        }
         if index + 1 < pending.questions.len() {
             draft.question_index = index + 1;
+            let next = draft
+                .custom_answers
+                .get(&pending.questions[index + 1].id)
+                .cloned()
+                .unwrap_or_default();
+            self.input_answer
+                .update(cx, |input, cx| input.set_value(&next, window, cx));
             cx.notify();
             return;
         }
         let mut answers = serde_json::Map::new();
         for question in &pending.questions {
-            let labels = draft
-                .selections
-                .get(&question.id)
-                .cloned()
-                .unwrap_or_default();
-            let value = if question.multi_select {
-                serde_json::Value::Array(
-                    labels.into_iter().map(serde_json::Value::String).collect(),
-                )
-            } else if let Some(label) = labels.into_iter().next() {
-                serde_json::Value::String(label)
-            } else {
-                serde_json::Value::Null
+            let Some(value) = user_input_answer(question, draft) else {
+                draft.question_index = pending
+                    .questions
+                    .iter()
+                    .position(|item| item.id == question.id)
+                    .unwrap_or(0);
+                let value = draft
+                    .custom_answers
+                    .get(&question.id)
+                    .cloned()
+                    .unwrap_or_default();
+                self.input_answer
+                    .update(cx, |input, cx| input.set_value(&value, window, cx));
+                cx.notify();
+                return;
             };
             answers.insert(question.id.clone(), value);
         }
@@ -3474,6 +3820,25 @@ impl ChatApp {
             r#type: Default::default(),
         };
         self.dispatch_response(pending.request_id, command, cx);
+    }
+
+    fn previous_user_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(pending) = self.active_pending_user_input() else {
+            return;
+        };
+        let draft = self.input_draft_mut(&pending.request_id);
+        if draft.question_index == 0 {
+            return;
+        }
+        draft.question_index -= 1;
+        let value = draft
+            .custom_answers
+            .get(&pending.questions[draft.question_index].id)
+            .cloned()
+            .unwrap_or_default();
+        self.input_answer
+            .update(cx, |input, cx| input.set_value(&value, window, cx));
+        cx.notify();
     }
 
     /// Two-step checkpoint revert: the first click arms the message's button
@@ -3536,12 +3901,11 @@ impl ChatApp {
     }
 
     fn shell_threads(&self) -> Vec<OrchestrationThreadShell> {
-        let Some(snapshot) = &self.shell.snapshot else {
-            return Vec::new();
-        };
-        let mut threads: Vec<_> = snapshot
-            .threads
+        let mut threads: Vec<_> = self
+            .shell
+            .snapshot
             .iter()
+            .flat_map(|snapshot| snapshot.threads.iter())
             .filter(|thread| {
                 // archived_at: triple Option — only Some(Some(Some(_))) is set.
                 !matches!(&thread.archived_at, Some(Some(Some(_))))
@@ -3652,24 +4016,21 @@ impl ChatApp {
         value: serde_json::Value,
         cx: &mut Context<Self>,
     ) {
-        let Some(open) = &self.thread else {
+        let selection = if let Some(open) = &self.thread {
+            self.shell_thread(&open.id)
+                .map(|thread| thread.model_selection.clone())
+                .or_else(|| {
+                    open.state
+                        .view
+                        .as_ref()
+                        .map(|view| view.model_selection.clone())
+                })
+        } else {
+            self.draft_model_selection(cx)
+        };
+        let Some(mut selection) = selection else {
             return;
         };
-        let mut selection = self
-            .shell_thread(&open.id)
-            .map(|thread| thread.model_selection.clone())
-            .or_else(|| {
-                open.state
-                    .view
-                    .as_ref()
-                    .map(|view| view.model_selection.clone())
-            })
-            .unwrap_or(ModelSelection {
-                instance_id: None,
-                model: serde_json::Value::Null,
-                options: None,
-                provider: None,
-            });
         let mut options = selection
             .options
             .clone()
@@ -3774,6 +4135,9 @@ impl ChatApp {
     /// activity, session and turn events. Both the label and turn dispatch
     /// must use this same selection, including an unacknowledged click.
     fn current_interaction_mode(&self, thread_id: &ThreadId) -> ProviderInteractionMode {
+        if self.ask_mode {
+            return ProviderInteractionMode::Default;
+        }
         resolve_interaction_mode(
             self.pending_interaction_mode
                 .as_ref()
@@ -3839,6 +4203,13 @@ impl ChatApp {
             }
         })
         .detach();
+    }
+
+    fn set_ask_mode(&mut self, cx: &mut Context<Self>) {
+        self.set_interaction_mode(ProviderInteractionMode::Default, cx);
+        self.ask_mode = true;
+        self.schedule_draft_save(cx);
+        cx.notify();
     }
 
     fn set_runtime_mode(&mut self, runtime_mode: RuntimeMode, cx: &mut Context<Self>) {
@@ -4008,12 +4379,14 @@ impl ChatApp {
             ComposerTriggerKind::Slash => {
                 let builtins = [
                     ComposerMenuItem::Model,
+                    ComposerMenuItem::AskMode,
                     ComposerMenuItem::InteractionMode(ProviderInteractionMode::Plan),
                     ComposerMenuItem::InteractionMode(ProviderInteractionMode::Default),
                 ];
                 items.extend(builtins.into_iter().filter(|item| {
                     let label = match item {
                         ComposerMenuItem::Model => "model",
+                        ComposerMenuItem::AskMode => "ask",
                         ComposerMenuItem::InteractionMode(ProviderInteractionMode::Plan) => "plan",
                         ComposerMenuItem::InteractionMode(_) => "default",
                         _ => unreachable!(),
@@ -4194,6 +4567,10 @@ impl ChatApp {
             let (start, end) = (menu.token_start, menu.token_end);
             self.composer_menu = None;
             match item {
+                ComposerMenuItem::AskMode => {
+                    self.replace_composer_token(start, end, "", window, cx);
+                    self.set_ask_mode(cx);
+                }
                 ComposerMenuItem::Model => {
                     self.replace_composer_token(start, end, "", window, cx);
                     self.open_model_picker(window, cx);
@@ -4453,7 +4830,7 @@ impl ChatApp {
         .detach();
     }
 
-    fn sync_attachment_urls(&mut self, cx: &mut Context<Self>) {
+    fn sync_attachment_urls(&mut self, message_index: usize, cx: &mut Context<Self>) {
         let Some(client) = self.client.clone() else {
             return;
         };
@@ -4463,7 +4840,8 @@ impl ChatApp {
         let base_url = session.target.base_url;
         let ids: Vec<String> = self
             .display_messages
-            .iter()
+            .get(message_index)
+            .into_iter()
             .flat_map(|message| {
                 message
                     .attachments
@@ -4514,7 +4892,9 @@ impl ChatApp {
         let live_ids: HashSet<MessageId> = self
             .display_messages
             .iter()
-            .filter(|message| message.role == OrchestrationMessageRole::Assistant)
+            .filter(|message| {
+                message.role == OrchestrationMessageRole::Assistant && message.streaming
+            })
             .map(|message| message.id.clone())
             .collect();
         self.smoothed_assistant_text
@@ -4526,18 +4906,16 @@ impl ChatApp {
                 continue;
             }
             if !message.streaming {
-                self.smoothed_assistant_text
-                    .insert(message.id.clone(), message.text.0.clone());
                 continue;
             }
             let displayed = self
                 .smoothed_assistant_text
                 .entry(message.id.clone())
-                .or_insert_with(|| message.text.0.clone());
-            if !message.text.0.starts_with(displayed.as_str()) {
-                *displayed = message.text.0.clone();
+                .or_insert(message.text.0.len());
+            if *displayed > message.text.0.len() || !message.text.0.is_char_boundary(*displayed) {
+                *displayed = message.text.0.len();
             }
-            lagging |= displayed.len() < message.text.0.len();
+            lagging |= *displayed < message.text.0.len();
         }
         if !lagging || self.smoothing_tick.is_some() {
             return;
@@ -4549,31 +4927,31 @@ impl ChatApp {
                     .await;
                 let keep = this
                     .update(cx, |app, cx| {
-                        let targets: Vec<(MessageId, String)> = app
-                            .display_messages
-                            .iter()
-                            .filter(|message| {
-                                message.role == OrchestrationMessageRole::Assistant
-                                    && message.streaming
-                            })
-                            .map(|message| (message.id.clone(), message.text.0.clone()))
-                            .collect();
                         let mut changed_ids = HashSet::new();
                         let mut keep = false;
-                        for (id, target) in targets {
-                            let displayed =
-                                app.smoothed_assistant_text.entry(id.clone()).or_default();
-                            if !target.starts_with(displayed.as_str()) {
-                                *displayed = target.clone();
-                                changed_ids.insert(id);
+                        for message in &app.display_messages {
+                            if message.role != OrchestrationMessageRole::Assistant
+                                || !message.streaming
+                            {
                                 continue;
                             }
-                            if displayed.len() < target.len() {
-                                let suffix = &target[displayed.len()..];
-                                displayed.extend(suffix.chars().take(18));
-                                changed_ids.insert(id);
+                            let target = &message.text.0;
+                            let displayed = app
+                                .smoothed_assistant_text
+                                .entry(message.id.clone())
+                                .or_default();
+                            if *displayed > target.len() || !target.is_char_boundary(*displayed) {
+                                *displayed = target.len();
+                                changed_ids.insert(message.id.clone());
+                            } else if *displayed < target.len() {
+                                *displayed += target[*displayed..]
+                                    .chars()
+                                    .take(18)
+                                    .map(char::len_utf8)
+                                    .sum::<usize>();
+                                changed_ids.insert(message.id.clone());
                             }
-                            keep |= displayed.len() < target.len();
+                            keep |= *displayed < target.len();
                         }
                         for (index, row) in app.timeline.iter().enumerate() {
                             if let TimelineRow::Message(message_index) = row
@@ -4658,7 +5036,7 @@ impl ChatApp {
                             .text_xs()
                             .text_color(cx.theme().foreground)
                             .whitespace_normal()
-                            .child(SharedString::from(detail.clone())),
+                            .child(chat_text(detail.clone())),
                     ),
             );
         }
@@ -4755,14 +5133,14 @@ impl ChatApp {
                 div()
                     .text_sm()
                     .font_medium()
-                    .child(SharedString::from(option.label.clone())),
+                    .child(chat_text(option.label.clone())),
             );
             if !option.description.is_empty() && option.description != option.label {
                 labels = labels.child(
                     div()
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
-                        .child(SharedString::from(option.description.clone())),
+                        .child(chat_text(option.description.clone())),
                 );
             }
             let trailing: gpui::AnyElement = if is_selected {
@@ -4808,8 +5186,8 @@ impl ChatApp {
                 row.opacity(0.5)
             } else {
                 row.cursor_pointer()
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.toggle_user_input_option(label.clone(), cx);
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.toggle_user_input_option(label.clone(), window, cx);
                     }))
             };
             options = options.child(row);
@@ -4828,7 +5206,7 @@ impl ChatApp {
                             .text_size(px(11.))
                             .font_semibold()
                             .text_color(cx.theme().muted_foreground.opacity(0.55))
-                            .child(SharedString::from(question.header.to_uppercase())),
+                            .child(chat_text(question.header.to_uppercase())),
                     )
                     .when(pending.questions.len() > 1, |this| {
                         this.child(
@@ -4854,43 +5232,88 @@ impl ChatApp {
                 div()
                     .text_sm()
                     .text_color(cx.theme().foreground.opacity(0.9))
-                    .child(SharedString::from(question.question.clone())),
+                    .child(chat_text(question.question.clone())),
             )
-            .when(question.multi_select, |this| {
-                this.child(
-                    div()
-                        .mt_1()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground.opacity(0.65))
-                        .child("Select one or more options."),
-                )
-            })
+            .when(
+                question.multi_select && !question.options.is_empty(),
+                |this| {
+                    this.child(
+                        div()
+                            .mt_1()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground.opacity(0.65))
+                            .child("Select one or more options."),
+                    )
+                },
+            )
             .child(options)
-            .when(question.multi_select, |this| {
+            .child(
+                v_flex()
+                    .mt_3()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(if question.options.is_empty() {
+                                "Your answer"
+                            } else {
+                                "Or write your own answer"
+                            }),
+                    )
+                    .child(
+                        div()
+                            .rounded(cx.theme().radius)
+                            .border_1()
+                            .border_color(cx.theme().border)
+                            .bg(cx.theme().background)
+                            .px_2()
+                            .py_1()
+                            .child(
+                                Textarea::new(&self.input_answer)
+                                    .appearance(false)
+                                    .disabled(responding),
+                            ),
+                    ),
+            )
+            .child({
                 let is_last = question_index + 1 >= pending.questions.len();
-                this.child(
-                    h_flex().mt_3().justify_end().child(
+                h_flex()
+                    .mt_3()
+                    .justify_between()
+                    .child(
+                        Button::new("ui-back")
+                            .label("Back")
+                            .small()
+                            .disabled(responding || question_index == 0)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.previous_user_input(window, cx)
+                            })),
+                    )
+                    .child(
                         Button::new("ui-advance")
                             .label(if is_last { "Submit" } else { "Continue" })
                             .primary()
                             .small()
-                            .disabled(responding || selected.is_empty())
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.advance_user_input(cx);
+                            .disabled(
+                                responding
+                                    || self.input_draft.as_ref().is_none_or(|draft| {
+                                        user_input_answer(question, draft).is_none()
+                                    }),
+                            )
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.advance_user_input(window, cx);
                             })),
-                    ),
-                )
+                    )
             })
             .into_any_element()
     }
 
-    /// Right-hand plan panel (`PlanSidebar`): TASKS badge header + the active
-    /// TodoWrite plan's steps with status glyphs.
-    fn render_plan_sidebar(
+    fn render_plan_steps_content(
         &self,
         plan: &ActivePlanState,
         cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    ) -> gpui::Div {
         let mut steps = v_flex().gap_1();
         for (index, step) in plan.steps.iter().enumerate() {
             let glyph: gpui::AnyElement = match step.status {
@@ -4923,7 +5346,7 @@ impl ChatApp {
                         this.text_color(cx.theme().muted_foreground.opacity(0.7))
                     }
                 })
-                .child(SharedString::from(step.step.clone()));
+                .child(chat_text(step.step.clone()));
             let mut row = h_flex()
                 .id(("plan-step", index))
                 .items_center()
@@ -4947,7 +5370,7 @@ impl ChatApp {
                 div()
                     .text_size(px(13.))
                     .text_color(cx.theme().muted_foreground.opacity(0.8))
-                    .child(SharedString::from(explanation.clone())),
+                    .child(chat_text(explanation.clone())),
             );
         }
         content = content.child(
@@ -4963,6 +5386,15 @@ impl ChatApp {
                 .child(steps),
         );
 
+        content
+    }
+
+    /// Legacy compact task panel used until an accepted plan activates the dock.
+    fn render_plan_sidebar(
+        &self,
+        plan: &ActivePlanState,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
         v_flex()
             .w(px(340.))
             .h_full()
@@ -5001,8 +5433,83 @@ impl ChatApp {
                     .id("plan-steps")
                     .flex_1()
                     .overflow_y_scroll()
-                    .child(content),
+                    .child(self.render_plan_steps_content(plan, cx)),
             )
+            .into_any_element()
+    }
+
+    pub(super) fn render_dock_plan(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let active_plan = self
+            .thread
+            .as_ref()
+            .and_then(|open| open.state.view.as_ref())
+            .and_then(|view| {
+                derive_active_plan_state(
+                    &view.activities,
+                    view.latest_turn.as_ref().map(|turn| &turn.turn_id),
+                )
+            });
+        let proposed_plan = self.sidebar_proposed_plan();
+        if active_plan.is_none() && proposed_plan.is_none() {
+            return v_flex()
+                .size_full()
+                .items_center()
+                .justify_center()
+                .gap_1()
+                .text_color(cx.theme().muted_foreground)
+                .child("No plan is available for this thread.")
+                .into_any_element();
+        }
+
+        let mut content = v_flex().w_full().gap_4().p_4();
+        if let Some(plan) = proposed_plan {
+            content = content.child(
+                v_flex()
+                    .w_full()
+                    .gap_3()
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .child(
+                                div()
+                                    .px_1p5()
+                                    .rounded(px(5.))
+                                    .bg(cx.theme().info.opacity(0.15))
+                                    .text_size(px(10.))
+                                    .font_semibold()
+                                    .text_color(cx.theme().info)
+                                    .child("PLAN"),
+                            )
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .flex_1()
+                                    .truncate()
+                                    .text_sm()
+                                    .font_medium()
+                                    .child(SharedString::from(
+                                        proposed_plan_title(&plan.plan_markdown)
+                                            .unwrap_or_else(|| "Accepted plan".into()),
+                                    )),
+                            ),
+                    )
+                    .child(assistant_markdown(
+                        SharedString::from(format!("dock-plan-{}", plan.id)),
+                        SharedString::from(plan.plan_markdown.clone()),
+                        Some(cx.entity().downgrade()),
+                    )),
+            );
+        }
+        if let Some(plan) = active_plan.as_ref() {
+            content = content.child(self.render_plan_steps_content(plan, cx));
+        }
+
+        div()
+            .id("dock-plan-scroll")
+            .size_full()
+            .overflow_y_scroll()
+            .child(content)
             .into_any_element()
     }
 
@@ -5019,6 +5526,8 @@ impl ChatApp {
             .cloned()
         else {
             self.display_messages.clear();
+            self.message_markdown.clear();
+            self.plan_markdown.clear();
             self.smoothed_assistant_text.clear();
             self.smoothing_tick = None;
             self.timeline = Vec::new();
@@ -5036,7 +5545,19 @@ impl ChatApp {
 
         self.display_messages =
             merge_optimistic_messages(&view.messages, &self.optimistic_user_messages);
-        self.sync_attachment_urls(cx);
+        let message_ids = self
+            .display_messages
+            .iter()
+            .map(|message| &message.id)
+            .collect::<HashSet<_>>();
+        self.message_markdown
+            .retain(|id, _| message_ids.contains(id));
+        self.plan_markdown.retain(|id, _| {
+            view.proposed_plans
+                .as_ref()
+                .and_then(|p| p.as_ref())
+                .is_some_and(|plans| plans.iter().any(|p| &p.id == id))
+        });
         self.sync_stream_smoothing(cx);
         let view = view.as_ref();
         let running = view
@@ -5129,13 +5650,12 @@ impl ChatApp {
             .as_ref()
             .and_then(|plans| plans.as_ref())
         {
-            let insert_at = rows
-                .iter()
-                .position(|row| *row == TimelineRow::Running)
-                .unwrap_or(rows.len());
-            rows.splice(
-                insert_at..insert_at,
-                (0..plans.len()).map(TimelineRow::ProposedPlan),
+            plan_timeline::insert_plans(
+                &mut rows,
+                plans,
+                &self.display_messages,
+                &self.work_entries,
+                &turn_folds,
             );
         }
         self.work_toggles = work_toggles;
@@ -5372,7 +5892,11 @@ impl ChatApp {
                             .border_1()
                             .border_color(cx.theme().border.opacity(0.8))
                             .cursor_pointer()
-                            .child(img(url).size_full().object_fit(ObjectFit::Cover))
+                            .child(
+                                img(images::source(url))
+                                    .size_full()
+                                    .object_fit(ObjectFit::Cover),
+                            )
                             .on_click(move |_, window, cx| {
                                 let lightbox = cx.new(|cx| {
                                     ImageLightbox::new(all_images.clone(), lightbox_index, cx)
@@ -5419,11 +5943,11 @@ impl ChatApp {
                             .bg(cx.theme().background.opacity(0.5))
                             .when(url.is_some(), |chip| chip.cursor_pointer())
                             .child(crate::icons::file_icon(&file.name.0, cx))
-                            .child(div().max_w(px(220.)).truncate().child(name))
+                            .child(div().max_w(px(220.)).truncate().child(chat_text(name)))
                             .child(
                                 div()
                                     .text_color(cx.theme().muted_foreground)
-                                    .child(SharedString::from(size)),
+                                    .child(chat_text(size)),
                             )
                             .when_some(url, |chip, url| {
                                 chip.on_click(move |_, _, cx| cx.open_url(&url))
@@ -5462,14 +5986,17 @@ impl ChatApp {
         let segments = parse_user_inline_segments(text, &self.enabled_skill_names());
         h_flex()
             .w_full()
+            .min_w_0()
             .flex_wrap()
             .gap_1()
             .whitespace_normal()
             .children(segments.into_iter().enumerate().map(|(index, segment)| {
                 match segment {
-                    UserInlineSegment::Text(text) => {
-                        div().child(SharedString::from(text)).into_any_element()
-                    }
+                    UserInlineSegment::Text(text) => div()
+                        .id(("inline-text", index))
+                        .min_w_0()
+                        .child(render_user_plain_text(text))
+                        .into_any_element(),
                     UserInlineSegment::Skill(name) => h_flex()
                         .id(("inline-skill", index))
                         .gap_1()
@@ -5481,7 +6008,7 @@ impl ChatApp {
                         .bg(cx.theme().magenta.opacity(0.1))
                         .text_color(cx.theme().magenta)
                         .child(Icon::new(VitreIcon::Zap).size_3())
-                        .child(format!("${name}"))
+                        .child(chat_text(format!("${name}")))
                         .into_any_element(),
                     UserInlineSegment::Thread { label, id } => h_flex()
                         .id(("inline-thread", index))
@@ -5495,7 +6022,7 @@ impl ChatApp {
                         .text_color(cx.theme().info)
                         .cursor_pointer()
                         .child(Icon::new(VitreIcon::MessageCircle).size_3())
-                        .child(format!("#{label}"))
+                        .child(chat_text(format!("#{label}")))
                         .on_click(
                             cx.listener(move |this, _, _, cx| this.select_thread(id.clone(), cx)),
                         )
@@ -5513,6 +6040,31 @@ impl ChatApp {
         let Some(row) = self.timeline.get(index).copied() else {
             return div().into_any_element();
         };
+        let markdown = if let TimelineRow::Message(i) = row {
+            self.sync_attachment_urls(i, cx);
+            self.display_messages
+                .get(i)
+                .filter(|message| message.role == OrchestrationMessageRole::Assistant)
+                .map(|message| {
+                    (
+                        message.id.clone(),
+                        if message.streaming {
+                            self.smoothed_assistant_text
+                                .get(&message.id)
+                                .and_then(|end| message.text.0.get(..*end))
+                                .unwrap_or(&message.text.0)
+                                .to_owned()
+                        } else {
+                            message.text.0.clone()
+                        },
+                    )
+                })
+        } else {
+            None
+        };
+        let markdown_state =
+            markdown.map(|(id, source)| self.message_markdown_state(&id, &source, cx));
+        let plan_content = self.plan_content(row, cx);
         let Some(view) = self
             .thread
             .as_ref()
@@ -5533,7 +6085,12 @@ impl ChatApp {
                     };
                     let is_user = message.role == OrchestrationMessageRole::User;
                     if is_user {
-                        let mut line = h_flex().w_full().justify_end().items_center().gap_2();
+                        let mut line = h_flex()
+                            .w_full()
+                            .min_w_0()
+                            .justify_end()
+                            .items_center()
+                            .gap_2();
                         if let Some(turn_count) = revert_turn_counts.get(&message.id).copied() {
                             let armed = self.pending_revert.as_ref() == Some(&message.id);
                             let message_id = message.id.clone();
@@ -5576,14 +6133,16 @@ impl ChatApp {
                             line = line.child(button);
                         }
                         let attachments = self.render_message_attachments(message, cx);
-                        let copy_text = message.text.0.clone();
-                        let can_collapse = should_collapse_user_message(&message.text.0);
+                        let user_text = displayed_user_prompt(&message.text.0);
+                        let copy_text = user_text.to_string();
+                        let can_collapse = should_collapse_user_message(user_text);
                         let expanded = self.expanded_user_messages.contains(&message.id);
                         let message_id = message.id.clone();
                         let timestamp: SharedString =
                             message_timestamp(&message.created_at.0, cx).into();
                         let timestamp_tooltip: SharedString = message.created_at.0.clone().into();
                         let bubble = v_flex()
+                            .min_w_0()
                             .max_w(relative(0.8))
                             .gap_2()
                             .rounded(px(16.))
@@ -5595,6 +6154,7 @@ impl ChatApp {
                             .child(
                                 v_flex()
                                     .w_full()
+                                    .min_w_0()
                                     // Messages carrying trailing context blocks
                                     // (`<terminal_context>` / `<element_context>`)
                                     // or `<review_comment>` blocks render chips and
@@ -5603,18 +6163,16 @@ impl ChatApp {
                                     .child(
                                         div()
                                             .w_full()
+                                            .min_w_0()
                                             .when(can_collapse && !expanded, |body| {
                                                 body.max_h(px(176.)).overflow_hidden()
                                             })
                                             .map(|bubble| {
-                                                match self.user_message_body(&message.text.0, cx) {
+                                                match self.user_message_body(user_text, cx) {
                                                     Some(body) => bubble.child(body),
-                                                    None => {
-                                                        bubble.child(self.render_user_inline_text(
-                                                            &message.text.0,
-                                                            cx,
-                                                        ))
-                                                    }
+                                                    None => bubble.child(
+                                                        self.render_user_inline_text(user_text, cx),
+                                                    ),
                                                 }
                                             }),
                                     )
@@ -5652,28 +6210,32 @@ impl ChatApp {
                                     .items_center()
                                     .text_size(px(10.))
                                     .text_color(cx.theme().muted_foreground.opacity(0.65))
+                                    .child(CopyButton::new(
+                                        SharedString::from(format!(
+                                            "copy-user-message-{}",
+                                            message.id.0
+                                        )),
+                                        copy_text.clone(),
+                                        "Copy message",
+                                    ))
                                     .child(
-                                        Button::new(("copy-user-message", message_index))
-                                            .ghost()
-                                            .xsmall()
-                                            .icon(Icon::new(IconName::Copy).size_3())
-                                            .tooltip("Copy message")
-                                            .on_click(move |_, _, cx| {
-                                                cx.write_to_clipboard(ClipboardItem::new_string(
-                                                    copy_text.clone(),
-                                                ));
-                                            }),
-                                    )
-                                    .child(
-                                        Button::new(("user-message-time", message_index))
+                                        div()
+                                            .id(("user-message-time", message_index))
+                                            .h_5()
+                                            .px_1()
+                                            .flex()
+                                            .items_center()
                                             .when(
                                                 !ClientSettings::get(cx).show_message_timestamps,
-                                                |button| button.invisible(),
+                                                |timestamp| timestamp.invisible(),
                                             )
-                                            .label(timestamp)
-                                            .ghost()
-                                            .xsmall()
-                                            .tooltip(timestamp_tooltip),
+                                            .tooltip(move |window, cx| {
+                                                gpui_component::tooltip::Tooltip::new(
+                                                    timestamp_tooltip.clone(),
+                                                )
+                                                .build(window, cx)
+                                            })
+                                            .child(timestamp),
                                     ),
                             )
                             .into_any_element()
@@ -5682,11 +6244,13 @@ impl ChatApp {
                         let text = if streaming {
                             self.smoothed_assistant_text
                                 .get(&message.id)
-                                .cloned()
-                                .unwrap_or_else(|| message.text.0.clone())
+                                .and_then(|end| message.text.0.get(..*end))
+                                .unwrap_or(&message.text.0)
+                                .to_owned()
                         } else {
                             message.text.0.clone()
                         };
+                        let text_questions = self.render_text_question_card(&message.id, cx);
                         let mut column = v_flex().child(
                             div()
                                 .px_1()
@@ -5702,13 +6266,18 @@ impl ChatApp {
                                         // `markdown()` helper keys by call
                                         // site and would collide in this
                                         // loop.
-                                        this.child(assistant_markdown(
+                                        this.child(assistant_markdown_with_state(
                                             SharedString::from(format!("md-{}", message.id.0)),
                                             SharedString::from(text),
+                                            Some(cx.entity().downgrade()),
+                                            markdown_state.clone(),
                                         ))
                                     }
                                 }),
                         );
+                        if let Some(card) = text_questions {
+                            column = column.child(card);
+                        }
                         // Changed-files card, right after the markdown body
                         // (Electron's AssistantChangedFilesSection). Can
                         // appear mid-stream: placeholder checkpoints land
@@ -5734,28 +6303,32 @@ impl ChatApp {
                                     .items_center()
                                     .text_size(px(10.))
                                     .text_color(cx.theme().muted_foreground.opacity(0.65))
+                                    .child(CopyButton::new(
+                                        SharedString::from(format!(
+                                            "copy-assistant-message-{}",
+                                            message.id.0
+                                        )),
+                                        copy_text.clone(),
+                                        "Copy response",
+                                    ))
                                     .child(
-                                        Button::new(("copy-assistant-message", message_index))
-                                            .ghost()
-                                            .xsmall()
-                                            .icon(Icon::new(IconName::Copy).size_3())
-                                            .tooltip("Copy response")
-                                            .on_click(move |_, _, cx| {
-                                                cx.write_to_clipboard(ClipboardItem::new_string(
-                                                    copy_text.clone(),
-                                                ));
-                                            }),
-                                    )
-                                    .child(
-                                        Button::new(("assistant-message-time", message_index))
+                                        div()
+                                            .id(("assistant-message-time", message_index))
+                                            .h_5()
+                                            .px_1()
+                                            .flex()
+                                            .items_center()
                                             .when(
                                                 !ClientSettings::get(cx).show_message_timestamps,
-                                                |button| button.invisible(),
+                                                |timestamp| timestamp.invisible(),
                                             )
-                                            .label(timestamp)
-                                            .ghost()
-                                            .xsmall()
-                                            .tooltip(tooltip),
+                                            .tooltip(move |window, cx| {
+                                                gpui_component::tooltip::Tooltip::new(
+                                                    tooltip.clone(),
+                                                )
+                                                .build(window, cx)
+                                            })
+                                            .child(timestamp),
                                     ),
                             );
                         }
@@ -5772,21 +6345,10 @@ impl ChatApp {
                         return div().into_any_element();
                     };
                     let expanded = self.expanded_plans.contains(&plan.id);
-                    let collapsible = plan.plan_markdown.chars().count() > 900
-                        || plan
-                            .plan_markdown
-                            .lines()
-                            .filter(|line| !line.trim().is_empty())
-                            .count()
-                            > 8;
-                    let displayed = if collapsible && !expanded {
-                        collapsed_plan_markdown(&plan.plan_markdown)
-                    } else {
-                        plan.plan_markdown.clone()
-                    };
-                    let copy = plan.plan_markdown.clone();
-                    let export = plan.plan_markdown.clone();
-                    let save = plan.plan_markdown.clone();
+                    let (title, collapsible, displayed, state, source) = plan_content.unwrap();
+                    let copy = source.clone();
+                    let export = source.clone();
+                    let save = source;
                     let plan_id = plan.id.clone();
                     v_flex()
                         .w_full()
@@ -5819,23 +6381,13 @@ impl ChatApp {
                                         .truncate()
                                         .text_sm()
                                         .font_medium()
-                                        .child(SharedString::from(
-                                            proposed_plan_title(&plan.plan_markdown)
-                                                .unwrap_or_else(|| "Proposed plan".into()),
-                                        )),
+                                        .child(title),
                                 )
-                                .child(
-                                    Button::new(("copy-plan", plan_index))
-                                        .ghost()
-                                        .xsmall()
-                                        .icon(Icon::new(IconName::Copy))
-                                        .tooltip("Copy plan")
-                                        .on_click(move |_, _, cx| {
-                                            cx.write_to_clipboard(ClipboardItem::new_string(
-                                                copy.clone(),
-                                            ));
-                                        }),
-                                )
+                                .child(CopyButton::new(
+                                    ("copy-plan", plan_index),
+                                    copy.clone(),
+                                    "Copy plan",
+                                ))
                                 .child(
                                     Button::new(("save-plan-workspace", plan_index))
                                         .ghost()
@@ -5843,7 +6395,11 @@ impl ChatApp {
                                         .icon(IconName::Folder)
                                         .tooltip("Save plan to workspace")
                                         .on_click(cx.listener(move |app, _, window, cx| {
-                                            app.save_plan_in_workspace(save.clone(), window, cx);
+                                            app.save_plan_in_workspace(
+                                                save.to_string(),
+                                                window,
+                                                cx,
+                                            );
                                         })),
                                 )
                                 .child(
@@ -5853,14 +6409,22 @@ impl ChatApp {
                                         .icon(Icon::new(IconName::File))
                                         .tooltip("Export as Markdown")
                                         .on_click(cx.listener(move |this, _, window, cx| {
-                                            this.export_plan(export.clone(), window, cx)
+                                            this.export_plan(export.to_string(), window, cx)
                                         })),
                                 ),
                         )
-                        .child(div().p_3().child(assistant_markdown(
-                            SharedString::from(format!("plan-{}", plan.id)),
-                            SharedString::from(displayed),
-                        )))
+                        .child(
+                            div()
+                                .p_3()
+                                .when(collapsible && expanded, |body| body.h(px(360.)))
+                                .child(assistant_markdown_view(
+                                    SharedString::from(format!("plan-{}", plan.id)),
+                                    displayed,
+                                    Some(cx.entity().downgrade()),
+                                    Some(state),
+                                    collapsible && expanded,
+                                )),
+                        )
                         .when(collapsible, |card| {
                             card.child(
                                 Button::new(("expand-plan", plan_index))
@@ -5872,10 +6436,7 @@ impl ChatApp {
                                         "Show full plan"
                                     })
                                     .on_click(cx.listener(move |this, _, _, cx| {
-                                        if !this.expanded_plans.remove(&plan_id) {
-                                            this.expanded_plans.insert(plan_id.clone());
-                                        }
-                                        this.remeasure_row(index, cx);
+                                        this.toggle_plan(&plan_id, index, cx);
                                     })),
                             )
                         })
@@ -5966,7 +6527,7 @@ impl ChatApp {
                                         .text_size(px(12.))
                                         .font_medium()
                                         .text_color(heading_color)
-                                        .child(SharedString::from(heading)),
+                                        .child(chat_text(heading)),
                                 )
                                 .children(preview.map(|preview| {
                                     div()
@@ -5975,7 +6536,7 @@ impl ChatApp {
                                         .truncate()
                                         .text_size(px(12.))
                                         .text_color(cx.theme().muted_foreground.opacity(0.55))
-                                        .child(SharedString::from(preview))
+                                        .child(chat_text(preview))
                                 })),
                         );
                     if body.is_some() {
@@ -6036,13 +6597,11 @@ impl ChatApp {
                                 .child(
                                     div()
                                         .id(SharedString::from(format!("work-body-{}", entry.id)))
-                                        .max_h(px(256.))
-                                        .overflow_y_scroll()
                                         .font_family(cx.theme().mono_font_family.clone())
                                         .text_size(px(11.))
                                         .text_color(cx.theme().muted_foreground)
                                         .whitespace_normal()
-                                        .child(SharedString::from(body)),
+                                        .child(chat_text(body)),
                                 ),
                         );
                     }
@@ -6225,9 +6784,114 @@ impl ChatApp {
     /// Chat column mirroring the Electron `ChatView`: header, error banner,
     /// centered max-w-3xl timeline (user bubbles right, assistant plain,
     /// low-weight activity rows), rounded-22 composer with circular send.
-    fn render_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_thread_header(
+        &mut self,
+        title: SharedString,
+        project: Option<(String, String)>,
+        header_inset: gpui::Pixels,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        // Header controls (Electron: `ProjectScriptsControl` then
+        // `GitActionsControl` at the far right of the chat header, before the
+        // panel toggle).
+        let script_controls = self.render_project_scripts(cx);
+        let git_controls = self.render_git_actions(cx);
+        let workspace_controls = self.render_workspace_roots(cx);
+        h_flex()
+            .h(px(crate::ui::CHROME_HEIGHT))
+            .px_5()
+            .pl(header_inset)
+            .items_center()
+            .gap_2()
+            .flex_shrink_0()
+            .child(
+                h_flex()
+                    .debug_selector(|| "thread-header-title".into())
+                    .flex_1()
+                    .min_w_0()
+                    .gap_2()
+                    .children(project.map(|(name, cwd)| {
+                        h_flex()
+                            .min_w_0()
+                            .max_w(px(200.))
+                            .gap_2()
+                            .items_center()
+                            .text_sm()
+                            .font_medium()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(self.project_icon(&name, &cwd, cx))
+                            .child(div().min_w_0().truncate().child(name))
+                            .child(
+                                div()
+                                    .text_color(cx.theme().muted_foreground.opacity(0.4))
+                                    .child("/"),
+                            )
+                    }))
+                    .child(
+                        div()
+                            .id("chat-thread-title")
+                            .flex_1()
+                            .min_w_0()
+                            .text_sm()
+                            .font_medium()
+                            .truncate()
+                            .tooltip({
+                                let title = title.clone();
+                                move |window, cx| {
+                                    gpui_component::tooltip::Tooltip::new(title.clone())
+                                        .build(window, cx)
+                                }
+                            })
+                            .child(title),
+                    ),
+            )
+            .children(script_controls)
+            .child(workspace_controls)
+            .children(git_controls)
+            .child(
+                Button::new("toggle-right-panel")
+                    .icon(if self.dock_open() {
+                        IconName::PanelRightClose
+                    } else {
+                        IconName::PanelRightOpen
+                    })
+                    .ghost()
+                    .xsmall()
+                    .tooltip("Toggle right panel")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.toggle_right_panel(window, cx);
+                    })),
+            )
+            .into_any_element()
+    }
+
+    fn render_chat(
+        &mut self,
+        header_inset: gpui::Pixels,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        self.sync_text_question_form(window, cx);
+        let pending_request = self
+            .active_pending_user_input()
+            .map(|pending| pending.request_id);
+        if let Some(request_id) = pending_request {
+            if self
+                .input_draft
+                .as_ref()
+                .is_none_or(|draft| draft.request_id != request_id)
+            {
+                self.input_draft_mut(&request_id);
+                self.input_answer
+                    .update(cx, |input, cx| input.set_value("", window, cx));
+            }
+        } else if self.input_draft.is_some() {
+            self.input_draft = None;
+            self.input_answer
+                .update(cx, |input, cx| input.set_value("", window, cx));
+        }
         let Some(open) = &self.thread else {
-            return self.render_draft_landing(window, cx);
+            return polish::reveal("draft-enter", self.render_draft_landing(window, cx));
         };
         let title = self.thread_title(&open.id);
         let project = self
@@ -6290,10 +6954,6 @@ impl ChatApp {
                 .as_ref()
                 .is_some_and(|instance| instance == &provider.instance_id.0)
         });
-        let show_interaction_mode = selected_provider
-            .and_then(|provider| provider.show_interaction_mode_toggle)
-            .flatten()
-            .unwrap_or(true);
         let option_descriptors: Vec<ProviderOptionDescriptor> = selected_provider
             .and_then(|provider| {
                 provider
@@ -6364,6 +7024,7 @@ impl ChatApp {
         let send_button: gpui::AnyElement = if running {
             div()
                 .id("stop")
+                .debug_selector(|| "stop".into())
                 .size_8()
                 .rounded_full()
                 .flex()
@@ -6399,6 +7060,7 @@ impl ChatApp {
         } else if !can_send {
             div()
                 .id("send-disabled")
+                .debug_selector(|| "send-disabled".into())
                 .size_8()
                 .rounded_full()
                 .flex()
@@ -6414,6 +7076,7 @@ impl ChatApp {
         } else {
             div()
                 .id("send")
+                .debug_selector(|| "send".into())
                 .size_8()
                 .rounded_full()
                 .flex()
@@ -6500,96 +7163,13 @@ impl ChatApp {
                 })
                 .into_any_element()
         };
-        let interaction_toggle = show_interaction_mode.then(|| {
-            self.render_mode_switch(
-                interaction_mode == ProviderInteractionMode::Plan,
-                window,
-                cx,
-            )
-        });
-        let traits_picker: Option<AnyElement> = (!option_descriptors.is_empty()).then(|| {
-            let descriptors = option_descriptors.clone();
-            let current_options = selected_model_options.clone();
-            let chat = cx.entity().downgrade();
-            Button::new("model-traits")
-                .label("Reasoning")
-                .icon(Icon::new(VitreIcon::Zap))
-                .ghost()
-                .small()
-                .dropdown_menu(move |mut menu, _, _| {
-                    for descriptor in &descriptors {
-                        match descriptor {
-                            ProviderOptionDescriptor::SelectProviderOptionDescriptor(select) => {
-                                menu = menu.item(PopupMenuItem::label(select.label.0.clone()));
-                                let current = current_options
-                                    .get(&select.id.0)
-                                    .and_then(serde_json::Value::as_str)
-                                    .map(str::to_string)
-                                    .or_else(|| {
-                                        select.current_value.clone().flatten().map(|value| value.0)
-                                    });
-                                for option in &select.options {
-                                    let id = select.id.0.clone();
-                                    let value = option.id.0.clone();
-                                    let prompt_injected = select
-                                        .prompt_injected_values
-                                        .as_ref()
-                                        .and_then(|values| values.as_ref())
-                                        .is_some_and(|values| {
-                                            values.iter().any(|candidate| candidate.0 == value)
-                                        });
-                                    let owner = chat.clone();
-                                    menu = menu.item(
-                                        PopupMenuItem::new(option.label.0.clone())
-                                            .checked(current.as_ref() == Some(&value))
-                                            .on_click(move |_, window, cx| {
-                                                let id = id.clone();
-                                                let value = value.clone();
-                                                let _ = owner.update(cx, |this, cx| {
-                                                    if prompt_injected {
-                                                        this.set_prompt_effort(&value, window, cx);
-                                                    } else {
-                                                        this.set_model_option(
-                                                            id,
-                                                            serde_json::Value::String(value),
-                                                            cx,
-                                                        )
-                                                    }
-                                                });
-                                            }),
-                                    );
-                                }
-                            }
-                            ProviderOptionDescriptor::BooleanProviderOptionDescriptor(boolean) => {
-                                let current = current_options
-                                    .get(&boolean.id.0)
-                                    .and_then(serde_json::Value::as_bool)
-                                    .or_else(|| boolean.current_value.flatten())
-                                    .unwrap_or(false);
-                                let id = boolean.id.0.clone();
-                                let owner = chat.clone();
-                                menu = menu.item(
-                                    PopupMenuItem::new(boolean.label.0.clone())
-                                        .checked(current)
-                                        .on_click(move |_, _, cx| {
-                                            let id = id.clone();
-                                            let _ = owner.update(cx, |this, cx| {
-                                                this.set_model_option(
-                                                    id,
-                                                    serde_json::Value::Bool(!current),
-                                                    cx,
-                                                )
-                                            });
-                                        }),
-                                );
-                            }
-                            ProviderOptionDescriptor::Unknown(_) => {}
-                        }
-                    }
-                    menu
-                })
-                .into_any_element()
-        });
+        let interaction_toggle = Some(self.render_mode_switch(
+            interaction_mode == ProviderInteractionMode::Plan,
+            window,
+            cx,
+        ));
+        let traits_picker =
+            self.render_reasoning_picker(option_descriptors, selected_model_options, cx);
         // Context meter (ContextWindowMeter port): usage ring beside the send
         // button, latest `context-window.updated` payload behind it. Electron
         // shows the detail in a hover popover; a tooltip carries it here.
@@ -6656,7 +7236,7 @@ impl ChatApp {
                                 .ghost()
                                 .small()
                                 .icon(Icon::new(IconName::Plus))
-                                .tooltip("Attach files")
+                                .tooltip("Add attachments and context")
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.attach_files(window, cx);
                                 })),
@@ -6736,7 +7316,7 @@ impl ChatApp {
         let review_chips = self.render_pending_review_comments(cx);
         let actionable_plan = self
             .shell_thread(&open.id)
-            .filter(|thread| thread.has_actionable_proposed_plan)
+            .filter(|thread| thread.has_actionable_proposed_plan && !self.ask_mode)
             .and(view)
             .and_then(|view| view.proposed_plans.as_ref())
             .and_then(|plans| plans.as_ref())
@@ -6847,7 +7427,7 @@ impl ChatApp {
                 .text_xs()
                 .text_color(cx.theme().warning)
                 .child(Icon::new(IconName::TriangleAlert).size_3p5())
-                .child(div().flex_1().min_w_0().child(SharedString::from(copy)))
+                .child(div().flex_1().min_w_0().child(chat_text(copy)))
                 .into_any_element()
         });
         let composer = v_flex()
@@ -7078,12 +7658,6 @@ impl ChatApp {
                     .into_any_element()
             });
 
-        // Header controls (Electron: `ProjectScriptsControl` then
-        // `GitActionsControl` at the far right of the chat header, before the
-        // panel toggle).
-        let script_controls = self.render_project_scripts(cx);
-        let git_controls = self.render_git_actions(cx);
-        let workspace_controls = self.render_workspace_roots(cx);
         let mut main = v_flex()
             .flex_1()
             .h_full()
@@ -7110,111 +7684,51 @@ impl ChatApp {
                     cx.stop_propagation();
                 }
             }))
-            .child(
-                h_flex()
-                    .h(px(crate::ui::CHROME_HEIGHT))
-                    .px_5()
-                    .items_center()
-                    .gap_2()
-                    .flex_shrink_0()
-                    .child(
-                        h_flex()
-                            .flex_1()
-                            .min_w_0()
-                            .gap_2()
-                            .children(project.map(|(name, cwd)| {
-                                h_flex()
-                                    .min_w_0()
-                                    .max_w(px(200.))
-                                    .gap_2()
-                                    .items_center()
-                                    .text_sm()
-                                    .font_medium()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(self.project_icon(&name, &cwd, cx))
-                                    .child(div().min_w_0().truncate().child(name))
-                                    .child(
-                                        div()
-                                            .text_color(cx.theme().muted_foreground.opacity(0.4))
-                                            .child("/"),
-                                    )
-                            }))
-                            .child(
-                                div()
-                                    .id("chat-thread-title")
-                                    .flex_1()
-                                    .min_w_0()
-                                    .text_sm()
-                                    .font_medium()
-                                    .truncate()
-                                    .tooltip({
-                                        let title = title.clone();
-                                        move |window, cx| {
-                                            gpui_component::tooltip::Tooltip::new(title.clone())
-                                                .build(window, cx)
-                                        }
-                                    })
-                                    .child(title),
-                            ),
-                    )
-                    .children(script_controls)
-                    .child(workspace_controls)
-                    .children(git_controls)
-                    .child(
-                        Button::new("toggle-right-panel")
-                            .icon(if self.dock_open() {
-                                IconName::PanelRightClose
-                            } else {
-                                IconName::PanelRightOpen
-                            })
-                            .ghost()
-                            .xsmall()
-                            .tooltip("Toggle right panel")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.toggle_right_panel(window, cx);
-                            })),
-                    ),
-            );
+            .child(self.render_thread_header(title, project, header_inset, cx));
         let dismissible_error = self.last_error.is_some();
         let banner: Option<SharedString> = self.last_error.clone().or(session_error);
         if let Some(error) = banner {
             main = main.child(
-                div().px_5().pt_1().child(
-                    h_flex()
-                        .mx_auto()
-                        .w_auto()
-                        .max_w(px(768.))
-                        .rounded(px(12.))
-                        .border_1()
-                        .border_color(cx.theme().danger.opacity(0.32))
-                        .bg(cx.theme().danger.opacity(0.04))
-                        .px_3p5()
-                        .py_3()
-                        .gap_2()
-                        .text_sm()
-                        .text_color(cx.theme().danger)
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .max_h(px(96.))
-                                .overflow_hidden()
-                                .child(error),
-                        )
-                        .when(dismissible_error, |banner| {
-                            banner.child(
-                                Button::new("dismiss-thread-error")
-                                    .ghost()
-                                    .xsmall()
-                                    .icon(Icon::new(IconName::Close))
-                                    .tooltip("Dismiss")
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.last_error = None;
-                                        cx.notify();
-                                    })),
+                div()
+                    .debug_selector(|| "thread-error-banner".into())
+                    .px_5()
+                    .pt_1()
+                    .child(
+                        h_flex()
+                            .mx_auto()
+                            .w_auto()
+                            .max_w(px(768.))
+                            .rounded(px(12.))
+                            .border_1()
+                            .border_color(cx.theme().danger.opacity(0.32))
+                            .bg(cx.theme().danger.opacity(0.04))
+                            .px_3p5()
+                            .py_3()
+                            .gap_2()
+                            .text_sm()
+                            .text_color(cx.theme().danger)
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .max_h(px(96.))
+                                    .overflow_hidden()
+                                    .child(error),
                             )
-                        }),
-                ),
+                            .when(dismissible_error, |banner| {
+                                banner.child(
+                                    Button::new("dismiss-thread-error")
+                                        .ghost()
+                                        .xsmall()
+                                        .icon(Icon::new(IconName::Close))
+                                        .tooltip("Dismiss")
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.last_error = None;
+                                            cx.notify();
+                                        })),
+                                )
+                            }),
+                    ),
             );
         }
         main.child(
@@ -7238,6 +7752,7 @@ impl ChatApp {
                     )
                     .size_full(),
                 )
+                .vertical_scrollbar(&self.timeline_list)
                 .children(minimap)
             }),
         )
@@ -7412,6 +7927,14 @@ impl Render for ChatApp {
         // Electron caps the panel at 70% of the window (`maxWidthPct`).
         let dock_max_width =
             (window.viewport_size().width * 0.7).max(px(right_panel::MIN_PANEL_WIDTH));
+        let plan_dock_active = self.dock_thread_key().is_some_and(|key| {
+            self.right_panel
+                .map
+                .active_surface(&key)
+                .is_some_and(|surface| {
+                    surface.kind() == vitre_state::right_panel::SurfaceKind::Plan
+                })
+        });
         let active_plan = self
             .thread
             .as_ref()
@@ -7618,15 +8141,23 @@ impl Render for ChatApp {
                     }),
                 )
             })
-            .child(match self.settings.as_ref() {
+            .child(match self.active_surface() {
                 // Electron's settings is a route: the workspace unmounts while
                 // you are in there and comes back untouched, because none of
                 // its state lived in the DOM. Same here — the panels are held
                 // by this view, not by the element tree.
-                Some(panel) => panel.clone().into_any_element(),
+                Some(surface) => surface,
                 None => {
                     let sheet_mode = dock_panel.is_some() && dock_sheet_mode;
                     let inline_dock = if sheet_mode { None } else { dock_panel.take() };
+                    // Use the current reveal, not just the target visibility: the
+                    // native controls remain fixed while the sidebar animates.
+                    let normal_inset = window.rem_size() * 1.25;
+                    let header_inset = if cfg!(target_os = "macos") && !window.is_fullscreen() {
+                        normal_inset.max(px(96. - 208. * sidebar_reveal))
+                    } else {
+                        normal_inset
+                    };
                     let workspace = h_resizable("workspace")
                         .with_state(&self.sidebar_resize)
                         .child(
@@ -7638,7 +8169,7 @@ impl Render for ChatApp {
                                 .reveal(sidebar_reveal)
                                 .child(self.render_sidebar(cx).into_any_element()),
                         )
-                        .child(resizable_panel().child(self.render_chat(window, cx)))
+                        .child(resizable_panel().child(self.render_chat(header_inset, window, cx)))
                         .child(
                             // Hidden (not unmounted) when the dock is
                             // closed: the state slot keeps the width,
@@ -7683,6 +8214,7 @@ impl Render for ChatApp {
                         .children(
                             active_plan
                                 .as_ref()
+                                .filter(|_| !plan_dock_active)
                                 .map(|plan| self.render_plan_sidebar(plan, cx)),
                         )
                         .into_any_element()
@@ -7697,13 +8229,70 @@ impl Render for ChatApp {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn question_answers_accept_free_text_without_submitting_blanks() {
+        use super::*;
+        let question = UserInputQuestion {
+            id: "contract".into(),
+            header: "Contract".into(),
+            question: "Which chain?".into(),
+            options: vec![],
+            multi_select: false,
+        };
+        let mut draft = InputDraft {
+            request_id: "request".into(),
+            question_index: 0,
+            selections: HashMap::new(),
+            custom_answers: HashMap::new(),
+        };
+        assert_eq!(user_input_answer(&question, &draft), None);
+        draft
+            .custom_answers
+            .insert(question.id.clone(), "  \n ".into());
+        assert_eq!(user_input_answer(&question, &draft), None);
+        draft
+            .custom_answers
+            .insert(question.id.clone(), " Base Sepolia \n".into());
+        assert_eq!(
+            user_input_answer(&question, &draft),
+            Some(serde_json::Value::String("Base Sepolia".into()))
+        );
+        draft.custom_answers.clear();
+        let mut multiple = question.clone();
+        multiple.multi_select = true;
+        draft
+            .selections
+            .insert(question.id.clone(), vec!["web".into(), "mobile".into()]);
+        assert_eq!(
+            user_input_answer(&multiple, &draft),
+            Some(serde_json::json!(["web", "mobile"]))
+        );
+    }
+
+    #[test]
+    fn ask_turn_instructions_preserve_user_text_and_build_prompts() {
+        let question =
+            "Explain café indexing and use $review with MCP.\nThen run the requested query.";
+        let outgoing = super::ask_mode_prompt(true, question);
+        assert!(outgoing.contains("tools, skills, and MCP"));
+        assert!(outgoing.contains("Do not infer a request to implement"));
+        assert_eq!(super::displayed_user_prompt(&outgoing), question);
+        assert_eq!(super::ask_mode_prompt(false, question), question);
+        assert_eq!(
+            super::displayed_user_prompt("<vitre_ask_mode>user text"),
+            "<vitre_ask_mode>user text"
+        );
+    }
     use super::{
         ComposerTriggerKind, UserInlineSegment, active_composer_token, active_mention_token,
         collapsed_plan_markdown, format_mention, parse_user_inline_segments, plan_filename,
-        proposed_plan_title, provider_picker_ready, provider_picker_visible,
-        should_collapse_user_message, table_to_csv,
+        proposed_plan_is_implemented, proposed_plan_title, provider_picker_ready,
+        provider_picker_visible, render_user_plain_text, should_collapse_user_message,
+        table_to_csv,
     };
+    use gpui::{Context, TestAppContext, Window, div, prelude::*, px, relative};
     use gpui_component::text::TableData;
+    use gpui_component::{h_flex, v_flex};
     use std::collections::HashSet;
     use vitre_contracts::ThreadId;
 
@@ -7855,10 +8444,83 @@ mod tests {
     }
 
     #[test]
+    fn implemented_plans_leave_the_chat_timeline() {
+        let plan = |implemented_at: serde_json::Value| {
+            serde_json::from_value::<vitre_contracts::OrchestrationThreadProposedPlans>(
+                serde_json::json!({
+                    "createdAt": "2026-09-18T12:00:00.000Z",
+                    "id": "plan-1",
+                    "implementationThreadId": "thread-1",
+                    "implementedAt": implemented_at,
+                    "planMarkdown": "# Ship it",
+                    "turnId": "turn-1",
+                    "updatedAt": "2026-09-18T12:00:01.000Z"
+                }),
+            )
+            .expect("plan fixture should match the wire schema")
+        };
+
+        assert!(!proposed_plan_is_implemented(&plan(
+            serde_json::Value::Null
+        )));
+        assert!(proposed_plan_is_implemented(&plan(serde_json::json!(
+            "2026-09-18T12:00:02.000Z"
+        ))));
+    }
+
+    #[test]
     fn long_user_message_threshold_matches_electron() {
         assert!(!should_collapse_user_message("short prompt"));
         assert!(should_collapse_user_message(&"x".repeat(601)));
         assert!(should_collapse_user_message(&["x"; 9].join("\n")));
+    }
+
+    struct UserMessageWrapProbe;
+
+    impl gpui::Render for UserMessageWrapProbe {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl gpui::IntoElement {
+            div().w(px(1000.)).child(
+                h_flex().w_full().min_w_0().justify_end().child(
+                    v_flex()
+                        .min_w_0()
+                        .max_w(relative(0.8))
+                        .p_3()
+                        .debug_selector(|| "user-message-bubble".into())
+                        .child(
+                            v_flex().w_full().min_w_0().child(
+                                div().w_full().min_w_0().child(
+                                    render_user_plain_text(
+                                        "If a tick fails more than 3 times please skip it and move to the next. Let's fast track the catch up. The only chain that is being indexed for now is Plasma mainnet.".into(),
+                                    )
+                                    .debug_selector(|| "user-message-text".into()),
+                                ),
+                            ),
+                        ),
+                ),
+            )
+        }
+    }
+
+    #[gpui::test]
+    fn long_user_text_wraps_inside_its_bubble(cx: &mut TestAppContext) {
+        cx.update(gpui_component::init);
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let content = cx.new(|_| UserMessageWrapProbe);
+            gpui_component::Root::new(content, window, cx)
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        let bubble = cx.debug_bounds("user-message-bubble").unwrap();
+        let text = cx.debug_bounds("user-message-text").unwrap();
+        assert!(
+            text.right() <= bubble.right(),
+            "text escaped bubble: {text:?} vs {bubble:?}"
+        );
+        assert!(
+            text.size.height > px(20.),
+            "long text should wrap: {text:?}"
+        );
     }
 
     fn provider_fixture(

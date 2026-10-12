@@ -138,6 +138,7 @@
 			(type_identifier) @attribute)))
 
 ;;; Operators & Punctuation
+;; vitre: !is and !in are not queryable literal symbols in the bundled parser.
 
 [
 	"!"
@@ -168,9 +169,7 @@
 	"?:"
 	"!!"
 	"is"
-	"!is"
 	"in"
-	"!in"
 	"as"
 	"as?"
 	".."
@@ -191,13 +190,9 @@
 	"::"
 ] @punctuation.delimiter
 
+;; vitre: the bundled grammar hides the interpolation delimiters.
 (string_literal
-	"$" @punctuation.special
 	(interpolated_identifier) @variable)
-(string_literal
-	"${" @punctuation.special
-	(interpolated_expression)
-	"}" @punctuation.special)
 
 ;;; Types
 

@@ -29,7 +29,7 @@ use vitre_state::terminal_context::{
 
 use crate::assets::VitreIcon;
 
-use super::{ChatApp, fresh_id};
+use super::{ChatApp, fresh_id, text::chat_text};
 
 /// Electron's `TerminalContextDraft`, minus the thread scoping — the pending
 /// list lives on the open thread and clears with it.
@@ -163,10 +163,10 @@ impl ChatApp {
             }
             column = column.child(row);
             if !prompt_text.is_empty() {
-                column = column.child(div().child(SharedString::from(prompt_text)));
+                column = column.child(div().child(chat_text(prompt_text)));
             }
         } else if !prompt_text.is_empty() {
-            column = column.child(div().child(SharedString::from(prompt_text)));
+            column = column.child(div().child(chat_text(prompt_text)));
         }
         Some(column.into_any_element())
     }

@@ -335,14 +335,14 @@ impl<'a> sum_tree::Dimension<'a, HighlightSummary> for Range<usize> {
 impl SyntaxHighlighter {
     /// Create a new SyntaxHighlighter for the given language.
     pub fn new(lang: &str) -> Self {
-        match Self::build_for_language(&lang) {
+        match Self::try_new(lang) {
             Ok(result) => result,
             Err(err) => {
                 tracing::warn!(
                     "SyntaxHighlighter init failed, fallback to use `text`, {}",
                     err
                 );
-                Self::build_for_language("text").unwrap()
+                Self::try_new("text").unwrap()
             }
         }
     }
@@ -370,10 +370,11 @@ impl SyntaxHighlighter {
         }
     }
 
-    /// Build the highlighter for the given language.
+    /// Build a highlighter, reporting unsupported languages or invalid queries.
+    /// vitre: callers validating bundled grammars must not silently fall back to text.
     ///
     /// https://github.com/tree-sitter/tree-sitter/blob/v0.26.8/crates/highlight/src/highlight.rs#L339
-    fn build_for_language(lang: &str) -> Result<Self> {
+    pub fn try_new(lang: &str) -> Result<Self> {
         let Some(config) = LanguageRegistry::singleton().language(&lang) else {
             return Err(anyhow!(
                 "language {:?} is not registered in `LanguageRegistry`",

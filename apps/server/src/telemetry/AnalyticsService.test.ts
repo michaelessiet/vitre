@@ -8,6 +8,8 @@ import * as HttpServer from "effect/unstable/http/HttpServer";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 
+import * as FileSystem from "effect/FileSystem";
+
 import * as ServerConfig from "../config.ts";
 import { getTelemetryIdentifier } from "./Identify.ts";
 import * as AnalyticsService from "./AnalyticsService.ts";
@@ -23,6 +25,11 @@ interface RecordedBatchRequest {
       };
     }>;
   } | null;
+}
+
+interface SpilledEvent {
+  readonly event: string;
+  readonly properties?: { readonly index?: number };
 }
 
 interface RecordedBatchBody {
@@ -116,5 +123,69 @@ it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
         true,
       );
     }),
+  );
+
+  it.effect(
+    "spills unflushed events to disk on shutdown instead of flushing over the network",
+    () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+
+        // One config value shared by both boots, so the second instance reads the
+        // spill file the first instance wrote. No HTTP server is launched at all:
+        // if shutdown tried to reach PostHog, this test would hang rather than
+        // quietly pass, which is exactly the regression worth guarding.
+        const serverConfig = yield* Effect.provide(
+          ServerConfig.ServerConfig,
+          ServerConfig.layerTest(process.cwd(), { prefix: "t3-telemetry-spill-" }),
+        );
+        const runtimeLayer = AnalyticsService.layer.pipe(
+          Layer.provideMerge(Layer.succeed(ServerConfig.ServerConfig, serverConfig)),
+          Layer.provide(
+            ConfigProvider.layer(
+              ConfigProvider.fromUnknown({
+                T3CODE_TELEMETRY_ENABLED: true,
+                T3CODE_POSTHOG_KEY: "phc_test_key",
+                T3CODE_POSTHOG_HOST: "",
+                T3CODE_TELEMETRY_FLUSH_BATCH_SIZE: 20,
+              }),
+            ),
+          ),
+          Layer.provideMerge(NodeHttpServer.layerTest),
+        );
+
+        // First boot: record without flushing, then close the scope.
+        yield* Effect.gen(function* () {
+          const analytics = yield* AnalyticsService.AnalyticsService;
+          yield* analytics.record("test.spill.pending", { index: 0 });
+          yield* analytics.record("test.spill.pending", { index: 1 });
+        }).pipe(Effect.provide(runtimeLayer));
+
+        const spilled = yield* fileSystem
+          .readFileString(serverConfig.pendingTelemetryPath)
+          .pipe(Effect.map((contents) => JSON.parse(contents) as ReadonlyArray<SpilledEvent>));
+        assert.deepEqual(
+          spilled.map((event) => [event.event, event.properties?.index]),
+          [
+            ["test.spill.pending", 0],
+            ["test.spill.pending", 1],
+          ],
+        );
+
+        // Second boot: the spill file is consumed on startup and its events are
+        // back in the buffer, so closing the scope again re-spills them.
+        yield* Effect.gen(function* () {
+          yield* AnalyticsService.AnalyticsService;
+          assert.equal(yield* fileSystem.exists(serverConfig.pendingTelemetryPath), false);
+        }).pipe(Effect.provide(runtimeLayer));
+
+        const respilled = yield* fileSystem
+          .readFileString(serverConfig.pendingTelemetryPath)
+          .pipe(Effect.map((contents) => JSON.parse(contents) as ReadonlyArray<SpilledEvent>));
+        assert.deepEqual(
+          respilled.map((event) => event.properties?.index),
+          [0, 1],
+        );
+      }),
   );
 });

@@ -1,0 +1,92 @@
+{
+  "host": "Apple M5 Max / macOS / 64 GiB RAM",
+  "method": "Temporary instrumented backend bundle, Node V8 CPU profiler, normal application home with no cache deletion. Runs 1-4 used release native binary; runs 5-6 used debug native binary with opt-in readiness diagnostics. Durations are exploratory, not cold-boot guarantees. No first-frame timing or selected-thread detail timing was captured.",
+  "runs": [
+    {
+      "run": 1,
+      "node_preload_ms": 20.57,
+      "dependency_loading_ms": 294.35,
+      "bundle_top_level_ms": 107.93,
+      "path_hydration_ms": 1.23,
+      "remaining_services_to_ready_ms": 110.92,
+      "node_ready_uptime_ms": 538.85,
+      "initial_config_editors_ms": 24.55,
+      "native_reported_backend_ready_ms": 3575
+    },
+    {
+      "run": 2,
+      "node_preload_ms": 19.25,
+      "dependency_loading_ms": 260.49,
+      "bundle_top_level_ms": 115.53,
+      "path_hydration_ms": 1.22,
+      "remaining_services_to_ready_ms": 117.63,
+      "node_ready_uptime_ms": 517.92,
+      "initial_config_editors_ms": 25.5,
+      "native_reported_backend_ready_ms": 2015
+    },
+    {
+      "run": 3,
+      "node_preload_ms": 18.25,
+      "dependency_loading_ms": 258.19,
+      "bundle_top_level_ms": 116.89,
+      "path_hydration_ms": 447.33,
+      "remaining_services_to_ready_ms": 107.66,
+      "node_ready_uptime_ms": 952.2,
+      "initial_config_editors_ms": 28.37,
+      "native_reported_backend_ready_ms": 2430
+    },
+    {
+      "run": 4,
+      "node_preload_ms": 19.47,
+      "dependency_loading_ms": 357.05,
+      "bundle_top_level_ms": 112.81,
+      "path_hydration_ms": 1.23,
+      "remaining_services_to_ready_ms": 134.82,
+      "node_ready_uptime_ms": 629.9,
+      "initial_config_editors_ms": 32.96,
+      "native_reported_backend_ready_ms": 2018,
+      "probe_request_listener_count": null,
+      "http_duration_ms": {
+        "/oauth/token": 3.8,
+        "/api/auth/websocket-ticket": 1.42,
+        "/api/orchestration/shell": 56.57
+      }
+    },
+    {
+      "run": 5,
+      "node_preload_ms": 20.06,
+      "dependency_loading_ms": 249.09,
+      "bundle_top_level_ms": 116.8,
+      "path_hydration_ms": 1.02,
+      "remaining_services_to_ready_ms": 117.75,
+      "node_ready_uptime_ms": 508.28,
+      "initial_config_editors_ms": 33.25,
+      "native_reported_backend_ready_ms": 1917,
+      "probe_request_listener_count": null,
+      "http_duration_ms": {
+        "/oauth/token": 10.63,
+        "/api/auth/websocket-ticket": 2.81,
+        "/api/orchestration/shell": 57.61
+      },
+      "native_probe_durations_ms": [0, 0, 0, 0, 1501]
+    },
+    {
+      "run": 6,
+      "node_preload_ms": 14.82,
+      "dependency_loading_ms": 256.3,
+      "bundle_top_level_ms": 116.41,
+      "path_hydration_ms": 1.09,
+      "remaining_services_to_ready_ms": 118.85,
+      "node_ready_uptime_ms": 511.19,
+      "initial_config_editors_ms": 29.67,
+      "native_reported_backend_ready_ms": 1919,
+      "probe_request_listener_count": 0,
+      "http_duration_ms": {
+        "/oauth/token": 5.58,
+        "/api/auth/websocket-ticket": 1.89,
+        "/api/orchestration/shell": 55.63
+      },
+      "native_probe_durations_ms": [0, 0, 0, 0, 1501]
+    }
+  ]
+}

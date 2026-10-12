@@ -1181,13 +1181,21 @@ const makeWsRpcLayer = (
       };
 
       const loadServerConfig = Effect.gen(function* () {
-        const keybindingsConfig = yield* keybindings.loadConfigState;
-        const providers = yield* providerRegistry.getProviders;
-        const settings = ServerSettings.redactServerSettingsForClient(
-          yield* serverSettings.getSettings,
-        );
-        const environment = yield* serverEnvironment.getDescriptor;
-        const auth = yield* serverAuth.getDescriptor();
+        // These independent reads used to serialize the client's first snapshot.
+        // Keep concurrency bounded on small machines.
+        const [keybindingsConfig, providers, rawSettings, environment, auth, availableEditors] =
+          yield* Effect.all(
+            [
+              keybindings.loadConfigState,
+              providerRegistry.getProviders,
+              serverSettings.getSettings,
+              serverEnvironment.getDescriptor,
+              serverAuth.getDescriptor(),
+              externalLauncher.resolveAvailableEditors(),
+            ],
+            { concurrency: 4 },
+          );
+        const settings = ServerSettings.redactServerSettingsForClient(rawSettings);
 
         return {
           environment,
@@ -1197,7 +1205,7 @@ const makeWsRpcLayer = (
           keybindings: keybindingsConfig.keybindings,
           issues: keybindingsConfig.issues,
           providers,
-          availableEditors: yield* externalLauncher.resolveAvailableEditors(),
+          availableEditors,
           observability: {
             logsDirectoryPath: config.logsDir,
             localTracingEnabled: true,

@@ -26,6 +26,7 @@ import {
   type SlashCommand as ClaudeSlashCommand,
   type SDKUserMessage,
   type SettingSource,
+  type ModelInfo,
 } from "@anthropic-ai/claude-agent-sdk";
 
 import {
@@ -373,6 +374,48 @@ export function getClaudeModelCapabilities(model: string | null | undefined): Mo
   );
 }
 
+/** Prefer the running CLI's catalog, including models released after this app. */
+export function parseClaudeInitializationModels(
+  models: ReadonlyArray<ModelInfo & { readonly resolvedModel?: string }> | undefined,
+): ReadonlyArray<ServerProviderModel> {
+  const discovered = new Map<string, ServerProviderModel>();
+  for (const model of models ?? []) {
+    const slug = model.resolvedModel?.trim() || model.value.trim();
+    if (!slug || discovered.has(slug)) continue;
+    const known = getClaudeModelCapabilities(slug);
+    const descriptors = [...getProviderOptionDescriptors({ caps: known })];
+    if (model.supportedEffortLevels?.length) {
+      const index = descriptors.findIndex((option) => option.id === "effort");
+      if (index >= 0) descriptors.splice(index, 1);
+      descriptors.push(
+        buildSelectOptionDescriptor({
+          id: "effort",
+          label: "Reasoning",
+          options: model.supportedEffortLevels.map((value) => ({
+            value,
+            label: value === "xhigh" ? "Extra High" : toTitleCaseWords(value),
+            ...(value === "high" ? { isDefault: true } : {}),
+          })),
+        }),
+      );
+    }
+    if (model.supportsFastMode && !descriptors.some((option) => option.id === "fastMode")) {
+      descriptors.push(buildBooleanOptionDescriptor({ id: "fastMode", label: "Fast Mode" }));
+    }
+    const versioned = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2})(?=-|\[|$))?/.exec(slug);
+    const name = versioned
+      ? `Claude ${toTitleCaseWords(versioned[1]!)} ${versioned[2]}${versioned[3] ? `.${versioned[3]}` : ""}${slug.endsWith("[1m]") ? " (1M)" : ""}`
+      : model.displayName.trim() || slug;
+    discovered.set(slug, {
+      slug,
+      name,
+      isCustom: false,
+      capabilities: createModelCapabilities({ optionDescriptors: descriptors }),
+    });
+  }
+  return [...discovered.values()];
+}
+
 export function resolveClaudeEffort(
   caps: ModelCapabilities,
   raw: string | null | undefined,
@@ -408,10 +451,10 @@ export function normalizeClaudeCliEffort(
   }
   if (
     effort === "xhigh" &&
-    model !== "claude-fable-5" &&
-    model !== "claude-opus-5" &&
-    model !== "claude-opus-4-8" &&
-    model !== "claude-sonnet-5"
+    (model === "claude-opus-4-7" ||
+      model === "claude-opus-4-6" ||
+      model === "claude-opus-4-5" ||
+      model === "claude-sonnet-4-6")
   ) {
     return "max";
   }
@@ -606,6 +649,7 @@ function nonEmptyProbeString(value: string): string | undefined {
 }
 
 type ClaudeCapabilitiesProbe = {
+  readonly models?: ReadonlyArray<ServerProviderModel>;
   readonly email: string | undefined;
   readonly subscriptionType: string | undefined;
   readonly tokenSource: string | undefined;
@@ -745,6 +789,7 @@ const probeClaudeCapabilities = (
         tokenSource: account?.tokenSource,
         apiProvider: account?.apiProvider,
         slashCommands: parseClaudeInitializationCommands(init.commands),
+        models: parseClaudeInitializationModels(init.models),
       } satisfies ClaudeCapabilitiesProbe;
     });
   }).pipe(
@@ -786,6 +831,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
   claudeSettings: ClaudeSettings,
   resolveCapabilities?: (
     claudeSettings: ClaudeSettings,
+    version: string | null,
   ) => Effect.Effect<ClaudeCapabilitiesProbe | undefined>,
   environment?: NodeJS.ProcessEnv,
   cwd?: string,
@@ -886,11 +932,6 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     });
   }
 
-  const models = providerModelsFromSettings(
-    getBuiltInClaudeModelsForVersion(parsedVersion),
-    claudeSettings.customModels,
-    DEFAULT_CLAUDE_MODEL_CAPABILITIES,
-  );
   const versionUpgradeMessage = supportsClaudeOpus5(parsedVersion)
     ? undefined
     : supportsClaudeFable5(parsedVersion)
@@ -902,8 +943,17 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
           : formatClaudeOpus47UpgradeMessage(parsedVersion);
 
   const capabilities = resolveCapabilities
-    ? yield* resolveCapabilities(claudeSettings).pipe(Effect.orElseSucceed(() => undefined))
+    ? yield* resolveCapabilities(claudeSettings, parsedVersion).pipe(
+        Effect.orElseSucceed(() => undefined),
+      )
     : undefined;
+  const models = providerModelsFromSettings(
+    capabilities?.models?.length
+      ? capabilities.models
+      : getBuiltInClaudeModelsForVersion(parsedVersion),
+    claudeSettings.customModels,
+    DEFAULT_CLAUDE_MODEL_CAPABILITIES,
+  );
   const skills = yield* discoverClaudeSkills(claudeSettings, cwd, resolvedEnvironment);
   const slashCommands = capabilities?.slashCommands ?? [];
   const dedupedSlashCommands = dedupeSlashCommands(slashCommands);

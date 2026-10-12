@@ -11,6 +11,7 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeOS from "node:os";
 import * as NodeURL from "node:url";
+import { splitRunArguments, vitreExecutable } from "./cargo-artifact.mjs";
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
 
 const repoRoot = NodePath.resolve(
@@ -49,18 +50,38 @@ if (signingIdentity) {
     console.error("[dev:vitre] VITRE_SIGNING_IDENTITY is only supported on macOS");
     process.exit(1);
   }
-  const build = NodeChildProcess.spawnSync("cargo", ["build", "-p", "vitre-app", ...extra], {
-    cwd: repoRoot,
-    stdio: "inherit",
-    env: devEnv,
-  });
-  if (build.status !== 0) process.exit(build.status ?? 1);
+  const runArguments = splitRunArguments(extra);
+  const build = NodeChildProcess.spawnSync(
+    "cargo",
+    [
+      "build",
+      "-p",
+      "vitre-app",
+      "--bin",
+      "vitre",
+      ...runArguments.cargo,
+      "--message-format=json-render-diagnostics",
+    ],
+    {
+      cwd: repoRoot,
+      stdio: ["inherit", "pipe", "inherit"],
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+      env: devEnv,
+    },
+  );
+  if (build.status !== 0) {
+    if (build.stdout) process.stderr.write(build.stdout);
+    if (build.error) console.error(build.error);
+    process.exit(build.status ?? 1);
+  }
+  const builtExecutable = vitreExecutable(build.stdout, (message) => process.stderr.write(message));
 
   const app = NodePath.join(repoRoot, "target", "vitre-dev", "Vitre.app");
   const contents = NodePath.join(app, "Contents");
   const executable = NodePath.join(contents, "MacOS", "Vitre");
   NodeFS.mkdirSync(NodePath.dirname(executable), { recursive: true });
-  NodeFS.copyFileSync(NodePath.join(repoRoot, "target", "debug", "vitre"), executable);
+  NodeFS.copyFileSync(builtExecutable, executable);
   NodeFS.copyFileSync(
     NodePath.join(repoRoot, "scripts", "vitre", "Info.plist"),
     NodePath.join(contents, "Info.plist"),
@@ -83,6 +104,7 @@ if (signingIdentity) {
   for (const [name, value] of Object.entries(appEnvironment)) {
     args.push("--env", `${name}=${value}`);
   }
+  if (runArguments.app.length > 0) args.push("--args", ...runArguments.app);
   console.log(`[dev:vitre] signed development app at ${app}`);
   console.log("[dev:vitre] launching through macOS Launch Services");
   console.log(`[dev:vitre] logs: ${stdoutLog}, ${stderrLog}`);

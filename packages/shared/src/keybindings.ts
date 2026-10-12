@@ -62,11 +62,11 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+n", command: "fileTree.newFile", when: "fileTreeFocus" },
   { key: "f2", command: "fileTree.rename", when: "fileTreeFocus" },
   { key: "mod+o", command: "editor.openFavorite" },
-  // Tab traversal: mod+shift+[ / ] cycle right-panel tabs only; ctrl+tab
-  // cycles right-panel tabs when the panel is focused and chat threads
-  // everywhere else.
-  { key: "mod+shift+[", command: "rightPanel.previousSurface", when: "rightPanelFocus" },
-  { key: "mod+shift+]", command: "rightPanel.nextSurface", when: "rightPanelFocus" },
+  // Tab traversal: mod+shift+[ / ] cycle the visible right-panel tabs from
+  // anywhere in the app; ctrl+tab remains focus-sensitive so it can cycle
+  // chat threads everywhere else.
+  { key: "mod+shift+[", command: "rightPanel.previousSurface" },
+  { key: "mod+shift+]", command: "rightPanel.nextSurface" },
   { key: "ctrl+shift+tab", command: "rightPanel.previousSurface", when: "rightPanelFocus" },
   { key: "ctrl+tab", command: "rightPanel.nextSurface", when: "rightPanelFocus" },
   { key: "ctrl+shift+tab", command: "thread.previous", when: "!rightPanelFocus" },
@@ -106,6 +106,10 @@ export const SUPERSEDED_DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+shift+p", command: "commandPalette.toggle", when: "!terminalFocus" },
   { key: "mod+shift+f", command: "quickSearch.content", when: "!terminalFocus" },
   { key: "mod+shift+g", command: "graph.toggle", when: "!terminalFocus" },
+  // 2026-09: standard tab chords became available regardless of which
+  // control inside the app holds keyboard focus.
+  { key: "mod+shift+[", command: "rightPanel.previousSurface", when: "rightPanelFocus" },
+  { key: "mod+shift+]", command: "rightPanel.nextSurface", when: "rightPanelFocus" },
 ];
 
 function normalizeKeyToken(token: string): string {

@@ -13,6 +13,8 @@
 mod annotations;
 pub(crate) mod debugger;
 mod extras;
+#[cfg(debug_assertions)]
+mod kotlin_verification;
 mod language_tools;
 #[cfg(debug_assertions)]
 mod language_verification;
@@ -331,6 +333,8 @@ pub struct FilesPanel {
     vim: Option<VimSession>,
     /// Git diff gutter for the open file: baseline, hunks, open peek.
     git: GitGutterState,
+    gutter_running: bool,
+    gutter_pending: bool,
     /// Latest diagnostics per relative path (latest event wins, empty
     /// clears — the Electron per-file replacement semantics).
     diagnostics: HashMap<String, Vec<LspDiagnostic>>,
@@ -487,6 +491,8 @@ impl FilesPanel {
             reveal_generation: 0,
             explorer_open: ClientSettings::file_explorer_open(cx),
             git: GitGutterState::default(),
+            gutter_running: false,
+            gutter_pending: false,
             vcs_entries: Vec::new(),
             vcs: TreeVcsDecorations::default(),
             open: None,
@@ -709,9 +715,36 @@ impl FilesPanel {
     /// Re-diff the buffer against the baseline and push the result at the
     /// editor.
     fn recompute_gutter(&mut self, cx: &mut Context<Self>) {
-        let text = self.editor.read(cx).text().to_string();
-        self.git.recompute(&text);
-        self.apply_gutter(cx);
+        if self.gutter_running {
+            self.git.arm_debounce();
+            self.gutter_pending = true;
+            return;
+        }
+        self.gutter_running = true;
+        let text = self.editor.read(cx).text().clone();
+        let generation = self.open_generation;
+        let revision = self.git.arm_debounce();
+        let mut result = self.git.worker();
+        let work = cx.background_executor().spawn(async move {
+            result.recompute(&text.to_string());
+            result
+        });
+        cx.spawn(async move |this, cx| {
+            let result = work.await;
+            let _ = this.update(cx, |panel, cx| {
+                panel.gutter_running = false;
+                if std::mem::take(&mut panel.gutter_pending) {
+                    panel.recompute_gutter(cx);
+                    return;
+                }
+                if panel.open_generation == generation && panel.git.debounce_is_current(revision) {
+                    panel.git.accept(result);
+                    panel.apply_gutter(cx);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     /// Push the current markers and peek at the editor.
@@ -3601,7 +3634,7 @@ mod tests {
         let (_sidecar, status) = tokio::sync::watch::channel(SupervisorStatus::Idle);
         let client = Arc::new(EnvironmentClient::start(status));
         drop(guard);
-        runtime.shutdown_background();
+        drop(runtime);
         cx.update(gpui_component::init);
         let (panel, cx) = cx.add_window_view(|window, cx| {
             FilesPanel::new(client, "/tmp/project".into(), window, cx)
@@ -3732,10 +3765,11 @@ mod tests {
         let (sidecar, status) = tokio::sync::watch::channel(SupervisorStatus::Idle);
         let client = Arc::new(EnvironmentClient::start(status));
         drop(guard);
+        // Wait for background tasks to stop before creating foreground tasks.
         // The client is inert from here on: its background tasks are aborted,
         // so nothing ever wakes the panel's foreground tasks from a tokio
         // worker — which gpui's test scheduler rejects as non-deterministic.
-        runtime.shutdown_background();
+        drop(runtime);
 
         cx.update(gpui_component::init);
         let (panel, cx) = cx.add_window_view(|window, cx| {

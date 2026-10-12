@@ -1,0 +1,69 @@
+{
+  "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+  "machine": "arm64",
+  "commit": "58fd4e1ed0d60275b00ff52b918cf71c1b1e6744",
+  "binary_sha256": "4c4eca92967e94b3ef22b02861d873efe118073de32cb82fafc41282b5cbb33f",
+  "server_sha256": "639ba435ee137ff82c3e79b1fe788de29f78243ea73fcbf864b9c8995b20ac67",
+  "metric_notes": "RSS sums double-count shared pages. Linux PSS is separate. GPU allocations and reparented subprocesses are not attributed. Node children include Node-based tools.",
+  "runs": [
+    {
+      "backend_ready_observed_seconds": 4.20499016600661,
+      "readiness_sample_resolution_seconds": 1,
+      "peak_tree_rss_mib": 745.1875,
+      "settled_tree_rss_mib": 346.84973958333336,
+      "settled_cpu_percent_one_core": 0.8108742039897388,
+      "last_sample_groups": {
+        "node_and_node_tools": {
+          "rss_mib": 246.734375,
+          "pss_mib": null
+        },
+        "native": {
+          "rss_mib": 100.46875,
+          "pss_mib": null
+        }
+      },
+      "backend_launch_to_ready_ms": 2782,
+      "client_start_to_shell_snapshot_ms": 2537
+    },
+    {
+      "backend_ready_observed_seconds": 3.1619364579964895,
+      "readiness_sample_resolution_seconds": 1,
+      "peak_tree_rss_mib": 772.796875,
+      "settled_tree_rss_mib": 337.4828125,
+      "settled_cpu_percent_one_core": 0.9812567941811191,
+      "last_sample_groups": {
+        "node_and_node_tools": {
+          "rss_mib": 251.1875,
+          "pss_mib": null
+        },
+        "native": {
+          "rss_mib": 90.671875,
+          "pss_mib": null
+        }
+      },
+      "backend_launch_to_ready_ms": 2265,
+      "client_start_to_shell_snapshot_ms": 2245
+    },
+    {
+      "backend_ready_observed_seconds": 3.123275291000027,
+      "readiness_sample_resolution_seconds": 1,
+      "peak_tree_rss_mib": 656.828125,
+      "settled_tree_rss_mib": 332.0221354166667,
+      "settled_cpu_percent_one_core": 1.580882409479631,
+      "last_sample_groups": {
+        "node_and_node_tools": {
+          "rss_mib": 245.875,
+          "pss_mib": null
+        },
+        "native": {
+          "rss_mib": 90.9375,
+          "pss_mib": null
+        }
+      },
+      "backend_launch_to_ready_ms": 2365,
+      "client_start_to_shell_snapshot_ms": 2355
+    }
+  ],
+  "hardware": "Apple M5 Max, 64 GiB RAM",
+  "note": "Exploratory macOS RSS, not Linux PSS or a clean before/after baseline. Builds and native checks overlapped parts of collection. Final refinements to gutter single-flight work and bounded log forwarding followed this measured binary; hashes identify the measured build."
+}

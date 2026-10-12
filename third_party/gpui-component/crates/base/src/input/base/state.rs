@@ -1717,7 +1717,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             return 0;
         }
 
-        let offset = self.selected_range.start;
+        let offset = self.cursor();
         let offset = self.offset_from_utf16(self.offset_to_utf16(offset));
         // FIXME: Avoid to_string
         let left_part = self.text.slice(0..offset).to_string();
@@ -4545,6 +4545,37 @@ mod tests {
                 );
             });
         });
+    }
+
+    #[gpui::test]
+    fn word_selection_reverses_from_the_active_cursor(cx: &mut TestAppContext) {
+        let input_view = InputView::build_textarea(cx, |state| state);
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        let input = input_view.input;
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                state.set_value("alpha café gamma", window, cx);
+                state.set_selected_range(0..0, cx);
+                state.focus(window, cx);
+            })
+        });
+        let right = if cfg!(target_os = "macos") {
+            "alt-shift-right"
+        } else {
+            "ctrl-shift-right"
+        };
+        let left = if cfg!(target_os = "macos") {
+            "alt-shift-left"
+        } else {
+            "ctrl-shift-left"
+        };
+        cx.simulate_keystrokes(right);
+        cx.simulate_keystrokes(right);
+        cx.update(|_, cx| assert_eq!(input.read(cx).selected_range, (0..11).into()));
+        cx.simulate_keystrokes(left);
+        cx.update(|_, cx| assert_eq!(input.read(cx).selected_range, (0..6).into()));
+        cx.simulate_keystrokes(left);
+        cx.update(|_, cx| assert_eq!(input.read(cx).selected_range, (0..0).into()));
     }
 
     #[gpui::test]

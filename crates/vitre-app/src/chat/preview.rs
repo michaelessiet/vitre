@@ -856,6 +856,9 @@ impl PreviewPanel {
         &mut self,
         cx: &mut Context<Self>,
     ) -> Result<serde_json::Value, String> {
+        if !crate::platform_capabilities::CAPTURE {
+            return Err(crate::platform_capabilities::CAPTURE_UNAVAILABLE.into());
+        }
         if self.recording.is_some() {
             return Err("This tab is already recording".into());
         }
@@ -1037,8 +1040,8 @@ impl Render for PreviewPanel {
                     for scheme in ["system","light","dark"]{menu=menu.menu_with_check(scheme,p.color_scheme==scheme,Box::new(SetAppearance{value:scheme.into()}));}
                     menu.show(event.position(),window,cx);
                 })))
-                .child(Button::new("preview-screenshot").label("Screenshot").ghost().xsmall().disabled(!has_page).on_click(cx.listener(|panel,_,_,cx|panel.screenshot(cx))))
-                .child(Button::new("preview-record").label(if self.recording.is_some(){"Stop recording"}else{"Record GIF"}).ghost().xsmall().disabled(!has_page).on_click(cx.listener(|panel,_,_,cx|panel.toggle_recording(cx))))
+                .when(crate::platform_capabilities::CAPTURE, |bar| bar.child(Button::new("preview-screenshot").label("Screenshot").ghost().xsmall().disabled(!has_page).on_click(cx.listener(|panel,_,_,cx|panel.screenshot(cx))))
+                .child(Button::new("preview-record").label(if self.recording.is_some(){"Stop recording"}else{"Record GIF"}).ghost().xsmall().disabled(!has_page).on_click(cx.listener(|panel,_,_,cx|panel.toggle_recording(cx)))))
                 .child(Button::new("preview-mini").label("Mini / dock").ghost().xsmall().on_click(cx.listener(|_,_,_,cx|cx.emit(PreviewPanelEvent::ToggleMiniPlayer))))
                 .child(Button::new("preview-pick").label("Pick element").ghost().xsmall().disabled(!has_page).on_click(cx.listener(|panel,_,_,cx| {
                     if let Some(view)=panel.webview.as_ref(){let _=view.read(cx).raw().evaluate_script("globalThis.__vitreHost.pick()");}

@@ -79,6 +79,7 @@ fn chat_markdown_context_menu_copies_the_source(cx: &mut TestAppContext) {
             div().size_full().child(super::assistant_markdown(
                 "context-markdown".into(),
                 "Hello **Rust** and `GPUI`.".into(),
+                None,
             ))
         }
     }

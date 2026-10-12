@@ -1100,7 +1100,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     yield* analytics.record("provider.sessions.stopped_all", {
       sessionCount: threadIds.length,
     });
-    yield* analytics.flush;
+    // Deliberately not flushed here. This runs inside a shutdown finalizer on
+    // the sequential layer-teardown path, so a flush would block quit on a cold
+    // TLS handshake to PostHog. AnalyticsService's own finalizer spills whatever
+    // is still buffered to disk and the next boot sends it.
   });
 
   yield* Effect.addFinalizer(() =>

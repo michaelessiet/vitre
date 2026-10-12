@@ -30,7 +30,7 @@ use vitre_rpc::{
     TypedStreamEvent, TypedSubscription, wait_for_session,
 };
 use vitre_sidecar::SupervisorStatus;
-use vitre_state::{ShellApplyOutcome, ShellProjection, ThreadApplyOutcome, ThreadProjection};
+use vitre_state::{ShellApplyOutcome, ShellProjection, ThreadProjection};
 
 /// Where a durable subscription is in its replay→live lifecycle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -243,15 +243,20 @@ async fn drain<M, F>(
 ) -> SubscriptionEnd
 where
     M: RpcMethod,
-    F: FnMut(M::Success),
+    F: FnMut(Option<Vec<M::Success>>) -> bool,
 {
+    let mut cadence = tokio::time::interval(Duration::from_millis(16));
+    cadence.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut pending = false;
     loop {
         tokio::select! {
+            _ = cadence.tick(), if pending => {
+                apply(None);
+                pending = false;
+            }
             event = subscription.next() => match event {
                 Some(TypedStreamEvent::Values(values)) => {
-                    for value in values {
-                        apply(value);
-                    }
+                    pending |= apply(Some(values));
                     if subscription.ack().is_err() {
                         return SubscriptionEnd::SessionLost;
                     }
@@ -291,6 +296,7 @@ async fn run_shell(
     state_tx: watch::Sender<ShellState>,
 ) {
     let mut projection = ShellProjection::new();
+    let started = std::time::Instant::now();
     loop {
         let Some(handle) = wait_for_session(&mut sessions).await else {
             return;
@@ -299,6 +305,12 @@ async fn run_shell(
         match http.shell_snapshot(&handle.target.access_token).await {
             Ok(snapshot) => {
                 projection.apply_snapshot(snapshot);
+                if std::env::var_os("VITRE_PROFILE").is_some() {
+                    eprintln!(
+                        "[vitre-perf] shell snapshot ready after {} ms",
+                        started.elapsed().as_millis()
+                    );
+                }
             }
             // Fall back to the socket-embedded snapshot (no afterSequence →
             // the server sends a fresh one as the first stream item).
@@ -327,10 +339,15 @@ async fn run_shell(
             &mut subscription,
             &mut sessions,
             handle.generation,
-            |item| {
-                if projection.apply_item(&item) != ShellApplyOutcome::Unchanged {
+            |items| {
+                let mut changed = false;
+                for item in items.unwrap_or_default() {
+                    changed |= projection.apply_item(&item) != ShellApplyOutcome::Unchanged;
+                }
+                if changed {
                     publish_shell(&state_tx, &projection);
                 }
+                false
             },
         )
         .await;
@@ -360,6 +377,7 @@ async fn run_thread(
     state_tx: watch::Sender<ThreadState>,
 ) {
     let mut projection = ThreadProjection::new();
+    let started = std::time::Instant::now();
     loop {
         let Some(handle) = wait_for_session(&mut sessions).await else {
             return;
@@ -370,7 +388,15 @@ async fn run_thread(
                 .thread_snapshot(&handle.target.access_token, &thread_id)
                 .await
             {
-                Ok(Some(snapshot)) => projection.seed(&snapshot),
+                Ok(Some(snapshot)) => {
+                    projection.seed(&snapshot);
+                    if std::env::var_os("VITRE_PROFILE").is_some() {
+                        eprintln!(
+                            "[vitre-perf] thread snapshot ready after {} ms",
+                            started.elapsed().as_millis()
+                        );
+                    }
+                }
                 // 404: the socket subscription is the source of truth for
                 // existence; it sends a snapshot (or the deletion) itself.
                 Ok(None) => {}
@@ -400,13 +426,17 @@ async fn run_thread(
             &mut subscription,
             &mut sessions,
             handle.generation,
-            |item| {
-                if projection.apply_item(&item) != ThreadApplyOutcome::Unchanged {
+            |items| {
+                let Some(items) = items else {
                     publish_thread(&state_tx, &projection);
-                }
+                    return false;
+                };
+                projection.apply_batch(&items)
             },
         )
         .await;
+        // Flush the final batch even when the stream closes before the next frame.
+        publish_thread(&state_tx, &projection);
         state_tx.send_modify(|state| state.phase = SyncPhase::Disconnected);
         if matches!(end, SubscriptionEnd::Completed) {
             tokio::time::sleep(RESUBSCRIBE_AFTER_COMPLETION).await;
@@ -416,7 +446,7 @@ async fn run_thread(
 
 fn publish_thread(state_tx: &watch::Sender<ThreadState>, projection: &ThreadProjection) {
     let _ = state_tx.send(ThreadState {
-        view: projection.view().map(Arc::new),
+        view: projection.shared_view(),
         phase: if projection.awaiting_completion() {
             SyncPhase::Synchronizing
         } else {
