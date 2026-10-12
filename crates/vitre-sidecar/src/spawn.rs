@@ -184,6 +184,18 @@ pub(crate) fn wait_until_ready_or_shutdown(
 mod readiness_tests {
     use super::*;
 
+    fn read_probe_request(socket: &mut TcpStream, port: u16) {
+        let expected = format!(
+            "GET {READINESS_PATH} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+        );
+        socket
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut request = vec![0; expected.len()];
+        socket.read_exact(&mut request).unwrap();
+        assert_eq!(request, expected.as_bytes());
+    }
+
     #[test]
     fn stdout_readiness_interrupts_a_stalled_http_probe() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -192,8 +204,7 @@ mod readiness_tests {
         let (release_tx, release_rx) = mpsc::channel();
         let server = std::thread::spawn(move || {
             let (mut socket, _) = listener.accept().unwrap();
-            let mut request = [0; 512];
-            socket.read(&mut request).unwrap();
+            read_probe_request(&mut socket, port);
             // Match startup: a socket accepts a request but no handler responds.
             std::thread::sleep(Duration::from_millis(50));
             ready_tx.send(()).unwrap();
@@ -218,8 +229,7 @@ mod readiness_tests {
         let (_tx, rx) = mpsc::channel();
         let server = std::thread::spawn(move || {
             let (mut socket, _) = listener.accept().unwrap();
-            let mut request = [0; 512];
-            socket.read(&mut request).unwrap();
+            read_probe_request(&mut socket, port);
             socket.write_all(b"HTTP/1.1 ").unwrap();
             std::thread::sleep(Duration::from_millis(60));
             socket
