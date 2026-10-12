@@ -1093,14 +1093,6 @@ impl ChatApp {
         }
     }
 
-    /// What the add-menu and the empty state offer, in Electron's order.
-    /// Graph is *hidden* (not disabled): Vitre does not surface the
-    /// knowledge-graph setting, and Electron hides the entry when it is off.
-    #[cfg(test)]
-    pub(super) fn offered_surface_kinds(&self) -> Vec<SurfaceKind> {
-        self.dock_surface_offers().iter().map(|s| s.kind).collect()
-    }
-
     fn dock_surface_offers(&self) -> Vec<SurfaceOffer> {
         let project_open = self.search_root().is_some();
         let plan_available = self.sidebar_proposed_plan().is_some()
