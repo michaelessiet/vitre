@@ -81,6 +81,43 @@ const handleMethod = (message: Record<string, unknown>) => {
       });
       return;
     }
+    case "thread/resume": {
+      const { threadId } = message.params as { threadId: string };
+      const activity = {
+        id: "activity-1",
+        type: "subAgentActivity",
+        agentPath: "/root/worker",
+        agentThreadId: "agent-thread-1",
+        kind: "completed",
+      };
+      writeMessage({
+        method: "item/completed",
+        params: { threadId, turnId: "turn-1", completedAtMs: 1792069853000, item: activity },
+      });
+      respond(message.id as number | string, {
+        approvalPolicy: "never",
+        approvalsReviewer: "user",
+        cwd: process.cwd(),
+        model: "gpt-5",
+        modelProvider: "openai",
+        sandbox: { type: "dangerFullAccess" },
+        thread: {
+          id: threadId,
+          sessionId: threadId,
+          cliVersion: "0.156.1",
+          createdAt: 1792069853,
+          updatedAt: 1792069853,
+          cwd: process.cwd(),
+          ephemeral: false,
+          modelProvider: "openai",
+          preview: "Completed sub-agent resume regression",
+          source: "appServer",
+          status: { type: "idle" },
+          turns: [{ id: "turn-1", status: "completed", items: [activity] }],
+        },
+      });
+      return;
+    }
     case "skills/list": {
       pendingSkillsListRequestId = message.id as number | string;
       pendingUserInputRequestId = sendRequest("item/tool/requestUserInput", {
