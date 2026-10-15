@@ -8169,7 +8169,20 @@ impl Render for ChatApp {
                                 .reveal(sidebar_reveal)
                                 .child(self.render_sidebar(cx).into_any_element()),
                         )
-                        .child(resizable_panel().child(self.render_chat(header_inset, window, cx)))
+                        .child(
+                            resizable_panel().child(
+                                v_flex()
+                                    .size_full()
+                                    .when(ClientSettings::get(cx).project_tabs_enabled, |view| {
+                                        view.child(self.render_project_tabs(header_inset, cx))
+                                    })
+                                    .child(div().flex_1().min_h_0().child(self.render_chat(
+                                        header_inset,
+                                        window,
+                                        cx,
+                                    ))),
+                            ),
+                        )
                         .child(
                             // Hidden (not unmounted) when the dock is
                             // closed: the state slot keeps the width,

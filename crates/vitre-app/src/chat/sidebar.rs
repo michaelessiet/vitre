@@ -158,15 +158,117 @@ impl Render for DraggedProjectRow {
 }
 
 impl ChatApp {
-    pub(super) fn ordered_thread_ids(&self) -> Vec<ThreadId> {
+    pub(super) fn tab_project_id(&self) -> Option<ProjectId> {
+        self.thread
+            .as_ref()
+            .and_then(|open| self.shell_thread(&open.id))
+            .map(|thread| thread.project_id.clone())
+            .or_else(|| self.draft_project.clone())
+            .filter(|id| {
+                self.shell
+                    .snapshot
+                    .as_ref()
+                    .is_some_and(|s| s.projects.iter().any(|p| &p.id == id))
+            })
+            .or_else(|| {
+                self.shell
+                    .snapshot
+                    .as_ref()?
+                    .projects
+                    .first()
+                    .map(|p| p.id.clone())
+            })
+    }
+
+    pub(super) fn render_project_tabs(
+        &self,
+        inset: gpui::Pixels,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let selected = self.tab_project_id();
+        let mut tabs = h_flex()
+            .id("project-tabs")
+            .bg(crate::glass::sidebar(cx))
+            .h(px(crate::ui::CHROME_HEIGHT))
+            .pl(inset)
+            .pr_3()
+            .gap_2()
+            .items_center()
+            .flex_shrink_0()
+            .overflow_x_scroll()
+            .border_b_1()
+            .border_color(cx.theme().border);
+        if let Some(snapshot) = &self.shell.snapshot {
+            for project in &snapshot.projects {
+                let id = project.id.clone();
+                let active = selected.as_ref() == Some(&id);
+                tabs = tabs.child(
+                    h_flex()
+                        .id(SharedString::from(format!("project-tab-{}", id.0)))
+                        .px_3()
+                        .py_2()
+                        .gap_2()
+                        .max_w(px(200.))
+                        .flex_shrink_0()
+                        .rounded_md()
+                        .cursor_pointer()
+                        .when(active, |tab| tab.bg(cx.theme().list_active))
+                        .hover(|tab| tab.bg(cx.theme().list_hover))
+                        .child(self.project_icon(&project.title.0, &project.workspace_root.0, cx))
+                        .child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .text_sm()
+                                .child(project.title.0.clone()),
+                        )
+                        .on_click(cx.listener(move |app, _, window, cx| {
+                            if app.tab_project_id().as_ref() == Some(&id) || app.draft_creating {
+                                return;
+                            }
+                            let thread = app
+                                .sidebar_rows
+                                .iter()
+                                .flat_map(|row| &row.threads)
+                                .find(|t| {
+                                    app.shell_thread(&t.id).is_some_and(|t| t.project_id == id)
+                                })
+                                .map(|t| t.id.clone());
+                            if let Some(thread) = thread {
+                                app.select_thread(thread, cx);
+                            } else {
+                                app.new_thread(Some(id.clone()), window, cx);
+                            }
+                        })),
+                );
+            }
+        }
+        tabs.child(
+            Button::new("tabs-add-project")
+                .ghost()
+                .xsmall()
+                .icon(IconName::Plus)
+                .tooltip("Add project")
+                .on_click(cx.listener(|app, _, window, cx| app.open_add_project(window, cx))),
+        )
+    }
+
+    pub(super) fn ordered_thread_ids(&self, cx: &Context<Self>) -> Vec<ThreadId> {
         self.sidebar_rows
             .iter()
-            .flat_map(|project| project.threads.iter().map(|thread| thread.id.clone()))
+            .flat_map(|project| project.threads.iter())
+            .filter(|thread| {
+                !ClientSettings::get(cx).project_tabs_enabled
+                    || self
+                        .shell_thread(&thread.id)
+                        .is_some_and(|t| Some(t.project_id.clone()) == self.tab_project_id())
+            })
+            .map(|thread| thread.id.clone())
             .collect()
     }
 
     pub(super) fn cycle_thread(&mut self, delta: isize, cx: &mut Context<Self>) {
-        let ids = self.ordered_thread_ids();
+        let ids = self.ordered_thread_ids(cx);
         if ids.is_empty() {
             return;
         }
@@ -180,7 +282,7 @@ impl ChatApp {
     }
 
     pub(super) fn jump_thread(&mut self, index: usize, cx: &mut Context<Self>) {
-        if let Some(id) = self.ordered_thread_ids().get(index).cloned() {
+        if let Some(id) = self.ordered_thread_ids(cx).get(index).cloned() {
             self.select_thread(id, cx);
         }
     }
@@ -1136,7 +1238,70 @@ impl ChatApp {
         };
 
         let mut list = v_flex().gap_2().px_2().pb_3();
-        if ClientSettings::get(cx).sidebar_v2_enabled {
+        if ClientSettings::get(cx).project_tabs_enabled {
+            if let Some(project_id) = self.tab_project_id() {
+                if let Some(project) = self
+                    .shell
+                    .snapshot
+                    .as_ref()
+                    .and_then(|s| s.projects.iter().find(|p| p.id == project_id))
+                {
+                    let id = project_id.clone();
+                    list = list.child(
+                        h_flex()
+                            .px_2()
+                            .gap_2()
+                            .child(self.project_icon(
+                                &project.title.0,
+                                &project.workspace_root.0,
+                                cx,
+                            ))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .child(project.title.0.clone()),
+                            )
+                            .child(
+                                Button::new("project-new-conversation")
+                                    .ghost()
+                                    .xsmall()
+                                    .icon(IconName::Plus)
+                                    .tooltip("New conversation")
+                                    .on_click(cx.listener(move |app, _, window, cx| {
+                                        app.new_thread(Some(id.clone()), window, cx)
+                                    })),
+                            ),
+                    );
+                }
+                if ClientSettings::get(cx).sidebar_v2_enabled {
+                    list = list.child(self.render_beta_sidebar(cx));
+                } else {
+                    let mut count = 0;
+                    for row in &self.sidebar_rows {
+                        for thread in &row.threads {
+                            if self
+                                .shell_thread(&thread.id)
+                                .is_some_and(|t| t.project_id == project_id)
+                            {
+                                list = list.child(self.render_thread_row(thread, cx));
+                                count += 1;
+                            }
+                        }
+                    }
+                    if count == 0 {
+                        list = list.child(
+                            div()
+                                .p_2()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child("No conversations yet"),
+                        );
+                    }
+                }
+            }
+        } else if ClientSettings::get(cx).sidebar_v2_enabled {
             list = list.child(self.render_beta_sidebar(cx));
         } else {
             for row in &self.sidebar_rows {
