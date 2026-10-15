@@ -46,13 +46,12 @@ impl ChatApp {
         if cached.source.as_ref() != plan.plan_markdown.as_str() {
             *cached = PlanMarkdown::new(&plan.plan_markdown);
         }
-        let scrollable = cached.collapsible && expanded;
         let source = if cached.collapsible && !expanded {
             cached.preview.clone()
         } else {
             cached.source.clone()
         };
-        let slot = if scrollable {
+        let slot = if cached.collapsible && expanded {
             &mut cached.expanded
         } else {
             &mut cached.collapsed
@@ -61,11 +60,8 @@ impl ChatApp {
             let state =
                 cx.new(|cx| gpui_component::text::TextViewState::markdown(source.as_ref(), cx));
             let subscription = cx.observe(&state, move |app, _, cx| {
-                // Expanded plans have a fixed viewport: parsing/selection must
-                // not invalidate the enclosing conversation's row measurements.
-                if scrollable {
-                    return;
-                }
+                // Markdown finishes parsing after the row is first laid out.
+                // Recompute its height for both the preview and full plan.
                 let index = app.timeline.iter().position(|row| {
                     let TimelineRow::ProposedPlan(i) = row else {
                         return false;
@@ -256,9 +252,9 @@ async fn verify_scrolling(
 ) -> Result<(), String> {
     app.update(cx, |app, cx| {
         let view = Arc::make_mut(app.thread.as_mut().unwrap().state.view.as_mut().unwrap());
-        view.messages[0].text = tnes((0..60).map(|i| format!("Earlier conversation paragraph {i}.\n\n")).collect::<String>());
+        view.messages[0].text = tnes("Here is the proposed plan.");
         let plan = &mut view.proposed_plans.as_mut().unwrap().as_mut().unwrap()[0];
-        plan.plan_markdown = (0..160).map(|i| format!("## Step {i}\n\nImplement **bounded rendering** and verify scrolling.\n\n```rust\nlet step = {i};\n```\n\n")).collect();
+        plan.plan_markdown = (0..12).map(|i| format!("## Step {i}\n\nKeep the complete plan readable in the conversation.\n\n```rust\nlet step = {i};\n```\n\n")).collect();
         app.rebuild_timeline(cx);
         app.timeline_list.scroll_to(ListOffset { item_ix: 0, offset_in_item: px(0.) });
         cx.notify();
@@ -273,7 +269,7 @@ async fn verify_scrolling(
     .map_err(|e| e.to_string())?;
     app.update(cx, |app, cx| {
         app.timeline_list.scroll_to_end();
-        app.toggle_plan("position-plan", 1, cx)
+        app.toggle_plan("position-plan", 1, cx);
     })
     .map_err(|e| e.to_string())?;
     cx.background_executor()
@@ -284,68 +280,71 @@ async fn verify_scrolling(
         w.draw(cx).clear(cx)
     })
     .map_err(|e| e.to_string())?;
-    let (identity, height, anchor, position) = app
+    app.update(cx, |app, _| {
+        app.timeline_list.scroll_to(ListOffset {
+            item_ix: 1,
+            offset_in_item: px(0.),
+        });
+    })
+    .map_err(|e| e.to_string())?;
+    cx.update(|w, cx| w.draw(cx).clear(cx))
+        .map_err(|e| e.to_string())?;
+    let identity = app
         .update(cx, |app, _| {
             let bounds = app.timeline_list.bounds_for_item(1).unwrap();
             assert!(
-                bounds.size.height < px(500.),
-                "Expanded plan escaped its bounded viewport"
+                bounds.size.height > px(500.),
+                "Expanded plan did not grow to show its full content"
             );
             assert!(
                 !app.timeline_list.is_following_tail(),
                 "Expansion resumed tail following"
             );
+            app.plan_markdown["position-plan"]
+                .expanded
+                .as_ref()
+                .unwrap()
+                .state
+                .entity_id()
+        })
+        .map_err(|e| e.to_string())?;
+    let (inside, before) = app
+        .update(cx, |app, _| {
+            app.timeline_list.scroll_to(ListOffset {
+                item_ix: 1,
+                offset_in_item: px(0.),
+            });
+            let viewport = app.timeline_list.viewport_bounds();
             (
-                app.plan_markdown["position-plan"]
-                    .expanded
-                    .as_ref()
-                    .unwrap()
-                    .state
-                    .entity_id(),
-                bounds.size.height,
-                app.timeline_list.logical_scroll_top(),
-                bounds.center(),
+                gpui::point(viewport.center().x, viewport.center().y),
+                app.timeline_list.scroll_px_offset_for_scrollbar().y,
             )
         })
         .map_err(|e| e.to_string())?;
-    let mut timings = Vec::new();
-    for _ in 0..120 {
-        let elapsed = cx
-            .update(|window, cx| {
-                window.dispatch_event(
-                    gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
-                        position,
-                        ..Default::default()
-                    }),
-                    cx,
-                );
-                let start = std::time::Instant::now();
-                window.dispatch_event(
-                    gpui::PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
-                        position,
-                        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-24.))),
-                        ..Default::default()
-                    }),
-                    cx,
-                );
-                window.draw(cx).clear(cx);
-                start.elapsed().as_secs_f64() * 1000.
-            })
-            .map_err(|e| e.to_string())?;
-        timings.push(elapsed);
-        cx.background_executor()
-            .timer(Duration::from_millis(8))
-            .await;
-    }
-    app.update(cx, |app, _| {
-        let after = app.timeline_list.logical_scroll_top();
-        assert_eq!(
-            after.item_ix, anchor.item_ix,
-            "Wheel inside plan moved chat"
+    cx.update(|window, cx| {
+        window.draw(cx).clear(cx);
+        window.dispatch_event(
+            gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
+                position: inside,
+                ..Default::default()
+            }),
+            cx,
         );
-        assert!((after.offset_in_item - anchor.offset_in_item).abs() < px(2.));
+        window.dispatch_event(
+            gpui::PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
+                position: inside,
+                delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-180.))),
+                ..Default::default()
+            }),
+            cx,
+        );
+        window.draw(cx).clear(cx);
+    })
+    .map_err(|e| e.to_string())?;
+    app.update(cx, |app, _| {
         assert!(
-            (app.timeline_list.bounds_for_item(1).unwrap().size.height - height).abs() < px(2.)
+            (app.timeline_list.scroll_px_offset_for_scrollbar().y - before).abs() > px(50.),
+            "Wheel over the expanded plan did not scroll the conversation"
         );
     })
     .map_err(|e| e.to_string())?;
@@ -377,51 +376,10 @@ async fn verify_scrolling(
             identity,
             "Toggling reparsed the full plan"
         );
-        assert!(
-            (app.timeline_list.bounds_for_item(1).unwrap().size.height - height).abs() < px(2.)
-        );
     })
     .map_err(|e| e.to_string())?;
-    let (outside, before) = app
-        .update(cx, |app, _| {
-            let viewport = app.timeline_list.viewport_bounds();
-            (
-                gpui::point(viewport.left() + px(50.), viewport.center().y),
-                app.timeline_list.scroll_px_offset_for_scrollbar().y,
-            )
-        })
-        .map_err(|e| e.to_string())?;
-    cx.update(|window, cx| {
-        window.dispatch_event(
-            gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
-                position: outside,
-                ..Default::default()
-            }),
-            cx,
-        );
-        window.draw(cx).clear(cx);
-        window.dispatch_event(
-            gpui::PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
-                position: outside,
-                delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(180.))),
-                ..Default::default()
-            }),
-            cx,
-        );
-        window.draw(cx).clear(cx);
-    })
-    .map_err(|e| e.to_string())?;
-    app.update(cx, |app, _| {
-        assert!(
-            (app.timeline_list.scroll_px_offset_for_scrollbar().y - before).abs() > px(50.),
-            "Expanded plan trapped chat scrolling outside the card"
-        );
-    })
-    .map_err(|e| e.to_string())?;
-    timings.sort_by(f64::total_cmp);
     eprintln!(
-        "[vitre-plan-test] PASS: 160-section bounded plan, nested wheel, stable chat anchor, retained parse across six toggles; CPU dispatch+draw p50={:.2}ms p95={:.2}ms (not display FPS)",
-        timings[60], timings[114]
+        "[vitre-plan-test] PASS: full plan height, conversation scrolling inside card, retained parse across six toggles"
     );
     Ok(())
 }

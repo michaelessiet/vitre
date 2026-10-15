@@ -6413,18 +6413,12 @@ impl ChatApp {
                                         })),
                                 ),
                         )
-                        .child(
-                            div()
-                                .p_3()
-                                .when(collapsible && expanded, |body| body.h(px(360.)))
-                                .child(assistant_markdown_view(
-                                    SharedString::from(format!("plan-{}", plan.id)),
-                                    displayed,
-                                    Some(cx.entity().downgrade()),
-                                    Some(state),
-                                    collapsible && expanded,
-                                )),
-                        )
+                        .child(div().p_3().child(assistant_markdown_with_state(
+                            SharedString::from(format!("plan-{}", plan.id)),
+                            displayed,
+                            Some(cx.entity().downgrade()),
+                            Some(state),
+                        )))
                         .when(collapsible, |card| {
                             card.child(
                                 Button::new(("expand-plan", plan_index))
