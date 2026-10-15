@@ -1,3 +1,4 @@
+import * as Deferred from "effect/Deferred";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
@@ -10,6 +11,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 
 import * as CodexClient from "./client.ts";
+import type { ServerNotificationParamsByMethod } from "./rpc.ts";
 
 const mockPeerPath = Effect.map(Effect.service(Path.Path), (path) =>
   path.join(import.meta.dirname, "../test/fixtures/codex-app-server-mock-peer.ts"),
@@ -123,6 +125,52 @@ it.layer(NodeServices.layer)("effect-codex-app-server client", (it) => {
       ]);
     }),
   );
+  it.effect("resumes history and receives live events with completed sub-agent activity", () =>
+    Effect.gen(function* () {
+      const completed = yield* Deferred.make<ServerNotificationParamsByMethod["item/completed"]>();
+      const handle = yield* makeHandle();
+      const scope = yield* Scope.make();
+      const context = yield* Layer.buildWithScope(CodexClient.layerChildProcess(handle), scope);
+
+      const result = yield* Effect.gen(function* () {
+        const client = yield* CodexClient.CodexAppServerClient;
+        yield* client.handleServerNotification("item/completed", (payload) =>
+          Deferred.succeed(completed, payload).pipe(Effect.as(undefined)),
+        );
+
+        yield* client.request("initialize", {
+          clientInfo: { name: "resume-regression-test", version: "0.0.0" },
+          capabilities: { experimentalApi: true },
+        });
+        yield* client.notify("initialized", undefined);
+
+        const resumed = yield* client.request("thread/resume", { threadId: "thread-1" });
+        const notification = yield* Deferred.await(completed);
+        return { resumed, notification };
+      }).pipe(
+        Effect.timeout("5 seconds"),
+        Effect.provide(context),
+        Effect.ensuring(Scope.close(scope, Exit.void)),
+      );
+
+      const activity = {
+        id: "activity-1",
+        type: "subAgentActivity",
+        agentPath: "/root/worker",
+        agentThreadId: "agent-thread-1",
+        kind: "completed",
+      } as const;
+      assert.equal(result.resumed.thread.id, "thread-1");
+      assert.deepEqual(result.resumed.thread.turns[0]?.items, [activity]);
+      assert.deepEqual(result.notification, {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        completedAtMs: 1792069853000,
+        item: activity,
+      });
+    }),
+  );
+
   it.effect("drains child stderr so large diagnostics cannot block protocol responses", () =>
     Effect.gen(function* () {
       const handle = yield* makeHandle({
