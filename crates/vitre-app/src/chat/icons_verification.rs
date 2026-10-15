@@ -120,6 +120,39 @@ impl ChatApp {
                     loop { executor.timer(Duration::from_millis(80)).await; if this.update(cx,|a,cx|a.files.as_ref().and_then(|f|f.read(cx).active_file_status()).is_some_and(|(p,_)|p==path)).map_err(|e|e.to_string())? {break;} }
                 }
                 executor.timer(Duration::from_millis(500)).await;
+                if mode == "project-tabs" {
+                    super::ui_verification::float_fixture(cx).await?;
+                    this.update_in(cx, |app, window, cx| {
+                        window.resize(gpui::size(px(1400.), px(900.)));
+                        app.toggle_right_panel(window, cx);
+                        ClientSettings::update(cx, |settings| settings.project_tabs_enabled = true);
+                        assert!(ClientSettings::get(cx).project_tabs_enabled);
+                        assert_eq!(app.tab_project_id(), app.shell_thread(&thread).map(|t| t.project_id.clone()));
+                        cx.notify();
+                    }).map_err(|e| e.to_string())?;
+                    executor.timer(Duration::from_millis(700)).await;
+                    super::ui_verification::capture("project-tabs", cx).await?;
+                    let previous = this.update(cx, |app, _| app.tab_project_id()).map_err(|e| e.to_string())?;
+                    // Click another project tab in the real rendered header.
+                    cx.update(|w, cx| {
+                        let position = gpui::point(px(520.), px(22.));
+                        w.dispatch_event(gpui::PlatformInput::MouseDown(gpui::MouseDownEvent { button: gpui::MouseButton::Left, position, modifiers: Default::default(), click_count: 1, first_mouse: false }),cx);
+                        w.dispatch_event(gpui::PlatformInput::MouseUp(gpui::MouseUpEvent { button: gpui::MouseButton::Left, position, modifiers: Default::default(), click_count: 1 }),cx);
+                    }).map_err(|e| e.to_string())?;
+                    executor.timer(Duration::from_millis(700)).await;
+                    this.update(cx, |app, cx| {
+                        assert_ne!(app.tab_project_id(), previous, "project tab click must switch projects");
+                        ClientSettings::update(cx, |settings| settings.sidebar_v2_enabled = true);
+                    }).map_err(|e| e.to_string())?;
+                    executor.timer(Duration::from_millis(300)).await;
+                    super::ui_verification::capture("project-tabs-switched", cx).await?;
+                    this.update(cx, |_, cx| {
+                        ClientSettings::update(cx, |settings| settings.project_tabs_enabled = false);
+                        assert!(!ClientSettings::get(cx).project_tabs_enabled);
+                    }).map_err(|e| e.to_string())?;
+                    eprintln!("[vitre-project-tabs-test] PASS: layout toggle, project switching and Sidebar v2 rendering");
+                    return Ok(());
+                }
                 if mode == "kotlin" {
                     super::ui_verification::float_fixture(cx).await?;
                     let task = this.update_in(cx, |app, window, cx| {

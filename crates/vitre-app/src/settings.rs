@@ -346,6 +346,10 @@ impl SettingsPanel {
     fn appearance_group() -> SettingGroup {
         SettingGroup::new()
             .title("Appearance")
+            .item(SettingItem::new("Project tabs", SettingField::switch(
+                |cx: &App| ClientSettings::get(cx).project_tabs_enabled,
+                |value, cx: &mut App| ClientSettings::update(cx, |settings| settings.project_tabs_enabled = value),
+            )).description("Show projects across the top and only the selected project’s conversations in the sidebar."))
             .item(
                 SettingItem::new(
                     "Theme",
