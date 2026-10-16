@@ -52,7 +52,7 @@ describe("workspaceBasenameIndex", () => {
       entries: [
         { path: "apps/web/src/authStorage.ts", kind: "file" },
         { path: "apps/web/index.ts", kind: "file" },
-        { path: "apps/mobile/index.ts", kind: "file" },
+        { path: "apps/server/index.ts", kind: "file" },
         { path: "apps", kind: "directory" },
       ],
       truncated: false,

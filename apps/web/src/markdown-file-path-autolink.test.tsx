@@ -15,7 +15,7 @@ const WORKSPACE_FILES = new Set([
   "package.json",
   "docs/README.md",
   "apps/web/src/authStorage.ts",
-  "apps/mobile/index.ts",
+  "apps/server/index.ts",
   "apps/web/index.ts",
 ]);
 

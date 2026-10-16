@@ -9,7 +9,7 @@ It is intentionally architecture-first. It does not define a complete implementa
 - Treat remote environments as first-class product primitives, not special cases.
 - Support multiple ways to reach the same environment.
 - Keep the T3 server as the execution boundary.
-- Let desktop, mobile, and web all share the same conceptual model.
+- Let desktop and web share the same conceptual model.
 - Avoid introducing a local control plane unless product pressure proves it is necessary.
 
 ## Non-goals
@@ -27,7 +27,7 @@ Remote support should preserve that boundary.
 
 ```text
 ┌──────────────────────────────────────────────┐
-│ Client (desktop / mobile / web)             │
+│ Client (desktop / web)                      │
 │                                              │
 │ - known environments                         │
 │ - connection manager                         │
@@ -76,7 +76,7 @@ It is the unit that owns:
 
 It is identified by a stable `environmentId`.
 
-This is the shared cross-client primitive. Desktop, mobile, and web should all reason about the same concept here.
+This is the shared cross-client primitive. Desktop and web should reason about the same concept here.
 
 ### KnownEnvironment
 
@@ -210,7 +210,7 @@ This is the base model and should be the first-class default.
 
 Benefits:
 
-- works for desktop, mobile, and web
+- works for desktop and web
 - no client-specific process management required
 - best fit for hosted or self-managed remote T3 deployments
 
@@ -232,7 +232,7 @@ This is especially useful when:
 
 - the host is behind NAT
 - inbound ports are unavailable
-- mobile must reach a desktop-hosted environment
+- a web client must reach a desktop-hosted environment
 - a machine should be reachable without exposing raw LAN or public ports
 
 Tailscale-backed access sits here architecturally even though the current implementation is endpoint discovery rather than a T3-managed tunnel. It contributes private-network endpoints and lets the existing HTTP/WebSocket client path do the actual connection.
@@ -311,7 +311,7 @@ This is the inverse of remote launch: a local T3 server is already running, and 
 
 This is useful for:
 
-- exposing a desktop-hosted environment to mobile
+- exposing a desktop-hosted environment to a web client
 - temporary remote access without changing router or firewall settings
 
 This is still a launch concern, not a new environment kind.
@@ -325,7 +325,7 @@ Examples:
 - A manually hosted T3 server might be reached through direct `wss`.
 - The same server might also be reachable through a tunnel.
 - An SSH-managed server might be launched over SSH but then reached through forwarded WebSocket.
-- A local desktop server might be published through a tunnel for mobile.
+- A local desktop server might be published through a tunnel for remote web access.
 
 In all of those cases, the `ExecutionEnvironment` is the same kind of thing.
 
@@ -333,7 +333,7 @@ Only the launch and access paths differ.
 
 ## Version Coordination
 
-Remote environments may stay online while web, desktop, or mobile clients move to a newer release.
+Remote environments may stay online while web or desktop clients move to a newer release.
 The environment descriptor therefore carries the running server version and may advertise a safe
 replacement path. The web and desktop UI use that information to show the appropriate action
 without making the connection transport responsible for process management.
