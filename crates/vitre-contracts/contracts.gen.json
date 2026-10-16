@@ -1075,6 +1075,192 @@
     "ClientOrchestrationCommand": {
       "anyOf": [
         {
+          "additionalProperties": false,
+          "properties": {
+            "activities": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/$defs/OrchestrationThreadActivity"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "additionalRoots": {
+              "items": {
+                "$ref": "#/$defs/WorkspaceRootRef"
+              },
+              "type": "array"
+            },
+            "branch": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TrimmedNonEmptyString"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "commandId": {
+              "$ref": "#/$defs/CommandId"
+            },
+            "createdAt": {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            },
+            "expectedGeneration": {
+              "$ref": "#/$defs/NonNegativeInt"
+            },
+            "interactionMode": {
+              "$ref": "#/$defs/ProviderInteractionMode"
+            },
+            "messages": {
+              "allOf": [
+                {
+                  "maxItems": 10000
+                }
+              ],
+              "items": {
+                "$ref": "#/$defs/OrchestrationMessage"
+              },
+              "type": "array"
+            },
+            "modelSelection": {
+              "$ref": "#/$defs/ModelSelection"
+            },
+            "operationId": {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            },
+            "proposedPlans": {
+              "items": {
+                "$ref": "#/$defs/OrchestrationProposedPlan"
+              },
+              "type": "array"
+            },
+            "runtimeMode": {
+              "$ref": "#/$defs/RuntimeMode"
+            },
+            "threadId": {
+              "$ref": "#/$defs/ThreadId"
+            },
+            "title": {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            },
+            "type": {
+              "enum": ["thread.execution.restore"],
+              "type": "string"
+            },
+            "worktreePath": {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            }
+          },
+          "required": [
+            "type",
+            "commandId",
+            "threadId",
+            "operationId",
+            "expectedGeneration",
+            "title",
+            "modelSelection",
+            "runtimeMode",
+            "interactionMode",
+            "worktreePath",
+            "branch",
+            "additionalRoots",
+            "messages",
+            "proposedPlans",
+            "createdAt"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "commandId": {
+              "$ref": "#/$defs/CommandId"
+            },
+            "createdAt": {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            },
+            "execution": {
+              "$ref": "#/$defs/ThreadExecutionState"
+            },
+            "expectedGeneration": {
+              "$ref": "#/$defs/NonNegativeInt"
+            },
+            "threadId": {
+              "$ref": "#/$defs/ThreadId"
+            },
+            "type": {
+              "enum": ["thread.execution.set"],
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "commandId",
+            "threadId",
+            "expectedGeneration",
+            "execution",
+            "createdAt"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "activities": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/$defs/OrchestrationThreadActivity"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "commandId": {
+              "$ref": "#/$defs/CommandId"
+            },
+            "createdAt": {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            },
+            "messages": {
+              "allOf": [
+                {
+                  "maxItems": 10000
+                }
+              ],
+              "items": {
+                "$ref": "#/$defs/OrchestrationMessage"
+              },
+              "type": "array"
+            },
+            "proposedPlans": {
+              "items": {
+                "$ref": "#/$defs/OrchestrationProposedPlan"
+              },
+              "type": "array"
+            },
+            "threadId": {
+              "$ref": "#/$defs/ThreadId"
+            },
+            "type": {
+              "enum": ["thread.history.import"],
+              "type": "string"
+            }
+          },
+          "required": ["type", "commandId", "threadId", "messages", "proposedPlans", "createdAt"],
+          "type": "object"
+        },
+        {
           "$ref": "#/$defs/ProjectCreateCommand"
         },
         {
@@ -1701,70 +1887,7 @@
               "properties": {
                 "attachments": {
                   "items": {
-                    "anyOf": [
-                      {
-                        "additionalProperties": false,
-                        "properties": {
-                          "dataUrl": {
-                            "$ref": "#/$defs/TrimmedNonEmptyString"
-                          },
-                          "mimeType": {
-                            "$ref": "#/$defs/TrimmedNonEmptyString"
-                          },
-                          "name": {
-                            "$ref": "#/$defs/TrimmedNonEmptyString"
-                          },
-                          "sizeBytes": {
-                            "allOf": [
-                              {
-                                "minimum": 0
-                              },
-                              {
-                                "maximum": 10485760
-                              }
-                            ],
-                            "type": "integer"
-                          },
-                          "type": {
-                            "enum": ["image"],
-                            "type": "string"
-                          }
-                        },
-                        "required": ["type", "name", "mimeType", "sizeBytes", "dataUrl"],
-                        "type": "object"
-                      },
-                      {
-                        "additionalProperties": false,
-                        "properties": {
-                          "dataUrl": {
-                            "$ref": "#/$defs/TrimmedNonEmptyString"
-                          },
-                          "mimeType": {
-                            "$ref": "#/$defs/TrimmedNonEmptyString"
-                          },
-                          "name": {
-                            "$ref": "#/$defs/TrimmedNonEmptyString"
-                          },
-                          "sizeBytes": {
-                            "allOf": [
-                              {
-                                "minimum": 0
-                              },
-                              {
-                                "maximum": 10485760
-                              }
-                            ],
-                            "type": "integer"
-                          },
-                          "type": {
-                            "enum": ["file"],
-                            "type": "string"
-                          }
-                        },
-                        "required": ["type", "name", "mimeType", "sizeBytes", "dataUrl"],
-                        "type": "object"
-                      }
-                    ]
+                    "$ref": "#/$defs/UploadChatAttachment"
                   },
                   "type": "array"
                 },
@@ -1971,6 +2094,1301 @@
         }
       ]
     },
+    "CloudAttachment": {
+      "additionalProperties": false,
+      "properties": {
+        "chunks": {
+          "allOf": [
+            {
+              "maxItems": 3
+            }
+          ],
+          "items": {
+            "allOf": [
+              {
+                "pattern": "^[a-f0-9]{64}$"
+              }
+            ],
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "mimeType": {
+          "allOf": [
+            {
+              "minLength": 1
+            },
+            {
+              "maxLength": 100
+            }
+          ],
+          "type": "string"
+        },
+        "name": {
+          "allOf": [
+            {
+              "minLength": 1
+            },
+            {
+              "maxLength": 255
+            }
+          ],
+          "type": "string"
+        },
+        "sha256": {
+          "allOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$"
+            }
+          ],
+          "type": "string"
+        },
+        "sizeBytes": {
+          "allOf": [
+            {
+              "minimum": 0
+            },
+            {
+              "maximum": 10485760
+            }
+          ],
+          "type": "integer"
+        },
+        "type": {
+          "enum": ["image", "file"],
+          "type": "string"
+        }
+      },
+      "required": ["type", "name", "mimeType", "sizeBytes", "sha256", "chunks"],
+      "type": "object"
+    },
+    "CloudCheckpoint": {
+      "additionalProperties": false,
+      "properties": {
+        "attemptId": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "createdAt": {
+          "$ref": "#/$defs/TrimmedNonEmptyString"
+        },
+        "id": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "objectKey": {
+          "allOf": [
+            {
+              "minLength": 1
+            },
+            {
+              "maxLength": 65536
+            }
+          ],
+          "type": "string"
+        },
+        "sequence": {
+          "allOf": [
+            {
+              "minimum": 0
+            }
+          ],
+          "type": "integer"
+        },
+        "sha256": {
+          "allOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$"
+            }
+          ],
+          "type": "string"
+        },
+        "sizeBytes": {
+          "allOf": [
+            {
+              "minimum": 0
+            }
+          ],
+          "type": "integer"
+        },
+        "taskId": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "taskId",
+        "attemptId",
+        "sequence",
+        "objectKey",
+        "sha256",
+        "sizeBytes",
+        "createdAt"
+      ],
+      "type": "object"
+    },
+    "CloudCommand": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "cloudTaskId": {
+              "anyOf": [
+                {
+                  "allOf": [
+                    {
+                      "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                    }
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "conversationId": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "expectedGeneration": {
+              "allOf": [
+                {
+                  "minimum": 0
+                }
+              ],
+              "type": "integer"
+            },
+            "idempotencyKey": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "localThreadId": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "target": {
+              "$ref": "#/$defs/CloudExecutionTarget"
+            },
+            "type": {
+              "enum": ["handoff.request"],
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "idempotencyKey",
+            "conversationId",
+            "localThreadId",
+            "cloudTaskId",
+            "target",
+            "expectedGeneration"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "checkpoint": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CloudSnapshotRef"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "cloudTaskId": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "destinationOwner": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "expectedPhase": {
+              "$ref": "#/$defs/CloudHandoffPhase"
+            },
+            "idempotencyKey": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "nextPhase": {
+              "$ref": "#/$defs/CloudHandoffPhase"
+            },
+            "operationId": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "roots": {
+              "items": {
+                "$ref": "#/$defs/CloudRootBinding"
+              },
+              "type": "array"
+            },
+            "type": {
+              "enum": ["handoff.advance"],
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "idempotencyKey",
+            "operationId",
+            "expectedPhase",
+            "nextPhase",
+            "checkpoint"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "idempotencyKey": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "operationId": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "type": {
+              "enum": ["handoff.cancel"],
+              "type": "string"
+            }
+          },
+          "required": ["type", "idempotencyKey", "operationId"],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "idempotencyKey": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "publicationId": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "type": {
+              "enum": ["publication.retry"],
+              "type": "string"
+            }
+          },
+          "required": ["type", "idempotencyKey", "publicationId"],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "idempotencyKey": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "repository": {
+              "$ref": "#/$defs/CloudRepository"
+            },
+            "type": {
+              "enum": ["repository.save"],
+              "type": "string"
+            }
+          },
+          "required": ["type", "idempotencyKey", "repository"],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attachments": {
+              "allOf": [
+                {
+                  "maxItems": 8
+                }
+              ],
+              "items": {
+                "$ref": "#/$defs/CloudAttachment"
+              },
+              "type": "array"
+            },
+            "baseBranch": {
+              "allOf": [
+                {
+                  "minLength": 1
+                },
+                {
+                  "maxLength": 65536
+                }
+              ],
+              "type": "string"
+            },
+            "handoff": {
+              "additionalProperties": false,
+              "properties": {
+                "conversationId": {
+                  "allOf": [
+                    {
+                      "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                    }
+                  ],
+                  "type": "string"
+                },
+                "generation": {
+                  "allOf": [
+                    {
+                      "minimum": 0
+                    }
+                  ],
+                  "type": "integer"
+                },
+                "history": {
+                  "$ref": "#/$defs/CloudWorkspaceBlob"
+                },
+                "operationId": {
+                  "allOf": [
+                    {
+                      "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                    }
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": ["operationId", "conversationId", "generation", "history"],
+              "type": "object"
+            },
+            "idempotencyKey": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "interactionMode": {
+              "enum": ["default", "plan"],
+              "type": "string"
+            },
+            "issueNumber": {
+              "anyOf": [
+                {
+                  "allOf": [
+                    {
+                      "exclusiveMinimum": 0
+                    }
+                  ],
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "keepAliveSeconds": {
+              "allOf": [
+                {
+                  "maximum": 900,
+                  "minimum": 0
+                }
+              ],
+              "type": "integer"
+            },
+            "kind": {
+              "enum": ["build", "ask", "investigate"],
+              "type": "string"
+            },
+            "model": {
+              "allOf": [
+                {
+                  "minLength": 1
+                },
+                {
+                  "maxLength": 65536
+                }
+              ],
+              "type": "string"
+            },
+            "modelOptions": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/$defs/ProviderOptionSelection"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "object"
+                }
+              ]
+            },
+            "projectId": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "prompt": {
+              "allOf": [
+                {
+                  "minLength": 1
+                },
+                {
+                  "maxLength": 65536
+                }
+              ],
+              "type": "string"
+            },
+            "provider": {
+              "$ref": "#/$defs/CloudProvider"
+            },
+            "repositoryId": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "runtimeMode": {
+              "enum": ["approval-required", "auto-accept-edits", "auto", "full-access"],
+              "type": "string"
+            },
+            "source": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "enum": ["github"],
+                      "type": "string"
+                    },
+                    "revision": {
+                      "allOf": [
+                        {
+                          "pattern": "^[a-f0-9]{40}$"
+                        }
+                      ],
+                      "type": "string"
+                    },
+                    "snapshot": {
+                      "$ref": "#/$defs/CloudSnapshotRef"
+                    }
+                  },
+                  "required": ["kind", "revision", "snapshot"],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "enum": ["local"],
+                      "type": "string"
+                    },
+                    "name": {
+                      "allOf": [
+                        {
+                          "minLength": 1
+                        },
+                        {
+                          "maxLength": 65536
+                        }
+                      ],
+                      "type": "string"
+                    },
+                    "snapshot": {
+                      "$ref": "#/$defs/CloudSnapshotRef"
+                    }
+                  },
+                  "required": ["kind", "snapshot", "name"],
+                  "type": "object"
+                }
+              ]
+            },
+            "type": {
+              "enum": ["task.create"],
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "idempotencyKey",
+            "repositoryId",
+            "baseBranch",
+            "provider",
+            "kind",
+            "prompt",
+            "issueNumber"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expectedTurnRequestId": {
+              "anyOf": [
+                {
+                  "allOf": [
+                    {
+                      "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                    }
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "idempotencyKey": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "taskId": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "type": {
+              "enum": ["task.cancel"],
+              "type": "string"
+            }
+          },
+          "required": ["type", "idempotencyKey", "taskId"],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "archived": {
+              "type": "boolean"
+            },
+            "idempotencyKey": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "taskId": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "title": {
+              "allOf": [
+                {
+                  "minLength": 1
+                },
+                {
+                  "maxLength": 65536
+                }
+              ],
+              "type": "string"
+            },
+            "type": {
+              "enum": ["task.update"],
+              "type": "string"
+            }
+          },
+          "required": ["type", "idempotencyKey", "taskId"],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "idempotencyKey": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "taskId": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "type": {
+              "enum": ["task.wake"],
+              "type": "string"
+            }
+          },
+          "required": ["type", "idempotencyKey", "taskId"],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attachments": {
+              "allOf": [
+                {
+                  "maxItems": 8
+                }
+              ],
+              "items": {
+                "$ref": "#/$defs/CloudAttachment"
+              },
+              "type": "array"
+            },
+            "idempotencyKey": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "prompt": {
+              "allOf": [
+                {
+                  "minLength": 1
+                },
+                {
+                  "maxLength": 65536
+                }
+              ],
+              "type": "string"
+            },
+            "taskId": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "type": {
+              "enum": ["task.continue"],
+              "type": "string"
+            }
+          },
+          "required": ["type", "idempotencyKey", "taskId", "prompt"],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "idempotencyKey": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "taskId": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "type": {
+              "enum": ["task.resume"],
+              "type": "string"
+            }
+          },
+          "required": ["type", "idempotencyKey", "taskId"],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "idempotencyKey": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "taskId": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "type": {
+              "enum": ["task.delete"],
+              "type": "string"
+            }
+          },
+          "required": ["type", "idempotencyKey", "taskId"],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "idempotencyKey": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "provider": {
+              "$ref": "#/$defs/CloudProvider"
+            },
+            "type": {
+              "enum": ["provider.disconnect"],
+              "type": "string"
+            }
+          },
+          "required": ["type", "idempotencyKey", "provider"],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "body": {
+              "allOf": [
+                {
+                  "minLength": 1
+                },
+                {
+                  "maxLength": 65536
+                }
+              ],
+              "type": "string"
+            },
+            "idempotencyKey": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "kind": {
+              "enum": ["pull_request", "issue_comment"],
+              "type": "string"
+            },
+            "resultId": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "resultSha256": {
+              "allOf": [
+                {
+                  "pattern": "^[a-f0-9]{64}$"
+                }
+              ],
+              "type": "string"
+            },
+            "taskId": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "title": {
+              "allOf": [
+                {
+                  "minLength": 1
+                },
+                {
+                  "maxLength": 65536
+                }
+              ],
+              "type": "string"
+            },
+            "type": {
+              "enum": ["publication.create"],
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "idempotencyKey",
+            "taskId",
+            "resultId",
+            "resultSha256",
+            "kind",
+            "title",
+            "body"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "idempotencyKey": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "monthlyComputeMicroDollars": {
+              "allOf": [
+                {
+                  "maximum": 1000000000,
+                  "minimum": 0
+                }
+              ],
+              "type": "integer"
+            },
+            "type": {
+              "enum": ["limits.update"],
+              "type": "string"
+            }
+          },
+          "required": ["type", "idempotencyKey", "monthlyComputeMicroDollars"],
+          "type": "object"
+        }
+      ]
+    },
+    "CloudConnection": {
+      "additionalProperties": false,
+      "properties": {
+        "bootstrapToken": {
+          "allOf": [
+            {
+              "minLength": 1
+            },
+            {
+              "maxLength": 65536
+            }
+          ],
+          "type": "string"
+        },
+        "environmentId": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "httpBaseUrl": {
+          "$ref": "#/$defs/TrimmedNonEmptyString"
+        }
+      },
+      "required": ["environmentId", "httpBaseUrl", "bootstrapToken"],
+      "type": "object"
+    },
+    "CloudContinueConversationInput": {
+      "additionalProperties": false,
+      "properties": {
+        "attachments": {
+          "allOf": [
+            {
+              "maxItems": 8
+            }
+          ],
+          "items": {
+            "$ref": "#/$defs/UploadChatAttachment"
+          },
+          "type": "array"
+        },
+        "idempotencyKey": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "prompt": {
+          "allOf": [
+            {
+              "minLength": 1
+            },
+            {
+              "maxLength": 65536
+            }
+          ],
+          "type": "string"
+        },
+        "taskId": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        }
+      },
+      "required": ["idempotencyKey", "taskId", "prompt", "attachments"],
+      "type": "object"
+    },
+    "CloudConversationBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "aliases": {
+          "items": {
+            "allOf": [
+              {
+                "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+              }
+            ],
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "cloudTaskId": {
+          "anyOf": [
+            {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "conversationId": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "generation": {
+          "allOf": [
+            {
+              "minimum": 0
+            }
+          ],
+          "type": "integer"
+        },
+        "leaseExpiresAt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "leaseOwner": {
+          "anyOf": [
+            {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "localThreadId": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "roots": {
+          "items": {
+            "$ref": "#/$defs/CloudRootBinding"
+          },
+          "type": "array"
+        },
+        "target": {
+          "$ref": "#/$defs/CloudExecutionTarget"
+        }
+      },
+      "required": [
+        "conversationId",
+        "localThreadId",
+        "cloudTaskId",
+        "target",
+        "generation",
+        "leaseOwner",
+        "leaseExpiresAt"
+      ],
+      "type": "object"
+    },
+    "CloudConversationSnapshot": {
+      "additionalProperties": false,
+      "properties": {
+        "history": {
+          "$ref": "#/$defs/CloudWorkspaceBlob"
+        },
+        "projectId": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "roots": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "allOf": [
+                  {
+                    "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                  }
+                ],
+                "type": "string"
+              },
+              "path": {
+                "allOf": [
+                  {
+                    "minLength": 1
+                  },
+                  {
+                    "maxLength": 65536
+                  }
+                ],
+                "type": "string"
+              }
+            },
+            "required": ["id", "path"],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "version": {
+          "enum": [1],
+          "type": "number"
+        },
+        "workspace": {
+          "$ref": "#/$defs/CloudWorkspaceManifest"
+        }
+      },
+      "required": ["version", "workspace", "history", "roots"],
+      "type": "object"
+    },
+    "CloudDependencySetup": {
+      "additionalProperties": false,
+      "properties": {
+        "attemptId": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "detail": {
+          "allOf": [
+            {
+              "maxLength": 65536
+            }
+          ],
+          "type": "string"
+        },
+        "outcome": {
+          "enum": ["running", "succeeded", "reused", "unnecessary", "failed"],
+          "type": "string"
+        },
+        "sequence": {
+          "allOf": [
+            {
+              "minimum": 0
+            }
+          ],
+          "type": "integer"
+        },
+        "updatedAt": {
+          "$ref": "#/$defs/TrimmedNonEmptyString"
+        }
+      },
+      "required": ["attemptId", "sequence", "outcome", "updatedAt"],
+      "type": "object"
+    },
+    "CloudDesktopAuthError": {
+      "additionalProperties": false,
+      "properties": {
+        "_tag": {
+          "enum": ["CloudDesktopAuthError"],
+          "type": "string"
+        },
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "$ref": "#/$defs/TrimmedNonEmptyString"
+        },
+        "requestDisposition": {
+          "enum": ["rejected", "unknown"],
+          "type": "string"
+        },
+        "retryable": {
+          "type": "boolean"
+        }
+      },
+      "required": ["_tag", "message"],
+      "type": "object"
+    },
+    "CloudDesktopSession": {
+      "additionalProperties": false,
+      "properties": {
+        "accessToken": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "expiresAtEpochMs": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "enum": ["NaN"],
+                  "type": "string"
+                },
+                {
+                  "enum": ["Infinity"],
+                  "type": "string"
+                },
+                {
+                  "enum": ["-Infinity"],
+                  "type": "string"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "relayUrl": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": ["enabled", "relayUrl", "accessToken", "expiresAtEpochMs"],
+      "type": "object"
+    },
+    "CloudExecutionTarget": {
+      "enum": ["local", "cloud-github", "cloud-local"],
+      "type": "string"
+    },
+    "CloudGetDesktopSessionPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "authorize": {
+          "type": "boolean"
+        },
+        "cancel": {
+          "type": "boolean"
+        }
+      },
+      "required": ["authorize"],
+      "type": "object"
+    },
     "CloudGetRelayClientStatusPayload": {
       "anyOf": [
         {
@@ -1981,6 +3399,135 @@
         }
       ]
     },
+    "CloudHandoffErrorDisposition": {
+      "enum": ["retryable", "terminal", "unknown"],
+      "type": "string"
+    },
+    "CloudHandoffOperation": {
+      "additionalProperties": false,
+      "properties": {
+        "cancelRequested": {
+          "type": "boolean"
+        },
+        "checkpoint": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CloudSnapshotRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "conversationId": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "errorDisposition": {
+          "enum": ["retryable", "terminal", "unknown"],
+          "type": "string"
+        },
+        "from": {
+          "$ref": "#/$defs/CloudExecutionTarget"
+        },
+        "generation": {
+          "allOf": [
+            {
+              "minimum": 0
+            }
+          ],
+          "type": "integer"
+        },
+        "id": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "phase": {
+          "$ref": "#/$defs/CloudHandoffPhase"
+        },
+        "revision": {
+          "allOf": [
+            {
+              "minimum": 0
+            }
+          ],
+          "type": "integer"
+        },
+        "startedAt": {
+          "type": "string"
+        },
+        "to": {
+          "$ref": "#/$defs/CloudExecutionTarget"
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "waitReason": {
+          "enum": [
+            "active-turn",
+            "cloud-preparation",
+            "cloud-activation",
+            "ownership-confirmation",
+            "conflict"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "conversationId",
+        "from",
+        "to",
+        "generation",
+        "phase",
+        "checkpoint",
+        "error"
+      ],
+      "type": "object"
+    },
+    "CloudHandoffPhase": {
+      "enum": [
+        "waiting",
+        "preparing",
+        "checkpointing",
+        "transferring",
+        "verifying",
+        "activating",
+        "releasing",
+        "completed",
+        "cancelled",
+        "failed"
+      ],
+      "type": "string"
+    },
+    "CloudHandoffWaitReason": {
+      "enum": [
+        "active-turn",
+        "cloud-preparation",
+        "cloud-activation",
+        "ownership-confirmation",
+        "conflict"
+      ],
+      "type": "string"
+    },
     "CloudInstallRelayClientPayload": {
       "anyOf": [
         {
@@ -1988,6 +3535,2726 @@
         },
         {
           "type": "array"
+        }
+      ]
+    },
+    "CloudLoginStatus": {
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "state": {
+          "enum": ["starting", "running", "completed", "failed"],
+          "type": "string"
+        },
+        "userCode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "verificationUrl": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": ["id", "state", "verificationUrl", "userCode", "error"],
+      "type": "object"
+    },
+    "CloudOverview": {
+      "additionalProperties": false,
+      "properties": {
+        "accounts": {
+          "items": {
+            "$ref": "#/$defs/CloudProviderAccount"
+          },
+          "type": "array"
+        },
+        "bindings": {
+          "items": {
+            "$ref": "#/$defs/CloudConversationBinding"
+          },
+          "type": "array"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "handoffs": {
+          "items": {
+            "$ref": "#/$defs/CloudHandoffOperation"
+          },
+          "type": "array"
+        },
+        "publications": {
+          "items": {
+            "$ref": "#/$defs/CloudPublication"
+          },
+          "type": "array"
+        },
+        "repositories": {
+          "items": {
+            "$ref": "#/$defs/CloudRepository"
+          },
+          "type": "array"
+        },
+        "revision": {
+          "allOf": [
+            {
+              "minimum": 0
+            }
+          ],
+          "type": "integer"
+        },
+        "tasks": {
+          "items": {
+            "$ref": "#/$defs/CloudTask"
+          },
+          "type": "array"
+        },
+        "usage": {
+          "$ref": "#/$defs/CloudUsageSummary"
+        }
+      },
+      "required": ["enabled", "repositories", "tasks", "accounts", "publications", "usage"],
+      "type": "object"
+    },
+    "CloudPreparation": {
+      "additionalProperties": false,
+      "properties": {
+        "attemptId": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "phase": {
+          "enum": [
+            "restoring",
+            "cloning",
+            "dependencies",
+            "backend",
+            "provider",
+            "ready",
+            "failed"
+          ],
+          "type": "string"
+        },
+        "sequence": {
+          "allOf": [
+            {
+              "minimum": 0
+            }
+          ],
+          "type": "integer"
+        },
+        "startedAt": {
+          "$ref": "#/$defs/TrimmedNonEmptyString"
+        },
+        "updatedAt": {
+          "$ref": "#/$defs/TrimmedNonEmptyString"
+        }
+      },
+      "required": ["attemptId", "sequence", "phase", "startedAt", "updatedAt"],
+      "type": "object"
+    },
+    "CloudPreparedConversation": {
+      "additionalProperties": false,
+      "properties": {
+        "conversationId": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "generation": {
+          "allOf": [
+            {
+              "minimum": 0
+            }
+          ],
+          "type": "integer"
+        },
+        "history": {
+          "$ref": "#/$defs/CloudWorkspaceBlob"
+        },
+        "operationId": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        }
+      },
+      "required": ["operationId", "conversationId", "generation", "history"],
+      "type": "object"
+    },
+    "CloudProvider": {
+      "enum": ["codex", "claude"],
+      "type": "string"
+    },
+    "CloudProviderAccount": {
+      "additionalProperties": false,
+      "properties": {
+        "credentialVersion": {
+          "allOf": [
+            {
+              "minimum": 0
+            }
+          ],
+          "type": "integer"
+        },
+        "leasedBy": {
+          "anyOf": [
+            {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "provider": {
+          "$ref": "#/$defs/CloudProvider"
+        },
+        "state": {
+          "enum": ["disconnected", "connected", "needs_auth", "usage_limited"],
+          "type": "string"
+        }
+      },
+      "required": ["provider", "state", "credentialVersion", "leasedBy"],
+      "type": "object"
+    },
+    "CloudPublication": {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "allOf": [
+            {
+              "minLength": 1
+            },
+            {
+              "maxLength": 65536
+            }
+          ],
+          "type": "string"
+        },
+        "id": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "kind": {
+          "enum": ["pull_request", "issue_comment"],
+          "type": "string"
+        },
+        "resultId": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "resultSha256": {
+          "allOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$"
+            }
+          ],
+          "type": "string"
+        },
+        "state": {
+          "enum": ["queued", "publishing", "published", "failed"],
+          "type": "string"
+        },
+        "taskId": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "title": {
+          "allOf": [
+            {
+              "minLength": 1
+            },
+            {
+              "maxLength": 65536
+            }
+          ],
+          "type": "string"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "allOf": [
+                {
+                  "minLength": 1
+                },
+                {
+                  "maxLength": 65536
+                }
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "taskId",
+        "resultId",
+        "resultSha256",
+        "kind",
+        "title",
+        "body",
+        "state",
+        "url"
+      ],
+      "type": "object"
+    },
+    "CloudRepository": {
+      "additionalProperties": false,
+      "properties": {
+        "defaultBranch": {
+          "allOf": [
+            {
+              "minLength": 1
+            },
+            {
+              "maxLength": 65536
+            }
+          ],
+          "type": "string"
+        },
+        "id": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "installationId": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "name": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_.-]{1,100}$"
+            }
+          ],
+          "type": "string"
+        },
+        "owner": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "revision": {
+          "allOf": [
+            {
+              "minimum": 0
+            }
+          ],
+          "type": "integer"
+        },
+        "setupCommand": {
+          "allOf": [
+            {
+              "maxLength": 16384
+            }
+          ],
+          "type": "string"
+        },
+        "testCommand": {
+          "allOf": [
+            {
+              "maxLength": 16384
+            }
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "installationId",
+        "owner",
+        "name",
+        "defaultBranch",
+        "setupCommand",
+        "testCommand",
+        "revision"
+      ],
+      "type": "object"
+    },
+    "CloudResultRevision": {
+      "additionalProperties": false,
+      "properties": {
+        "checkpointId": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "createdAt": {
+          "$ref": "#/$defs/TrimmedNonEmptyString"
+        },
+        "id": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "sha256": {
+          "allOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$"
+            }
+          ],
+          "type": "string"
+        },
+        "summary": {
+          "$ref": "#/$defs/TrimmedNonEmptyString"
+        },
+        "taskId": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        }
+      },
+      "required": ["id", "taskId", "checkpointId", "sha256", "summary", "createdAt"],
+      "type": "object"
+    },
+    "CloudRootBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "cloudPath": {
+          "anyOf": [
+            {
+              "allOf": [
+                {
+                  "minLength": 1
+                },
+                {
+                  "maxLength": 65536
+                }
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "localPath": {
+          "anyOf": [
+            {
+              "allOf": [
+                {
+                  "minLength": 1
+                },
+                {
+                  "maxLength": 65536
+                }
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": ["id", "localPath", "cloudPath"],
+      "type": "object"
+    },
+    "CloudSavedResult": {
+      "additionalProperties": false,
+      "properties": {
+        "result": {
+          "additionalProperties": false,
+          "properties": {
+            "conversation": {},
+            "diff": {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            },
+            "summary": {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            },
+            "testExitCode": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "testOutput": {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            }
+          },
+          "required": ["summary", "diff", "conversation", "testOutput", "testExitCode"],
+          "type": "object"
+        },
+        "revision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CloudResultRevision"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": ["revision", "result"],
+      "type": "object"
+    },
+    "CloudSnapshotRef": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "sha256": {
+          "allOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$"
+            }
+          ],
+          "type": "string"
+        }
+      },
+      "required": ["id", "sha256"],
+      "type": "object"
+    },
+    "CloudStartConversationInput": {
+      "additionalProperties": false,
+      "properties": {
+        "attachments": {
+          "allOf": [
+            {
+              "maxItems": 8
+            }
+          ],
+          "items": {
+            "$ref": "#/$defs/UploadChatAttachment"
+          },
+          "type": "array"
+        },
+        "handoff": {
+          "additionalProperties": false,
+          "properties": {
+            "conversationId": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "generation": {
+              "allOf": [
+                {
+                  "minimum": 0
+                }
+              ],
+              "type": "integer"
+            },
+            "history": {
+              "$ref": "#/$defs/CloudWorkspaceBlob"
+            },
+            "operationId": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            }
+          },
+          "required": ["operationId", "conversationId", "generation", "history"],
+          "type": "object"
+        },
+        "idempotencyKey": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "interactionMode": {
+          "enum": ["default", "plan"],
+          "type": "string"
+        },
+        "model": {
+          "allOf": [
+            {
+              "minLength": 1
+            },
+            {
+              "maxLength": 65536
+            }
+          ],
+          "type": "string"
+        },
+        "modelOptions": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/ProviderOptionSelection"
+              },
+              "type": "array"
+            },
+            {
+              "type": "object"
+            }
+          ]
+        },
+        "projectId": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "prompt": {
+          "allOf": [
+            {
+              "minLength": 1
+            },
+            {
+              "maxLength": 65536
+            }
+          ],
+          "type": "string"
+        },
+        "provider": {
+          "$ref": "#/$defs/CloudProvider"
+        },
+        "roots": {
+          "allOf": [
+            {
+              "minItems": 1
+            },
+            {
+              "maxItems": 16
+            }
+          ],
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "allOf": [
+                  {
+                    "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                  }
+                ],
+                "type": "string"
+              },
+              "path": {
+                "allOf": [
+                  {
+                    "minLength": 1
+                  },
+                  {
+                    "maxLength": 65536
+                  }
+                ],
+                "type": "string"
+              }
+            },
+            "required": ["id", "path"],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "runtimeMode": {
+          "enum": ["approval-required", "auto-accept-edits", "auto", "full-access"],
+          "type": "string"
+        },
+        "target": {
+          "enum": ["cloud-github", "cloud-local"],
+          "type": "string"
+        }
+      },
+      "required": ["idempotencyKey", "target", "roots", "provider", "model", "prompt"],
+      "type": "object"
+    },
+    "CloudStartConversationResult": {
+      "additionalProperties": false,
+      "properties": {
+        "entityId": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "overview": {
+          "$ref": "#/$defs/CloudOverview"
+        }
+      },
+      "required": ["entityId", "overview"],
+      "type": "object"
+    },
+    "CloudStartProgress": {
+      "additionalProperties": false,
+      "properties": {
+        "completedBytes": {
+          "allOf": [
+            {
+              "minimum": 0
+            }
+          ],
+          "type": "integer"
+        },
+        "message": {
+          "$ref": "#/$defs/TrimmedNonEmptyString"
+        },
+        "phase": {
+          "enum": [
+            "collection",
+            "upload",
+            "creation",
+            "cancelling",
+            "cancelled",
+            "completed",
+            "failed",
+            "unknown"
+          ],
+          "type": "string"
+        },
+        "requestId": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "sequence": {
+          "allOf": [
+            {
+              "minimum": 0
+            }
+          ],
+          "type": "integer"
+        },
+        "startedAt": {
+          "type": "string"
+        },
+        "totalBytes": {
+          "allOf": [
+            {
+              "minimum": 0
+            }
+          ],
+          "type": "integer"
+        },
+        "updatedAt": {
+          "type": "string"
+        }
+      },
+      "required": ["message"],
+      "type": "object"
+    },
+    "CloudStartProgressPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "cancel": {
+          "type": "boolean"
+        },
+        "idempotencyKey": {
+          "$ref": "#/$defs/TrimmedNonEmptyString"
+        }
+      },
+      "required": ["idempotencyKey", "cancel"],
+      "type": "object"
+    },
+    "CloudSwitchCancelInput": {
+      "additionalProperties": false,
+      "properties": {
+        "operationId": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        }
+      },
+      "required": ["operationId"],
+      "type": "object"
+    },
+    "CloudSwitchInput": {
+      "additionalProperties": false,
+      "properties": {
+        "cloudTaskId": {
+          "anyOf": [
+            {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "conversationId": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "idempotencyKey": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "localThreadId": {
+          "$ref": "#/$defs/ThreadId"
+        },
+        "target": {
+          "$ref": "#/$defs/CloudExecutionTarget"
+        }
+      },
+      "required": ["idempotencyKey", "conversationId", "localThreadId", "cloudTaskId", "target"],
+      "type": "object"
+    },
+    "CloudSwitchResolveInput": {
+      "additionalProperties": false,
+      "properties": {
+        "choice": {
+          "enum": ["local", "cloud", "edited"],
+          "type": "string"
+        },
+        "operationId": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        }
+      },
+      "required": ["operationId", "choice"],
+      "type": "object"
+    },
+    "CloudSwitchStatus": {
+      "additionalProperties": false,
+      "properties": {
+        "accountRevision": {
+          "allOf": [
+            {
+              "minimum": 0
+            }
+          ],
+          "type": "integer"
+        },
+        "binding": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CloudConversationBinding"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "conflictRoots": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "allOf": [
+                  {
+                    "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                  }
+                ],
+                "type": "string"
+              },
+              "path": {
+                "allOf": [
+                  {
+                    "minLength": 1
+                  },
+                  {
+                    "maxLength": 65536
+                  }
+                ],
+                "type": "string"
+              }
+            },
+            "required": ["id", "path"],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "conflicts": {
+          "items": {
+            "$ref": "#/$defs/TrimmedNonEmptyString"
+          },
+          "type": "array"
+        },
+        "operation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CloudHandoffOperation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": ["operation", "binding", "conflicts"],
+      "type": "object"
+    },
+    "CloudSwitchStatusInput": {
+      "additionalProperties": false,
+      "properties": {
+        "conversationId": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        }
+      },
+      "required": ["conversationId"],
+      "type": "object"
+    },
+    "CloudTask": {
+      "additionalProperties": false,
+      "properties": {
+        "archivedAt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "attachments": {
+          "allOf": [
+            {
+              "maxItems": 8
+            }
+          ],
+          "items": {
+            "$ref": "#/$defs/CloudAttachment"
+          },
+          "type": "array"
+        },
+        "attempt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CloudTaskAttempt"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "baseBranch": {
+          "allOf": [
+            {
+              "minLength": 1
+            },
+            {
+              "maxLength": 65536
+            }
+          ],
+          "type": "string"
+        },
+        "baseSha": {
+          "anyOf": [
+            {
+              "allOf": [
+                {
+                  "pattern": "^[a-f0-9]{40}$"
+                }
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "branch": {
+          "allOf": [
+            {
+              "minLength": 1
+            },
+            {
+              "maxLength": 65536
+            }
+          ],
+          "type": "string"
+        },
+        "checkpoint": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CloudCheckpoint"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "createdAt": {
+          "$ref": "#/$defs/TrimmedNonEmptyString"
+        },
+        "dependencySetup": {
+          "additionalProperties": false,
+          "properties": {
+            "attemptId": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "detail": {
+              "allOf": [
+                {
+                  "maxLength": 65536
+                }
+              ],
+              "type": "string"
+            },
+            "outcome": {
+              "enum": ["running", "succeeded", "reused", "unnecessary", "failed"],
+              "type": "string"
+            },
+            "sequence": {
+              "allOf": [
+                {
+                  "minimum": 0
+                }
+              ],
+              "type": "integer"
+            },
+            "updatedAt": {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            }
+          },
+          "required": ["attemptId", "sequence", "outcome", "updatedAt"],
+          "type": "object"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "handoff": {
+          "additionalProperties": false,
+          "properties": {
+            "conversationId": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "generation": {
+              "allOf": [
+                {
+                  "minimum": 0
+                }
+              ],
+              "type": "integer"
+            },
+            "history": {
+              "$ref": "#/$defs/CloudWorkspaceBlob"
+            },
+            "operationId": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            }
+          },
+          "required": ["operationId", "conversationId", "generation", "history"],
+          "type": "object"
+        },
+        "id": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "idle": {
+          "type": "boolean"
+        },
+        "interactionMode": {
+          "enum": ["default", "plan"],
+          "type": "string"
+        },
+        "issueNumber": {
+          "anyOf": [
+            {
+              "allOf": [
+                {
+                  "exclusiveMinimum": 0
+                }
+              ],
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "keepAliveSeconds": {
+          "allOf": [
+            {
+              "maximum": 900,
+              "minimum": 0
+            }
+          ],
+          "type": "integer"
+        },
+        "kind": {
+          "enum": ["build", "ask", "investigate"],
+          "type": "string"
+        },
+        "model": {
+          "allOf": [
+            {
+              "minLength": 1
+            },
+            {
+              "maxLength": 65536
+            }
+          ],
+          "type": "string"
+        },
+        "modelOptions": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/ProviderOptionSelection"
+              },
+              "type": "array"
+            },
+            {
+              "type": "object"
+            }
+          ]
+        },
+        "preparation": {
+          "additionalProperties": false,
+          "properties": {
+            "attemptId": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "phase": {
+              "enum": [
+                "restoring",
+                "cloning",
+                "dependencies",
+                "backend",
+                "provider",
+                "ready",
+                "failed"
+              ],
+              "type": "string"
+            },
+            "sequence": {
+              "allOf": [
+                {
+                  "minimum": 0
+                }
+              ],
+              "type": "integer"
+            },
+            "startedAt": {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            },
+            "updatedAt": {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            }
+          },
+          "required": ["attemptId", "sequence", "phase", "startedAt", "updatedAt"],
+          "type": "object"
+        },
+        "projectId": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "prompt": {
+          "allOf": [
+            {
+              "minLength": 1
+            },
+            {
+              "maxLength": 65536
+            }
+          ],
+          "type": "string"
+        },
+        "provider": {
+          "$ref": "#/$defs/CloudProvider"
+        },
+        "repository": {
+          "$ref": "#/$defs/CloudRepository"
+        },
+        "result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CloudResultRevision"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "runtimeMode": {
+          "enum": ["approval-required", "auto-accept-edits", "auto", "full-access"],
+          "type": "string"
+        },
+        "source": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "enum": ["github"],
+                  "type": "string"
+                },
+                "revision": {
+                  "allOf": [
+                    {
+                      "pattern": "^[a-f0-9]{40}$"
+                    }
+                  ],
+                  "type": "string"
+                },
+                "snapshot": {
+                  "$ref": "#/$defs/CloudSnapshotRef"
+                }
+              },
+              "required": ["kind", "revision", "snapshot"],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "enum": ["local"],
+                  "type": "string"
+                },
+                "name": {
+                  "allOf": [
+                    {
+                      "minLength": 1
+                    },
+                    {
+                      "maxLength": 65536
+                    }
+                  ],
+                  "type": "string"
+                },
+                "snapshot": {
+                  "$ref": "#/$defs/CloudSnapshotRef"
+                }
+              },
+              "required": ["kind", "snapshot", "name"],
+              "type": "object"
+            }
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/CloudTaskState"
+        },
+        "title": {
+          "allOf": [
+            {
+              "minLength": 1
+            },
+            {
+              "maxLength": 65536
+            }
+          ],
+          "type": "string"
+        },
+        "turnRequestId": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "updatedAt": {
+          "$ref": "#/$defs/TrimmedNonEmptyString"
+        },
+        "wakeOnly": {
+          "type": "boolean"
+        },
+        "worker": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CloudWorker"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "repository",
+        "baseBranch",
+        "baseSha",
+        "provider",
+        "kind",
+        "prompt",
+        "issueNumber",
+        "state",
+        "branch",
+        "createdAt",
+        "updatedAt",
+        "attempt",
+        "worker",
+        "checkpoint",
+        "result",
+        "error"
+      ],
+      "type": "object"
+    },
+    "CloudTaskAttempt": {
+      "additionalProperties": false,
+      "properties": {
+        "billedThrough": {
+          "$ref": "#/$defs/TrimmedNonEmptyString"
+        },
+        "deadlineAt": {
+          "$ref": "#/$defs/TrimmedNonEmptyString"
+        },
+        "generation": {
+          "allOf": [
+            {
+              "minimum": 0
+            }
+          ],
+          "type": "integer"
+        },
+        "heartbeatAt": {
+          "$ref": "#/$defs/TrimmedNonEmptyString"
+        },
+        "id": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "lastSequence": {
+          "allOf": [
+            {
+              "minimum": 0
+            }
+          ],
+          "type": "integer"
+        },
+        "reservedMicroDollars": {
+          "allOf": [
+            {
+              "minimum": 0
+            }
+          ],
+          "type": "integer"
+        },
+        "startedAt": {
+          "$ref": "#/$defs/TrimmedNonEmptyString"
+        }
+      },
+      "required": [
+        "id",
+        "generation",
+        "startedAt",
+        "deadlineAt",
+        "heartbeatAt",
+        "lastSequence",
+        "reservedMicroDollars",
+        "billedThrough"
+      ],
+      "type": "object"
+    },
+    "CloudTaskEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "attemptId": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "createdAt": {
+          "$ref": "#/$defs/TrimmedNonEmptyString"
+        },
+        "cursor": {
+          "allOf": [
+            {
+              "minimum": 0
+            }
+          ],
+          "type": "integer"
+        },
+        "detail": {
+          "$ref": "#/$defs/TrimmedNonEmptyString"
+        },
+        "phase": {
+          "$ref": "#/$defs/TrimmedNonEmptyString"
+        },
+        "sequence": {
+          "allOf": [
+            {
+              "minimum": 0
+            }
+          ],
+          "type": "integer"
+        }
+      },
+      "required": ["cursor", "attemptId", "sequence", "phase", "detail", "createdAt"],
+      "type": "object"
+    },
+    "CloudTaskFeed": {
+      "additionalProperties": false,
+      "properties": {
+        "conversation": {},
+        "cursor": {
+          "allOf": [
+            {
+              "minimum": 0
+            }
+          ],
+          "type": "integer"
+        },
+        "events": {
+          "items": {
+            "$ref": "#/$defs/CloudTaskEvent"
+          },
+          "type": "array"
+        },
+        "reset": {
+          "type": "boolean"
+        }
+      },
+      "required": ["cursor", "reset", "events", "conversation"],
+      "type": "object"
+    },
+    "CloudTaskState": {
+      "enum": [
+        "queued",
+        "preparing",
+        "running",
+        "waiting_for_input",
+        "needs_auth",
+        "usage_limited",
+        "completed",
+        "failed",
+        "cancelled",
+        "interrupted"
+      ],
+      "type": "string"
+    },
+    "CloudTerminalState": {
+      "additionalProperties": false,
+      "properties": {
+        "history": {
+          "allOf": [
+            {
+              "maxLength": 4194304
+            }
+          ],
+          "type": "string"
+        },
+        "managedCommand": {
+          "allOf": [
+            {
+              "maxLength": 65536
+            }
+          ],
+          "type": "string"
+        },
+        "relativeCwd": {
+          "allOf": [
+            {
+              "maxLength": 4096
+            }
+          ],
+          "type": "string"
+        },
+        "rootId": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "terminalId": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        }
+      },
+      "required": ["terminalId", "rootId", "relativeCwd", "history"],
+      "type": "object"
+    },
+    "CloudTransferRequest": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "threadId": {
+              "$ref": "#/$defs/ThreadId"
+            },
+            "type": {
+              "enum": ["validateProvider"],
+              "type": "string"
+            }
+          },
+          "required": ["type", "threadId"],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "threadId": {
+              "$ref": "#/$defs/ThreadId"
+            },
+            "type": {
+              "enum": ["ownership"],
+              "type": "string"
+            }
+          },
+          "required": ["type", "threadId"],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "generation": {
+              "allOf": [
+                {
+                  "minimum": 0
+                }
+              ],
+              "type": "integer"
+            },
+            "operationId": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "resumeCommands": {
+              "type": "boolean"
+            },
+            "terminals": {
+              "allOf": [
+                {
+                  "maxItems": 32
+                }
+              ],
+              "items": {
+                "$ref": "#/$defs/CloudTerminalState"
+              },
+              "type": "array"
+            },
+            "threadId": {
+              "$ref": "#/$defs/ThreadId"
+            },
+            "type": {
+              "enum": ["restoreTerminals"],
+              "type": "string"
+            }
+          },
+          "required": ["type", "threadId", "operationId", "generation", "terminals"],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "generation": {
+              "allOf": [
+                {
+                  "minimum": 0
+                }
+              ],
+              "type": "integer"
+            },
+            "operationId": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "threadId": {
+              "$ref": "#/$defs/ThreadId"
+            },
+            "type": {
+              "enum": ["closeTerminals"],
+              "type": "string"
+            }
+          },
+          "required": ["type", "threadId", "operationId", "generation"],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "generation": {
+              "allOf": [
+                {
+                  "minimum": 0
+                }
+              ],
+              "type": "integer"
+            },
+            "operationId": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "threadId": {
+              "$ref": "#/$defs/ThreadId"
+            },
+            "type": {
+              "enum": ["capture"],
+              "type": "string"
+            }
+          },
+          "required": ["type", "threadId", "operationId", "generation"],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "sha256": {
+              "allOf": [
+                {
+                  "pattern": "^[a-f0-9]{64}$"
+                }
+              ],
+              "type": "string"
+            },
+            "type": {
+              "enum": ["read"],
+              "type": "string"
+            }
+          },
+          "required": ["type", "sha256"],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "base64": {
+              "allOf": [
+                {
+                  "maxLength": 6291456
+                }
+              ],
+              "type": "string"
+            },
+            "type": {
+              "enum": ["write"],
+              "type": "string"
+            }
+          },
+          "required": ["type", "base64"],
+          "type": "object"
+        }
+      ]
+    },
+    "CloudTransferResult": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "reason": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TrimmedNonEmptyString"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "retryable": {
+              "type": "boolean"
+            },
+            "supported": {
+              "type": "boolean"
+            },
+            "type": {
+              "enum": ["providerValidation"],
+              "type": "string"
+            }
+          },
+          "required": ["type", "supported", "reason"],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "enum": ["terminalsRestored"],
+              "type": "string"
+            }
+          },
+          "required": ["type"],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "execution": {
+              "$ref": "#/$defs/ThreadExecutionState"
+            },
+            "type": {
+              "enum": ["ownership"],
+              "type": "string"
+            }
+          },
+          "required": ["type", "execution"],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "snapshot": {
+              "$ref": "#/$defs/CloudConversationSnapshot"
+            },
+            "type": {
+              "enum": ["snapshot"],
+              "type": "string"
+            }
+          },
+          "required": ["type", "snapshot"],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "base64": {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            },
+            "sha256": {
+              "allOf": [
+                {
+                  "pattern": "^[a-f0-9]{64}$"
+                }
+              ],
+              "type": "string"
+            },
+            "type": {
+              "enum": ["chunk"],
+              "type": "string"
+            }
+          },
+          "required": ["type", "base64", "sha256"],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "sha256": {
+              "allOf": [
+                {
+                  "pattern": "^[a-f0-9]{64}$"
+                }
+              ],
+              "type": "string"
+            },
+            "type": {
+              "enum": ["stored"],
+              "type": "string"
+            }
+          },
+          "required": ["type", "sha256"],
+          "type": "object"
+        }
+      ]
+    },
+    "CloudUsageSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "limitMicroDollars": {
+          "allOf": [
+            {
+              "minimum": 0
+            }
+          ],
+          "type": "integer"
+        },
+        "month": {
+          "$ref": "#/$defs/TrimmedNonEmptyString"
+        },
+        "reservedMicroDollars": {
+          "allOf": [
+            {
+              "minimum": 0
+            }
+          ],
+          "type": "integer"
+        },
+        "spentMicroDollars": {
+          "allOf": [
+            {
+              "minimum": 0
+            }
+          ],
+          "type": "integer"
+        },
+        "warning": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "month",
+        "spentMicroDollars",
+        "reservedMicroDollars",
+        "limitMicroDollars",
+        "warning"
+      ],
+      "type": "object"
+    },
+    "CloudWorker": {
+      "additionalProperties": false,
+      "properties": {
+        "cpu": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "enum": ["NaN"],
+              "type": "string"
+            },
+            {
+              "enum": ["Infinity"],
+              "type": "string"
+            },
+            {
+              "enum": ["-Infinity"],
+              "type": "string"
+            }
+          ]
+        },
+        "diskGiB": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "enum": ["NaN"],
+              "type": "string"
+            },
+            {
+              "enum": ["Infinity"],
+              "type": "string"
+            },
+            {
+              "enum": ["-Infinity"],
+              "type": "string"
+            }
+          ]
+        },
+        "environmentId": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "id": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "memoryGiB": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "enum": ["NaN"],
+              "type": "string"
+            },
+            {
+              "enum": ["Infinity"],
+              "type": "string"
+            },
+            {
+              "enum": ["-Infinity"],
+              "type": "string"
+            }
+          ]
+        },
+        "sandboxId": {
+          "anyOf": [
+            {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/CloudWorkerState"
+        },
+        "stoppedAt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "sandboxId",
+        "environmentId",
+        "state",
+        "cpu",
+        "memoryGiB",
+        "diskGiB",
+        "stoppedAt"
+      ],
+      "type": "object"
+    },
+    "CloudWorkerCallback": {
+      "additionalProperties": false,
+      "properties": {
+        "attemptId": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "baseSha": {
+          "allOf": [
+            {
+              "pattern": "^[a-f0-9]{40}$"
+            }
+          ],
+          "type": "string"
+        },
+        "checkpoint": {
+          "additionalProperties": false,
+          "properties": {
+            "attemptId": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "createdAt": {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            },
+            "id": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "objectKey": {
+              "allOf": [
+                {
+                  "minLength": 1
+                },
+                {
+                  "maxLength": 65536
+                }
+              ],
+              "type": "string"
+            },
+            "sequence": {
+              "allOf": [
+                {
+                  "minimum": 0
+                }
+              ],
+              "type": "integer"
+            },
+            "sha256": {
+              "allOf": [
+                {
+                  "pattern": "^[a-f0-9]{64}$"
+                }
+              ],
+              "type": "string"
+            },
+            "sizeBytes": {
+              "allOf": [
+                {
+                  "minimum": 0
+                }
+              ],
+              "type": "integer"
+            },
+            "taskId": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "taskId",
+            "attemptId",
+            "sequence",
+            "objectKey",
+            "sha256",
+            "sizeBytes",
+            "createdAt"
+          ],
+          "type": "object"
+        },
+        "closeIdle": {
+          "type": "boolean"
+        },
+        "dependencySetup": {
+          "additionalProperties": false,
+          "properties": {
+            "attemptId": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "detail": {
+              "allOf": [
+                {
+                  "maxLength": 65536
+                }
+              ],
+              "type": "string"
+            },
+            "outcome": {
+              "enum": ["running", "succeeded", "reused", "unnecessary", "failed"],
+              "type": "string"
+            },
+            "sequence": {
+              "allOf": [
+                {
+                  "minimum": 0
+                }
+              ],
+              "type": "integer"
+            },
+            "updatedAt": {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            }
+          },
+          "required": ["attemptId", "sequence", "outcome", "updatedAt"],
+          "type": "object"
+        },
+        "detail": {
+          "allOf": [
+            {
+              "maxLength": 65536
+            }
+          ],
+          "type": "string"
+        },
+        "generation": {
+          "allOf": [
+            {
+              "minimum": 0
+            }
+          ],
+          "type": "integer"
+        },
+        "idle": {
+          "type": "boolean"
+        },
+        "phase": {
+          "enum": [
+            "heartbeat",
+            "running",
+            "waiting_for_input",
+            "completed",
+            "failed",
+            "needs_auth",
+            "usage_limited"
+          ],
+          "type": "string"
+        },
+        "preparation": {
+          "additionalProperties": false,
+          "properties": {
+            "attemptId": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "phase": {
+              "enum": [
+                "restoring",
+                "cloning",
+                "dependencies",
+                "backend",
+                "provider",
+                "ready",
+                "failed"
+              ],
+              "type": "string"
+            },
+            "sequence": {
+              "allOf": [
+                {
+                  "minimum": 0
+                }
+              ],
+              "type": "integer"
+            },
+            "startedAt": {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            },
+            "updatedAt": {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            }
+          },
+          "required": ["attemptId", "sequence", "phase", "startedAt", "updatedAt"],
+          "type": "object"
+        },
+        "result": {
+          "additionalProperties": false,
+          "properties": {
+            "checkpointId": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "createdAt": {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            },
+            "id": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "sha256": {
+              "allOf": [
+                {
+                  "pattern": "^[a-f0-9]{64}$"
+                }
+              ],
+              "type": "string"
+            },
+            "summary": {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            },
+            "taskId": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            }
+          },
+          "required": ["id", "taskId", "checkpointId", "sha256", "summary", "createdAt"],
+          "type": "object"
+        },
+        "sequence": {
+          "allOf": [
+            {
+              "minimum": 0
+            }
+          ],
+          "type": "integer"
+        },
+        "taskId": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "turnRequestId": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        }
+      },
+      "required": ["taskId", "attemptId", "generation", "sequence", "phase", "detail"],
+      "type": "object"
+    },
+    "CloudWorkerState": {
+      "enum": [
+        "provisioning",
+        "starting",
+        "ready",
+        "paused",
+        "stopped",
+        "deleting",
+        "deleted",
+        "error"
+      ],
+      "type": "string"
+    },
+    "CloudWorkspaceBlob": {
+      "additionalProperties": false,
+      "properties": {
+        "chunks": {
+          "items": {
+            "allOf": [
+              {
+                "pattern": "^[a-f0-9]{64}$"
+              }
+            ],
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "sha256": {
+          "allOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$"
+            }
+          ],
+          "type": "string"
+        },
+        "sizeBytes": {
+          "allOf": [
+            {
+              "minimum": 0
+            }
+          ],
+          "type": "integer"
+        }
+      },
+      "required": ["sha256", "sizeBytes", "chunks"],
+      "type": "object"
+    },
+    "CloudWorkspaceChunkUpload": {
+      "additionalProperties": false,
+      "properties": {
+        "base64": {
+          "allOf": [
+            {
+              "maxLength": 6291456
+            }
+          ],
+          "type": "string"
+        },
+        "encoding": {
+          "enum": ["gzip"],
+          "type": "string"
+        }
+      },
+      "required": ["base64"],
+      "type": "object"
+    },
+    "CloudWorkspaceEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "chunkOffset": {
+          "allOf": [
+            {
+              "minimum": 0
+            }
+          ],
+          "type": "integer"
+        },
+        "chunks": {
+          "items": {
+            "allOf": [
+              {
+                "pattern": "^[a-f0-9]{64}$"
+              }
+            ],
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "executable": {
+          "type": "boolean"
+        },
+        "kind": {
+          "enum": ["file", "symlink"],
+          "type": "string"
+        },
+        "path": {
+          "allOf": [
+            {
+              "minLength": 1
+            },
+            {
+              "maxLength": 4096
+            }
+          ],
+          "type": "string"
+        },
+        "rootId": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "sha256": {
+          "allOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$"
+            }
+          ],
+          "type": "string"
+        },
+        "sizeBytes": {
+          "allOf": [
+            {
+              "minimum": 0
+            }
+          ],
+          "type": "integer"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "rootId",
+        "path",
+        "kind",
+        "executable",
+        "sizeBytes",
+        "sha256",
+        "chunks",
+        "target"
+      ],
+      "type": "object"
+    },
+    "CloudWorkspaceGit": {
+      "additionalProperties": false,
+      "properties": {
+        "branch": {
+          "anyOf": [
+            {
+              "allOf": [
+                {
+                  "minLength": 1
+                },
+                {
+                  "maxLength": 65536
+                }
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "bundle": {
+          "$ref": "#/$defs/CloudWorkspaceBlob"
+        },
+        "commitIdentity": {
+          "additionalProperties": false,
+          "properties": {
+            "email": {
+              "allOf": [
+                {
+                  "pattern": "^[^\\p{Cc}]{1,256}$"
+                }
+              ],
+              "type": "string"
+            },
+            "name": {
+              "allOf": [
+                {
+                  "pattern": "^[^\\p{Cc}]{1,256}$"
+                }
+              ],
+              "type": "string"
+            }
+          },
+          "required": ["name", "email"],
+          "type": "object"
+        },
+        "githubRemote": {
+          "allOf": [
+            {
+              "pattern": "^https:\\/\\/github\\.com\\/[\\w.-]+\\/[\\w.-]+\\.git$"
+            }
+          ],
+          "type": "string"
+        },
+        "head": {
+          "allOf": [
+            {
+              "pattern": "^[a-f0-9]{40}$"
+            }
+          ],
+          "type": "string"
+        },
+        "index": {
+          "$ref": "#/$defs/CloudWorkspaceBlob"
+        },
+        "publishedRevision": {
+          "allOf": [
+            {
+              "pattern": "^[a-f0-9]{40}$"
+            }
+          ],
+          "type": "string"
+        }
+      },
+      "required": ["head", "branch", "bundle", "index"],
+      "type": "object"
+    },
+    "CloudWorkspaceManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "entries": {
+          "items": {
+            "$ref": "#/$defs/CloudWorkspaceEntry"
+          },
+          "type": "array"
+        },
+        "roots": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "git": {
+                "additionalProperties": false,
+                "properties": {
+                  "branch": {
+                    "anyOf": [
+                      {
+                        "allOf": [
+                          {
+                            "minLength": 1
+                          },
+                          {
+                            "maxLength": 65536
+                          }
+                        ],
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "bundle": {
+                    "$ref": "#/$defs/CloudWorkspaceBlob"
+                  },
+                  "commitIdentity": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "email": {
+                        "allOf": [
+                          {
+                            "pattern": "^[^\\p{Cc}]{1,256}$"
+                          }
+                        ],
+                        "type": "string"
+                      },
+                      "name": {
+                        "allOf": [
+                          {
+                            "pattern": "^[^\\p{Cc}]{1,256}$"
+                          }
+                        ],
+                        "type": "string"
+                      }
+                    },
+                    "required": ["name", "email"],
+                    "type": "object"
+                  },
+                  "githubRemote": {
+                    "allOf": [
+                      {
+                        "pattern": "^https:\\/\\/github\\.com\\/[\\w.-]+\\/[\\w.-]+\\.git$"
+                      }
+                    ],
+                    "type": "string"
+                  },
+                  "head": {
+                    "allOf": [
+                      {
+                        "pattern": "^[a-f0-9]{40}$"
+                      }
+                    ],
+                    "type": "string"
+                  },
+                  "index": {
+                    "$ref": "#/$defs/CloudWorkspaceBlob"
+                  },
+                  "publishedRevision": {
+                    "allOf": [
+                      {
+                        "pattern": "^[a-f0-9]{40}$"
+                      }
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": ["head", "branch", "bundle", "index"],
+                "type": "object"
+              },
+              "id": {
+                "allOf": [
+                  {
+                    "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                  }
+                ],
+                "type": "string"
+              },
+              "name": {
+                "allOf": [
+                  {
+                    "minLength": 1
+                  },
+                  {
+                    "maxLength": 65536
+                  }
+                ],
+                "type": "string"
+              }
+            },
+            "required": ["id", "name"],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "version": {
+          "enum": [1, 2],
+          "type": "number"
+        }
+      },
+      "required": ["version", "roots", "entries"],
+      "type": "object"
+    },
+    "CloudWorkspaceSource": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "enum": ["github"],
+              "type": "string"
+            },
+            "revision": {
+              "allOf": [
+                {
+                  "pattern": "^[a-f0-9]{40}$"
+                }
+              ],
+              "type": "string"
+            },
+            "snapshot": {
+              "$ref": "#/$defs/CloudSnapshotRef"
+            }
+          },
+          "required": ["kind", "revision", "snapshot"],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "enum": ["local"],
+              "type": "string"
+            },
+            "name": {
+              "allOf": [
+                {
+                  "minLength": 1
+                },
+                {
+                  "maxLength": 65536
+                }
+              ],
+              "type": "string"
+            },
+            "snapshot": {
+              "$ref": "#/$defs/CloudSnapshotRef"
+            }
+          },
+          "required": ["kind", "snapshot", "name"],
+          "type": "object"
         }
       ]
     },
@@ -5395,8 +9662,15 @@
             }
           ]
         },
+        "code": {
+          "type": "string"
+        },
         "message": {
           "$ref": "#/$defs/TrimmedNonEmptyString"
+        },
+        "requestDisposition": {
+          "enum": ["rejected", "unknown"],
+          "type": "string"
         }
       },
       "required": ["_tag", "message"],
@@ -18587,6 +22861,14 @@
           ],
           "type": "string"
         },
+        "managedCommand": {
+          "allOf": [
+            {
+              "maxLength": 65536
+            }
+          ],
+          "type": "string"
+        },
         "pid": {
           "anyOf": [
             {
@@ -18825,6 +23107,9 @@
           ],
           "type": "string"
         },
+        "managedCommand": {
+          "type": "boolean"
+        },
         "terminalId": {
           "$ref": "#/$defs/TrimmedNonEmptyString"
         },
@@ -19059,6 +23344,23 @@
     "ThreadEnvMode": {
       "enum": ["local", "worktree"],
       "type": "string"
+    },
+    "ThreadExecutionState": {
+      "additionalProperties": false,
+      "properties": {
+        "generation": {
+          "$ref": "#/$defs/NonNegativeInt"
+        },
+        "operationId": {
+          "$ref": "#/$defs/TrimmedNonEmptyString"
+        },
+        "status": {
+          "enum": ["active", "frozen", "released"],
+          "type": "string"
+        }
+      },
+      "required": ["generation", "operationId", "status"],
+      "type": "object"
     },
     "ThreadId": {
       "type": "string"
@@ -19558,6 +23860,72 @@
     },
     "TurnId": {
       "type": "string"
+    },
+    "UploadChatAttachment": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "dataUrl": {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            },
+            "mimeType": {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            },
+            "name": {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            },
+            "sizeBytes": {
+              "allOf": [
+                {
+                  "minimum": 0
+                },
+                {
+                  "maximum": 10485760
+                }
+              ],
+              "type": "integer"
+            },
+            "type": {
+              "enum": ["image"],
+              "type": "string"
+            }
+          },
+          "required": ["type", "name", "mimeType", "sizeBytes", "dataUrl"],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "dataUrl": {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            },
+            "mimeType": {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            },
+            "name": {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            },
+            "sizeBytes": {
+              "allOf": [
+                {
+                  "minimum": 0
+                },
+                {
+                  "maximum": 10485760
+                }
+              ],
+              "type": "integer"
+            },
+            "type": {
+              "enum": ["file"],
+              "type": "string"
+            }
+          },
+          "required": ["type", "name", "mimeType", "sizeBytes", "dataUrl"],
+          "type": "object"
+        }
+      ]
     },
     "VcsBaselineBlob": {
       "additionalProperties": false,
@@ -20917,6 +25285,27 @@
       "tag": "claude.installBinary"
     },
     {
+      "errors": ["#/$defs/CloudDesktopAuthError"],
+      "payload": "#/$defs/CloudSwitchCancelInput",
+      "stream": false,
+      "success": "#/$defs/CloudSwitchStatus",
+      "tag": "cloud.cancelSwitch"
+    },
+    {
+      "errors": ["#/$defs/CloudDesktopAuthError"],
+      "payload": "#/$defs/CloudContinueConversationInput",
+      "stream": false,
+      "success": "#/$defs/CloudStartConversationResult",
+      "tag": "cloud.continueConversation"
+    },
+    {
+      "errors": ["#/$defs/CloudDesktopAuthError", "#/$defs/EnvironmentAuthorizationError"],
+      "payload": "#/$defs/CloudGetDesktopSessionPayload",
+      "stream": false,
+      "success": "#/$defs/CloudDesktopSession",
+      "tag": "cloud.getDesktopSession"
+    },
+    {
       "errors": ["#/$defs/EnvironmentAuthorizationError"],
       "payload": "#/$defs/CloudGetRelayClientStatusPayload",
       "stream": false,
@@ -20929,6 +25318,41 @@
       "stream": true,
       "success": "#/$defs/RelayClientInstallProgressEventSchema",
       "tag": "cloud.installRelayClient"
+    },
+    {
+      "errors": ["#/$defs/CloudDesktopAuthError"],
+      "payload": "#/$defs/CloudSwitchResolveInput",
+      "stream": false,
+      "success": "#/$defs/CloudSwitchStatus",
+      "tag": "cloud.resolveSwitch"
+    },
+    {
+      "errors": ["#/$defs/CloudDesktopAuthError", "#/$defs/EnvironmentAuthorizationError"],
+      "payload": "#/$defs/CloudStartConversationInput",
+      "stream": false,
+      "success": "#/$defs/CloudStartConversationResult",
+      "tag": "cloud.startConversation"
+    },
+    {
+      "errors": ["#/$defs/CloudDesktopAuthError"],
+      "payload": "#/$defs/CloudStartProgressPayload",
+      "stream": false,
+      "success": "#/$defs/CloudStartProgress",
+      "tag": "cloud.startProgress"
+    },
+    {
+      "errors": ["#/$defs/CloudDesktopAuthError"],
+      "payload": "#/$defs/CloudSwitchInput",
+      "stream": false,
+      "success": "#/$defs/CloudSwitchStatus",
+      "tag": "cloud.switchConversation"
+    },
+    {
+      "errors": ["#/$defs/CloudDesktopAuthError"],
+      "payload": "#/$defs/CloudSwitchStatusInput",
+      "stream": false,
+      "success": "#/$defs/CloudSwitchStatus",
+      "tag": "cloud.switchStatus"
     },
     {
       "errors": ["#/$defs/FilesystemBrowseError", "#/$defs/EnvironmentAuthorizationError"],

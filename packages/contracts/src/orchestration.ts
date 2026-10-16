@@ -202,7 +202,10 @@ export type UploadChatFileAttachment = typeof UploadChatFileAttachment.Type;
 
 export const ChatAttachment = Schema.Union([ChatImageAttachment, ChatFileAttachment]);
 export type ChatAttachment = typeof ChatAttachment.Type;
-const UploadChatAttachment = Schema.Union([UploadChatImageAttachment, UploadChatFileAttachment]);
+export const UploadChatAttachment = Schema.Union([
+  UploadChatImageAttachment,
+  UploadChatFileAttachment,
+]);
 export type UploadChatAttachment = typeof UploadChatAttachment.Type;
 
 export const ProjectScriptIcon = Schema.Literals([
@@ -818,7 +821,54 @@ const ThreadSessionStopCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+export const ThreadExecutionState = Schema.Struct({
+  generation: NonNegativeInt,
+  operationId: TrimmedNonEmptyString,
+  status: Schema.Literals(["active", "frozen", "released"]),
+});
+export type ThreadExecutionState = typeof ThreadExecutionState.Type;
+
+const ThreadExecutionSetCommand = Schema.Struct({
+  type: Schema.Literal("thread.execution.set"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  expectedGeneration: NonNegativeInt,
+  execution: ThreadExecutionState,
+  createdAt: IsoDateTime,
+});
+
+const ThreadHistoryImportCommand = Schema.Struct({
+  type: Schema.Literal("thread.history.import"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messages: Schema.Array(OrchestrationMessage).check(Schema.isMaxLength(10000)),
+  proposedPlans: Schema.Array(OrchestrationProposedPlan),
+  activities: Schema.optional(Schema.Array(OrchestrationThreadActivity)),
+  createdAt: IsoDateTime,
+});
+const ThreadExecutionRestoreCommand = Schema.Struct({
+  type: Schema.Literal("thread.execution.restore"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  operationId: TrimmedNonEmptyString,
+  expectedGeneration: NonNegativeInt,
+  title: TrimmedNonEmptyString,
+  modelSelection: ModelSelection,
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode,
+  worktreePath: TrimmedNonEmptyString,
+  branch: Schema.NullOr(TrimmedNonEmptyString),
+  additionalRoots: Schema.Array(WorkspaceRootRef),
+  messages: Schema.Array(OrchestrationMessage).check(Schema.isMaxLength(10000)),
+  proposedPlans: Schema.Array(OrchestrationProposedPlan),
+  activities: Schema.optional(Schema.Array(OrchestrationThreadActivity)),
+  createdAt: IsoDateTime,
+});
+
 const DispatchableClientOrchestrationCommand = Schema.Union([
+  ThreadExecutionRestoreCommand,
+  ThreadExecutionSetCommand,
+  ThreadHistoryImportCommand,
   ProjectCreateCommand,
   ProjectMetaUpdateCommand,
   ProjectDeleteCommand,
@@ -844,6 +894,9 @@ export type DispatchableClientOrchestrationCommand =
   typeof DispatchableClientOrchestrationCommand.Type;
 
 export const ClientOrchestrationCommand = Schema.Union([
+  ThreadExecutionRestoreCommand,
+  ThreadExecutionSetCommand,
+  ThreadHistoryImportCommand,
   ProjectCreateCommand,
   ProjectMetaUpdateCommand,
   ProjectDeleteCommand,
@@ -1539,6 +1592,8 @@ export class OrchestrationDispatchCommandError extends Schema.TaggedErrorClass<O
   "OrchestrationDispatchCommandError",
   {
     message: TrimmedNonEmptyString,
+    code: Schema.optionalKey(Schema.String),
+    requestDisposition: Schema.optionalKey(Schema.Literals(["rejected", "unknown"])),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {}

@@ -2,13 +2,20 @@ import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   EnvironmentHttpApi,
+  type EnvironmentInternalError,
+  type EnvironmentRequestInvalidError,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
 import { projectThreadDetailSnapshot } from "./ActivityPayloadProjection.ts";
 import { normalizeDispatchCommand } from "./Normalizer.ts";
+import {
+  OrchestrationCommandInvariantError,
+  OrchestrationCommandPreviouslyRejectedError,
+} from "./Errors.ts";
 import {
   annotateEnvironmentRequest,
   failEnvironmentInternal,
@@ -18,6 +25,10 @@ import {
 } from "../auth/http.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
+import { transferConversationEffect } from "../cloud/conversationTransfer.ts";
+
+const isInvariantError = Schema.is(OrchestrationCommandInvariantError);
+const isPreviouslyRejected = Schema.is(OrchestrationCommandPreviouslyRejectedError);
 
 export const orchestrationHttpApiLayer = HttpApiBuilder.group(
   EnvironmentHttpApi,
@@ -27,6 +38,16 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
     const orchestrationEngine = yield* OrchestrationEngineService;
 
     return handlers
+      .handle(
+        "transfer",
+        Effect.fn("environment.orchestration.transfer")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+          return yield* transferConversationEffect(args.payload).pipe(
+            Effect.catch((cause) => failEnvironmentInternal("internal_error", cause)),
+          );
+        }),
+      )
       .handle(
         "snapshot",
         Effect.fn("environment.orchestration.snapshot")(function* (args) {
@@ -81,13 +102,24 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
           const normalizedCommand = yield* normalizeDispatchCommand(args.payload).pipe(
             Effect.catch(() => failEnvironmentInvalidRequest("invalid_command")),
           );
-          return yield* orchestrationEngine
-            .dispatch(normalizedCommand)
-            .pipe(
-              Effect.catch((cause) =>
-                failEnvironmentInternal("orchestration_dispatch_failed", cause),
-              ),
-            );
+          return yield* orchestrationEngine.dispatch(normalizedCommand).pipe(
+            Effect.catch(
+              (
+                cause,
+              ): Effect.Effect<
+                never,
+                EnvironmentInternalError | EnvironmentRequestInvalidError
+              > => {
+                if (isInvariantError(cause) && cause.code === "execution_busy") {
+                  return failEnvironmentInvalidRequest("execution_busy");
+                }
+                if (isPreviouslyRejected(cause)) {
+                  return failEnvironmentInvalidRequest("command_rejected");
+                }
+                return failEnvironmentInternal("orchestration_dispatch_failed", cause);
+              },
+            ),
+          );
         }),
       );
   }),

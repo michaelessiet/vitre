@@ -33,6 +33,7 @@ import {
   ProviderDriverKind,
   type ProviderInstanceConfigMap,
   ProviderInstanceId,
+  type ProviderInstanceEnvironment,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -125,6 +126,7 @@ describe("ProviderInstanceRegistryLive — multi-instance codex slice", () => {
           driver: codexDriverKind,
           displayName: "Codex (personal)",
           enabled: false,
+          environment: [{ name: "GIT_CEILING_DIRECTORIES", value: "/existing", sensitive: false }],
           config: makeCodexConfig({
             binaryPath: "/opt/codex-personal/bin/codex",
             homePath: "/home/julius/.codex_personal",
@@ -143,10 +145,32 @@ describe("ProviderInstanceRegistryLive — multi-instance codex slice", () => {
         },
       };
 
+      const environments = new Map<string, ProviderInstanceEnvironment>();
       const { registry } = yield* makeProviderInstanceRegistry({
-        drivers: [CodexDriver],
+        drivers: [
+          {
+            ...CodexDriver,
+            create: (input) => {
+              environments.set(input.instanceId, input.environment);
+              return CodexDriver.create(input);
+            },
+          },
+        ],
         configMap,
       });
+      const serverConfig = yield* ServerConfig;
+      for (const instanceId of [personalId, workId]) {
+        const ceiling = environments
+          .get(instanceId)
+          ?.find((variable) => variable.name === "GIT_CEILING_DIRECTORIES")?.value;
+        expect(ceiling).toContain(serverConfig.stateDir);
+        expect(ceiling).toContain("cloud-workspaces");
+      }
+      expect(
+        environments
+          .get(personalId)
+          ?.find((variable) => variable.name === "GIT_CEILING_DIRECTORIES")?.value,
+      ).toContain("/existing");
 
       const instances = yield* registry.listInstances;
       expect(instances.map((instance) => instance.instanceId).toSorted()).toEqual(

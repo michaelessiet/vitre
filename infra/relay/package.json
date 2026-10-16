@@ -18,13 +18,15 @@
     "@t3tools/shared": "workspace:*",
     "alchemy": "https://pkg.ing/alchemy/078ff00",
     "drizzle-orm": "1.0.0-rc.3",
-    "effect": "catalog:"
+    "effect": "catalog:",
+    "pg": "8.21.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260601.1",
     "@effect/platform-node": "catalog:",
     "@effect/vitest": "catalog:",
     "@types/node": "catalog:",
+    "@types/pg": "^8.23.1",
     "drizzle-kit": "1.0.0-rc.3",
     "vite": "catalog:",
     "vite-plus": "catalog:"

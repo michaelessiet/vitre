@@ -5,3 +5,5 @@ export const RelayApnsDeliveryDeadLetterQueue = Cloudflare.Queue(
 );
 
 export const RelayApnsDeliveryQueue = Cloudflare.Queue("RelayApnsDeliveryQueue");
+
+export const VitreCloudQueue = Cloudflare.Queue("VitreCloudQueue");

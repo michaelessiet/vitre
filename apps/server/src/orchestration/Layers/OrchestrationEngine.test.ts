@@ -11,6 +11,7 @@ import {
 } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
+import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Metric from "effect/Metric";
@@ -298,6 +299,92 @@ describe("OrchestrationEngine", () => {
     const readModelB = await system.readModel();
     expect(readModelB).toEqual(readModelA);
     await system.dispose();
+  });
+
+  it("fences queued agent commands and makes release irreversible by stale requests", async () => {
+    const system = await createOrchestrationSystem();
+    const threadId = ThreadId.make("moving-thread");
+    const projectId = ProjectId.make("moving-project");
+    const modelSelection = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" };
+    const createdAt = await system.run(DateTime.now.pipe(Effect.map(DateTime.formatIso)));
+    try {
+      await system.run(
+        system.engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.make("move-project"),
+          projectId,
+          title: "Moving",
+          workspaceRoot: "/tmp/moving-project",
+          defaultModelSelection: modelSelection,
+          createdAt,
+        }),
+      );
+      await system.run(
+        system.engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make("move-thread"),
+          threadId,
+          projectId,
+          title: "Moving",
+          modelSelection,
+          interactionMode: "default",
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt,
+        }),
+      );
+      const change = (
+        id: string,
+        status: "active" | "frozen" | "released",
+        generation: number,
+        expectedGeneration = 0,
+      ) =>
+        system.run(
+          system.engine.dispatch({
+            type: "thread.execution.set",
+            commandId: CommandId.make(id),
+            threadId,
+            expectedGeneration,
+            execution: { generation, operationId: "move", status },
+            createdAt,
+          }),
+        );
+      const send = (id: string) =>
+        system.run(
+          system.engine.dispatch({
+            type: "thread.turn.start",
+            threadId,
+            commandId: CommandId.make(id),
+            createdAt,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            message: {
+              messageId: MessageId.make(id),
+              role: "user",
+              text: "do work",
+              attachments: [],
+            },
+          }),
+        );
+      // Both enter the engine queue together, exercising batch transaction ordering.
+      const results = await Promise.allSettled([
+        change("freeze", "frozen", 0),
+        send("blocked-turn"),
+      ]);
+      expect(results.map((result) => result.status)).toEqual(["fulfilled", "rejected"]);
+      expect((await system.readModel()).threads[0]?.messages).toHaveLength(0);
+      await change("release", "released", 1);
+      await expect(change("stale-rollback", "active", 0)).rejects.toThrow("ownership changed");
+      await expect(send("released-turn")).rejects.toThrow("no longer owns");
+      // Preparing a subsequent return requires a fresh freeze at the current generation.
+      await change("return-freeze", "frozen", 1, 1);
+      await change("return-activate", "active", 2, 1);
+      await send("allowed-turn");
+      await expect(change("freeze-busy", "frozen", 2, 2)).rejects.toThrow("active turn");
+    } finally {
+      await system.dispose();
+    }
   });
 
   it("archives and unarchives threads through orchestration commands", async () => {

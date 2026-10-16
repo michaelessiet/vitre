@@ -58,6 +58,7 @@ async fn main() -> anyhow::Result<()> {
                 Ok(PreparedTarget {
                     base_url: info.http_base_url(),
                     access_token: token.access_token,
+                    initial_websocket_ticket: token.websocket_ticket.map(|ticket| ticket.ticket),
                 })
             })
         }

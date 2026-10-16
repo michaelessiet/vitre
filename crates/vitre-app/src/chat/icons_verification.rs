@@ -132,10 +132,19 @@ impl ChatApp {
                     }).map_err(|e| e.to_string())?;
                     executor.timer(Duration::from_millis(700)).await;
                     super::ui_verification::capture("project-tabs", cx).await?;
+                    // Open the new per-project menu in the rendered tab strip.
+                    cx.update(|w, cx| {
+                        let position = gpui::point(px(358.), px(22.));
+                        w.dispatch_event(gpui::PlatformInput::MouseDown(gpui::MouseDownEvent { button: gpui::MouseButton::Left, position, modifiers: Default::default(), click_count: 1, first_mouse: false }),cx);
+                        w.dispatch_event(gpui::PlatformInput::MouseUp(gpui::MouseUpEvent { button: gpui::MouseButton::Left, position, modifiers: Default::default(), click_count: 1 }),cx);
+                    }).map_err(|e| e.to_string())?;
+                    executor.timer(Duration::from_millis(300)).await;
+                    super::ui_verification::capture("project-tab-actions", cx).await?;
+                    super::ui_verification::key("escape", cx).await?;
                     let previous = this.update(cx, |app, _| app.tab_project_id()).map_err(|e| e.to_string())?;
                     // Click another project tab in the real rendered header.
                     cx.update(|w, cx| {
-                        let position = gpui::point(px(520.), px(22.));
+                        let position = gpui::point(px(430.), px(22.));
                         w.dispatch_event(gpui::PlatformInput::MouseDown(gpui::MouseDownEvent { button: gpui::MouseButton::Left, position, modifiers: Default::default(), click_count: 1, first_mouse: false }),cx);
                         w.dispatch_event(gpui::PlatformInput::MouseUp(gpui::MouseUpEvent { button: gpui::MouseButton::Left, position, modifiers: Default::default(), click_count: 1 }),cx);
                     }).map_err(|e| e.to_string())?;

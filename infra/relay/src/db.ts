@@ -1,14 +1,12 @@
 import type { PgClient } from "@effect/sql-pg/PgClient";
 import * as Cloudflare from "alchemy/Cloudflare";
 import * as Drizzle from "alchemy/Drizzle";
-import * as Planetscale from "alchemy/Planetscale";
-import * as Alchemy from "alchemy";
-import * as RemovalPolicy from "alchemy/RemovalPolicy";
 import type { EffectPgDatabase } from "drizzle-orm/effect-postgres";
 import * as Context from "effect/Context";
+import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 
-import { relayDatabaseMode } from "./dbConfig.ts";
+import { DatabaseSetupError, databaseTlsConfiguration, parseDatabaseUrl } from "./dbConfig.ts";
 
 export class RelayDb extends Context.Service<
   RelayDb,
@@ -17,50 +15,40 @@ export class RelayDb extends Context.Service<
   }
 >()("t3code-relay/db/RelayDb") {}
 
-export const PlanetscaleDatabase = Effect.gen(function* () {
-  const { stage } = yield* Alchemy.Stack;
-  const schema = yield* Drizzle.Schema("RelaySchema", {
+export const RelayDatabase = Effect.gen(function* () {
+  yield* Drizzle.Schema("RelaySchema", {
     schema: "./src/persistence/schema.ts",
     out: "./migrations/postgres",
     dialect: "postgres",
   });
 
-  const mode = relayDatabaseMode(stage);
-  const database =
-    mode === "shared-database"
-      ? yield* Planetscale.PostgresDatabase("RelayPostgresDatabase", {
-          name: "t3coderelay",
-          region: { slug: "us-west" },
-          clusterSize: "PS_5",
-          migrationsDir: schema.out,
-          migrationsTable: "relay_migrations",
-          replicas: 0, // BUMP BEFORE GOING TO PROD
-        }).pipe(RemovalPolicy.retain())
-      : yield* Planetscale.PostgresDatabase.ref("RelayPostgresDatabase", {
-          stage: "prod",
-        });
-  const branch =
-    mode === "stage-branch"
-      ? yield* Planetscale.PostgresBranch("RelayPostgresBranch", {
-          database,
-          migrationsDir: schema.out,
-          migrationsTable: "relay_migrations",
-        })
-      : undefined;
-
-  const runtimeRole = yield* Planetscale.PostgresRole("RelayPostgresRuntimeRole", {
-    database,
-    ...(branch ? { branch } : {}),
-    inheritedRoles: ["pg_read_all_data", "pg_write_all_data"],
-  });
-
-  return { branch, database, runtimeRole };
+  const url = yield* Config.redacted("RELAY_DATABASE_URL");
+  const origin = yield* Effect.try({
+    try: () => parseDatabaseUrl(url),
+    catch: () => new DatabaseSetupError({ message: "Invalid direct runtime database URL" }),
+  }).pipe(Effect.orDie);
+  if (origin.user !== "vitre_relay")
+    return yield* Effect.die(
+      new DatabaseSetupError({
+        message: "RELAY_DATABASE_URL must use the vitre_relay runtime role",
+      }),
+    );
+  return { origin };
 });
 
 export const RelayHyperdrive = Effect.gen(function* () {
-  const { runtimeRole } = yield* PlanetscaleDatabase;
+  const { origin } = yield* RelayDatabase;
+  const caCertificate = yield* Config.string("RELAY_DATABASE_CA_CERT").pipe(Config.withDefault(""));
+  const caCertificateId = yield* Config.string("RELAY_DATABASE_CA_CERTIFICATE_ID").pipe(
+    Config.withDefault(""),
+  );
+  const tls = yield* Effect.try({
+    try: () => databaseTlsConfiguration(caCertificate, caCertificateId),
+    catch: () => new DatabaseSetupError({ message: "Invalid database TLS configuration" }),
+  }).pipe(Effect.orDie);
   return yield* Cloudflare.Hyperdrive("RelayHyperdrive", {
-    origin: runtimeRole.origin,
+    origin,
+    ...(tls.hyperdrive ? { mtls: tls.hyperdrive } : {}),
     caching: {
       disabled: true,
     },

@@ -28,6 +28,21 @@ const config: RelayConfiguration.RelayConfiguration["Service"] = {
 };
 
 describe("ApnsDeliveryQueue", () => {
+  it.effect("fails closed without delivery bindings when mobile is disabled", () =>
+    Effect.gen(function* () {
+      const queue = yield* ApnsDeliveryQueue.ApnsDeliveryQueue;
+      const error = yield* Effect.flip(
+        queue.enqueueLiveActivity({
+          kind: "live_activity_update",
+          userId: "user",
+          deviceId: "device",
+          token: "token",
+          aggregate: null,
+        }),
+      );
+      expect(error.cause).toBe("Mobile notifications are disabled");
+    }).pipe(Effect.provide(ApnsDeliveryQueue.layerDisabled)),
+  );
   it.effect("preserves job identity and the queue sender cause", () => {
     const cause = new Error("queue unavailable");
     const senderCause = new Cloudflare.QueueSendError({

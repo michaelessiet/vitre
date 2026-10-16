@@ -4,6 +4,7 @@
 mod assets;
 mod chat;
 mod client_settings;
+mod cloud;
 mod desktop;
 mod files;
 mod git_gutter;
@@ -172,7 +173,7 @@ fn main() {
         selftest(config);
     }
 
-    // Overlap Node startup with native font and theme initialization.
+    // Overlap the Node cold start with fonts, themes and native UI setup.
     let supervisor = Arc::new(Supervisor::start(config));
     let status_rx = supervisor.status();
     let app = gpui_platform::application().with_assets(assets::VitreAssets);

@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./historyActivities": {
+      "types": "./src/historyActivities.ts",
+      "import": "./src/historyActivities.ts"
+    },
     "./projectFavicon": {
       "types": "./src/projectFavicon.ts",
       "import": "./src/projectFavicon.ts"

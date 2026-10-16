@@ -2355,8 +2355,15 @@ impl<M: InputModeKind> InputBaseState<M> {
 
         let row = point.row;
 
-        // Calculate row offset by multiplying the number of lines before it with the line height
-        let mut row_offset_y = line_height * self.display_map.buffer_line_to_display_row(row);
+        // The destination may be outside the shaped viewport. Resolve its
+        // wrapped display row before scrolling, rather than assuming the caret
+        // is on the buffer line's first visual row (e.g. Cmd+Down on a long line).
+        let wrap_point = self.display_map.offset_to_wrap_display_point(offset);
+        let display_row = self
+            .display_map
+            .wrap_row_to_display_row(wrap_point.row)
+            .unwrap_or_else(|| self.display_map.nearest_visible_display_row(wrap_point.row));
+        let mut row_offset_y = line_height * display_row;
 
         // For Right alignment use 0 margin: the cursor indicator is clamped inside bounds
         // in layout_cursor, so shifting the text here would cause a first-click visual jump.
@@ -2373,7 +2380,8 @@ impl<M: InputModeKind> InputBaseState<M> {
             if let Some(pos) = line.position_for_index(point.column, last_layout, false) {
                 let bounds_width = bounds.size.width - last_layout.line_number_width;
                 let col_offset_x = pos.x;
-                row_offset_y += pos.y;
+                row_offset_y =
+                    line_height * self.display_map.buffer_line_to_display_row(row) + pos.y;
                 if col_offset_x - safety_margin < -scroll_offset.x {
                     // If the position is out of the visible area, scroll to make it visible
                     scroll_offset.x = -col_offset_x + safety_margin;

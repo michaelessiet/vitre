@@ -52,6 +52,7 @@ impl ChatApp {
                     | vitre_state::sidebar::ThreadStatus::Connecting
                     | vitre_state::sidebar::ThreadStatus::PendingApproval
                     | vitre_state::sidebar::ThreadStatus::AwaitingInput
+                    | vitre_state::sidebar::ThreadStatus::NeedsAttention
             )
         );
         let capabilities = self.client.as_ref().and_then(|c| {
@@ -106,6 +107,16 @@ impl ChatApp {
         cx.notify();
         let title = rename.input.read(cx).value().trim().to_string();
         if title.is_empty() || title == rename.original {
+            return;
+        }
+        if let Some(task_id) = self
+            .thread_location(&rename.id)
+            .task_id()
+            .map(str::to_owned)
+        {
+            self.cloud_store.update(cx, |store, cx| {
+                store.update_task(task_id, Some(title), None, cx)
+            });
             return;
         }
         let Some(client) = self.client.clone() else {
@@ -215,6 +226,59 @@ pub(super) fn thread_context_menu(
     window: &mut Window,
     cx: &mut Context<PopupMenu>,
 ) -> PopupMenu {
+    if let Some(task_id) = owner
+        .upgrade()
+        .map(|app| app.read(cx).thread_location(&target.thread.id))
+        .unwrap_or(ThreadLocation::Local)
+        .task_id()
+        .map(str::to_owned)
+    {
+        let refresh = owner.clone();
+        let rename = owner.clone();
+        let archive = owner.clone();
+        let archive_id = target.thread.id.clone();
+        let rename_id = target.thread.id.clone();
+        let delete = owner.clone();
+        let unread = owner.clone();
+        let id = target.thread.id.0.clone();
+        let unread_id = id.clone();
+        let title = target.thread.title.0.clone();
+        return menu
+            .item(PopupMenuItem::new("Refresh").on_click(move |_, _, cx| {
+                let _ = refresh.update(cx, |a, cx| a.cloud_store.update(cx, |s, cx| s.refresh(cx)));
+            }))
+            .item(
+                PopupMenuItem::new("Rename thread").on_click(move |_, window, cx| {
+                    let _ = rename.update(cx, |app, cx| {
+                        app.start_thread_rename(rename_id.clone(), window, cx)
+                    });
+                }),
+            )
+            .item(PopupMenuItem::new("Archive").on_click(move |_, _, cx| {
+                let _ = archive.update(cx, |app, cx| app.archive_thread(archive_id.clone(), cx));
+            }))
+            .item(PopupMenuItem::new("Mark unread").on_click(move |_, _, cx| {
+                let _ = unread.update(cx, |a, cx| {
+                    a.sidebar.mark_thread_unread(&unread_id, None);
+                    a.rebuild_sidebar();
+                    cx.notify();
+                });
+            }))
+            .item(
+                PopupMenuItem::new("Copy Thread ID").on_click(move |_, _, cx| {
+                    cx.write_to_clipboard(ClipboardItem::new_string(id.clone()))
+                }),
+            )
+            .separator()
+            .item(PopupMenuItem::new("Delete").on_click(move |_, _, cx| {
+                let _ = delete.update(cx, |a, cx| {
+                    a.open_cloud_sheet(
+                        crate::cloud::Sheet::confirm_delete(task_id.clone(), title.clone()),
+                        cx,
+                    )
+                });
+            }));
+    }
     if let Some(branch) = &target.thread.branch {
         let source = target.thread.clone();
         let owner = owner.clone();

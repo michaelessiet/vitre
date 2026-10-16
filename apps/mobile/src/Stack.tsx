@@ -34,6 +34,10 @@ import { ThreadRouteScreen } from "./features/threads/ThreadRouteScreen";
 import { ConnectionsRouteScreen } from "./features/connection/ConnectionsRouteScreen";
 import { ConnectionsNewRouteScreen } from "./features/connection/ConnectionsNewRouteScreen";
 import { HomeRouteScreen } from "./features/home/HomeRouteScreen";
+import { VitreCloudHomeScreen } from "./features/vitre-cloud/VitreCloudHomeScreen";
+import { VitreCloudLoginScreen } from "./features/vitre-cloud/VitreCloudLoginScreen";
+import { VitreCloudNewScreen } from "./features/vitre-cloud/VitreCloudNewScreen";
+import { VitreCloudTaskScreen } from "./features/vitre-cloud/VitreCloudTaskScreen";
 import { AddProjectDestinationRoute } from "./features/projects/AddProjectDestinationRoute";
 import { AddProjectLocalRoute } from "./features/projects/AddProjectLocalRoute";
 import { AddProjectRepositoryRoute } from "./features/projects/AddProjectRepositoryRoute";
@@ -385,6 +389,26 @@ export const RootStack = createNativeStackNavigator({
         headerBackVisible: false,
         title: "Threads",
       },
+    }),
+    VitreCloudHome: createNativeStackScreen({
+      screen: VitreCloudHomeScreen,
+      linking: "vitre-cloud",
+      options: { headerShown: false },
+    }),
+    VitreCloudNew: createNativeStackScreen({
+      screen: VitreCloudNewScreen,
+      linking: "vitre-cloud/new",
+      options: { headerShown: false },
+    }),
+    VitreCloudLogin: createNativeStackScreen({
+      screen: VitreCloudLoginScreen,
+      linking: "vitre-cloud/connect-codex",
+      options: { headerShown: false },
+    }),
+    VitreCloudTask: createNativeStackScreen({
+      screen: VitreCloudTaskScreen,
+      linking: "vitre-cloud/tasks/:taskId",
+      options: { headerShown: false },
     }),
     Thread: createNativeStackScreen({
       screen: ThreadRouteScreen,

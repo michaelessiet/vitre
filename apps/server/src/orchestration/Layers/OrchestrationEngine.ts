@@ -39,6 +39,7 @@ import {
   type OrchestrationProjectorDecodeError,
 } from "../Errors.ts";
 import { decideOrchestrationCommand } from "../decider.ts";
+import { enforceExecutionOwnership } from "../../cloud/executionOwnership.ts";
 import { createEmptyReadModel, projectEvent } from "../projector.ts";
 import { OrchestrationProjectionPipeline } from "../Services/ProjectionPipeline.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
@@ -90,6 +91,33 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
   const commandQueue = yield* Queue.unbounded<CommandEnvelope>();
   const eventPubSub = yield* PubSub.unbounded<OrchestrationEvent>();
+  const hydrateExecutionBoundary = Effect.fn("orchestration.hydrate_execution_boundary")(function* (
+    command: OrchestrationCommand,
+    model: OrchestrationReadModel,
+  ) {
+    if (command.type !== "thread.execution.set" || command.execution.status !== "frozen")
+      return model;
+    // The startup command model deliberately omits messages/activities. A freeze must
+    // still see queued turns and open approvals after a process restart.
+    const thread = yield* projectionSnapshotQuery.getThreadDetailById(command.threadId).pipe(
+      Effect.mapError(
+        (cause) =>
+          new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: "Could not verify that this conversation is idle.",
+            cause,
+          }),
+      ),
+    );
+    return Option.isSome(thread)
+      ? {
+          ...model,
+          threads: model.threads.map((entry) =>
+            entry.id === command.threadId ? thread.value : entry,
+          ),
+        }
+      : model;
+  });
 
   const projectEventsOntoReadModel = (
     baseReadModel: OrchestrationReadModel,
@@ -153,7 +181,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
         const eventBase = yield* decideOrchestrationCommand({
           command: envelope.command,
-          readModel: commandReadModel,
+          readModel: yield* hydrateExecutionBoundary(envelope.command, commandReadModel),
         }).pipe(
           Effect.provideService(Crypto.Crypto, crypto),
           Effect.mapError((cause) =>
@@ -170,6 +198,9 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         const committedCommand = yield* sql
           .withTransaction(
             Effect.gen(function* () {
+              yield* enforceExecutionOwnership(envelope.command).pipe(
+                Effect.provideService(SqlClient.SqlClient, sql),
+              );
               const committedEvents: OrchestrationEvent[] = [];
               let nextCommandReadModel = commandReadModel;
 
@@ -350,8 +381,11 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
               const eventBase = yield* decideOrchestrationCommand({
                 command: envelope.command,
-                readModel: nextReadModel,
+                readModel: yield* hydrateExecutionBoundary(envelope.command, nextReadModel),
               }).pipe(Effect.provideService(Crypto.Crypto, crypto));
+              yield* enforceExecutionOwnership(envelope.command).pipe(
+                Effect.provideService(SqlClient.SqlClient, sql),
+              );
               const eventBases = Array.isArray(eventBase) ? eventBase : [eventBase];
               const committedEvents: OrchestrationEvent[] = [];
               for (const nextEvent of eventBases) {

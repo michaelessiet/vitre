@@ -1,3 +1,5 @@
+import { isolatedWorkspaceRoots } from "../../cloud/executionOwnership.ts";
+import { importedConversationContext } from "../../cloud/conversationContext.ts";
 import {
   type ChatAttachment,
   CommandId,
@@ -532,10 +534,13 @@ const make = Effect.gen(function* () {
       currentInfo.continuationIdentity.continuationKey !==
         desiredInfo.continuationIdentity.continuationKey;
     const project = yield* resolveProject(thread.projectId);
-    const workspaceRoots = resolveThreadWorkspaceRoots({
-      thread,
-      projects: project ? [project] : [],
-    });
+    const workspaceRoots = yield* isolatedWorkspaceRoots(
+      thread.id,
+      resolveThreadWorkspaceRoots({
+        thread,
+        projects: project ? [project] : [],
+      }),
+    );
     const effectiveCwd = workspaceRoots.primary;
     const additionalDirectories = workspaceRoots.additional;
 
@@ -764,10 +769,13 @@ const make = Effect.gen(function* () {
         ).pipe(Effect.as(undefined)),
       ),
     );
-    const roots = resolveThreadWorkspaceRoots({
-      thread: input.thread,
-      projects: project ? [project] : [],
-    });
+    const roots = yield* isolatedWorkspaceRoots(
+      input.thread.id,
+      resolveThreadWorkspaceRoots({
+        thread: input.thread,
+        projects: project ? [project] : [],
+      }),
+    );
     if (roots.additional.length === 0) {
       return input.messageText;
     }
@@ -800,23 +808,24 @@ const make = Effect.gen(function* () {
     });
     threadModelSelections.set(input.threadId, input.modelSelection ?? thread.modelSelection);
     const selectedModel = input.modelSelection ?? thread.modelSelection;
+    const importedInput = importedConversationContext(thread, input.messageText);
     const providerChanged =
       thread.session?.providerInstanceId !== undefined &&
       thread.session.providerInstanceId !== selectedModel.instanceId;
     const historyBudget = Math.min(
       60_000,
       PROVIDER_SEND_TURN_MAX_INPUT_CHARS -
-        input.messageText.length -
+        importedInput.length -
         THREAD_REFERENCE_INPUT_SLACK_CHARS,
     );
     const transcript =
-      providerChanged && historyBudget > 0
+      providerChanged && importedInput === input.messageText && historyBudget > 0
         ? formatThreadReferenceTranscript(thread, historyBudget)
         : "";
     const normalizedInput = toNonEmptyProviderInput(
       transcript.length > 0
-        ? `The user switched providers in this conversation. Prior messages follow as background context.\n${buildThreadReferenceSection(thread, transcript)}\n\nCurrent user message:\n${input.messageText}`
-        : input.messageText,
+        ? `The user switched providers in this conversation. Prior messages follow as background context.\n${buildThreadReferenceSection(thread, transcript)}\n\nCurrent user message:\n${importedInput}`
+        : importedInput,
     );
     const inputWithThreadReferences =
       normalizedInput === undefined

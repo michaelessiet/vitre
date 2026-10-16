@@ -2,6 +2,7 @@ import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeCrypto from "node:crypto";
+import * as NodeNet from "node:net";
 import { fileContentRevision } from "@t3tools/shared/fileRevision";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
@@ -76,12 +77,16 @@ const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
 import * as ServerConfig from "./config.ts";
 import { layer as AssistantStreamBusLayer } from "./orchestration/AssistantStreamBus.ts";
 import { makeRoutesLayer } from "./server.ts";
+import { CloudHandoffService } from "./cloud/HandoffService.ts";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
-import { OrchestrationListenerCallbackError } from "./orchestration/Errors.ts";
+import {
+  OrchestrationCommandInvariantError,
+  OrchestrationListenerCallbackError,
+} from "./orchestration/Errors.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
 import { PersistenceSqlError } from "./persistence/Errors.ts";
@@ -233,7 +238,7 @@ const browserOtlpTracingLayer = Layer.mergeAll(
 
 const makeAuthTestLayer = () =>
   EnvironmentAuth.layer.pipe(
-    Layer.provide(SqlitePersistenceMemory),
+    Layer.provideMerge(SqlitePersistenceMemory),
     Layer.provide(ServerSecretStore.layer),
   );
 
@@ -610,6 +615,7 @@ const buildAppUnderTest = (options?: {
       Layer.provide(
         Layer.mergeAll(
           graphLayer,
+          Layer.mock(CloudHandoffService)({}),
           Layer.mock(Keybindings.Keybindings)({
             loadConfigState: Effect.succeed({
               keybindings: [],
@@ -1005,6 +1011,7 @@ const exchangeAccessToken = (
   options?: {
     readonly headers?: Record<string, string>;
     readonly scope?: string;
+    readonly includeWebSocketTicket?: boolean;
     readonly clientMetadata?: {
       readonly label?: string;
       readonly deviceType?: string;
@@ -1033,6 +1040,7 @@ const exchangeAccessToken = (
           ? { client_device_type: options.clientMetadata.deviceType }
           : {}),
         ...(options?.clientMetadata?.os ? { client_os: options.clientMetadata.os } : {}),
+        ...(options?.includeWebSocketTicket ? { include_websocket_ticket: "true" } : {}),
       }).toString(),
     });
     const body = yield* responseJsonEffect<{
@@ -1041,6 +1049,7 @@ const exchangeAccessToken = (
       readonly token_type?: string;
       readonly expires_in?: number;
       readonly scope?: string;
+      readonly websocket_ticket?: { readonly ticket: string; readonly expiresAt: string };
       readonly _tag?: string;
       readonly code?: string;
       readonly reason?: string;
@@ -3371,6 +3380,25 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("accepts a websocket ticket bundled in the bootstrap exchange", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const exchanged = yield* exchangeAccessToken(defaultDesktopBootstrapToken, {
+        includeWebSocketTicket: true,
+      });
+      assert.equal(exchanged.response.status, 200);
+      assert.equal(exchanged.response.headers["cache-control"], "no-store");
+      const ticket = exchanged.body.websocket_ticket;
+      assert.isDefined(ticket);
+      assert.equal(typeof ticket!.expiresAt, "string");
+      const wsUrl = `${yield* getWsServerUrl("/ws", { authenticated: false })}?wsTicket=${encodeURIComponent(ticket!.ticket)}`;
+      const response = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) => client[WS_METHODS.serverGetConfig]({})),
+      );
+      assert.equal(response.environment.environmentId, testEnvironmentDescriptor.environmentId);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("does not allow management-only access tokens to operate the environment", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest();
@@ -4003,6 +4031,80 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       assert.equal(first.response.status, 200);
       assert.equal(second.response.status, 200);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("forwards authenticated preview TCP traffic and rejects missing terminal scope", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const connections = new Set<NodeNet.Socket>();
+      const echo = NodeNet.createServer((socket) => {
+        connections.add(socket);
+        socket.on("close", () => connections.delete(socket));
+        socket.pipe(socket);
+      });
+      yield* Effect.promise(
+        () => new Promise<void>((resolve) => echo.listen(0, "127.0.0.1", resolve)),
+      );
+      yield* Effect.addFinalizer(() =>
+        Effect.promise(
+          () =>
+            new Promise<void>((resolve) => {
+              for (const socket of connections) socket.destroy();
+              echo.close(() => resolve());
+            }),
+        ),
+      );
+      const port = (echo.address() as NodeNet.AddressInfo).port;
+      const url = yield* getWsServerUrl(`/api/preview/tunnel/${port}`, { authenticated: false });
+      const token = yield* getAuthenticatedBearerSessionToken();
+      const payload = Buffer.from([0, 1, 255, 128, 10]);
+      const received = yield* Effect.tryPromise(
+        () =>
+          new Promise<Buffer>((resolve, reject) => {
+            const ws = new NodeSocket.NodeWS.WebSocket(url, {
+              headers: { authorization: `Bearer ${token}` },
+            });
+            // @effect-diagnostics-next-line globalTimers:off - bounds real WebSocket I/O under the frozen test clock.
+            const timer = setTimeout(() => {
+              ws.terminate();
+              reject(new Error("Preview tunnel timed out"));
+            }, 5000);
+            ws.once("open", () => ws.send(payload));
+            ws.once("message", (data) => {
+              clearTimeout(timer);
+              ws.close();
+              resolve(Buffer.from(data as Buffer));
+            });
+            ws.once("error", (error) => {
+              clearTimeout(timer);
+              reject(error);
+            });
+          }),
+      );
+      assert.deepEqual(received, payload);
+      const limited = yield* exchangeAccessToken(defaultDesktopBootstrapToken, {
+        scope: "orchestration:read",
+      });
+      const rejected = yield* Effect.tryPromise(
+        () =>
+          new Promise<number>((resolve, reject) => {
+            const ws = new NodeSocket.NodeWS.WebSocket(url, {
+              headers: { authorization: `Bearer ${limited.body.access_token}` },
+            });
+            ws.once("unexpected-response", (_request, response) => {
+              response.resume();
+              ws.terminate();
+              resolve(response.statusCode ?? 0);
+            });
+            ws.once("open", () => {
+              ws.close();
+              reject(new Error("Unauthorized preview connected"));
+            });
+            ws.once("error", () => {});
+          }),
+      );
+      assert.equal(rejected, 403);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -5776,6 +5878,41 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
         yield* Deferred.await(localRefreshStarted);
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("preserves definite dispatch rejection through websocket RPC", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            dispatch: (command) =>
+              Effect.fail(
+                new OrchestrationCommandInvariantError({
+                  commandType: command.type,
+                  code: "execution_busy",
+                  detail: "A turn is already active",
+                }),
+              ),
+            readEvents: () => Stream.empty,
+          },
+        },
+      });
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+            type: "thread.session.stop",
+            commandId: CommandId.make("rejected-command"),
+            threadId: ThreadId.make("thread-1"),
+            createdAt: "2026-01-01T00:00:00.000Z",
+          }),
+        ).pipe(Effect.result),
+      );
+      assertTrue(result._tag === "Failure");
+      assertTrue(result.failure._tag === "OrchestrationDispatchCommandError");
+      assert.equal(result.failure.requestDisposition, "rejected");
+      assert.equal(result.failure.code, "execution_busy");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("routes websocket rpc orchestration methods", () =>
@@ -7626,6 +7763,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assertTrue(result._tag === "Failure");
       assertTrue(result.failure._tag === "OrchestrationDispatchCommandError");
       assert.include(result.failure.message, "worktree exploded");
+      assert.notEqual(result.failure.requestDisposition, "rejected");
       assert.deepEqual(
         dispatchedCommands.map((command) => command.type),
         ["thread.create", "thread.delete"],

@@ -1,6 +1,19 @@
 import * as Schema from "effect/Schema";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
+import {
+  CloudDesktopAuthError,
+  CloudStartProgress,
+  CloudDesktopSession,
+  CloudStartConversationInput,
+  CloudContinueConversationInput,
+  CloudStartConversationResult,
+  CloudSwitchInput,
+  CloudSwitchStatusInput,
+  CloudSwitchCancelInput,
+  CloudSwitchResolveInput,
+  CloudSwitchStatus,
+} from "./cloud.ts";
 
 import { ExternalLauncherError, LaunchEditorInput } from "./editor.ts";
 import {
@@ -318,6 +331,14 @@ export const WS_METHODS = {
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
   cloudInstallRelayClient: "cloud.installRelayClient",
+  cloudGetDesktopSession: "cloud.getDesktopSession",
+  cloudStartConversation: "cloud.startConversation",
+  cloudStartProgress: "cloud.startProgress",
+  cloudContinueConversation: "cloud.continueConversation",
+  cloudSwitchConversation: "cloud.switchConversation",
+  cloudSwitchStatus: "cloud.switchStatus",
+  cloudCancelSwitch: "cloud.cancelSwitch",
+  cloudResolveSwitch: "cloud.resolveSwitch",
 
   // Claude managed binary methods
   claudeGetBinaryStatus: "claude.getBinaryStatus",
@@ -451,6 +472,48 @@ export const WsCloudGetRelayClientStatusRpc = Rpc.make(WS_METHODS.cloudGetRelayC
   payload: Schema.Struct({}),
   success: RelayClientStatusSchema,
   error: EnvironmentAuthorizationError,
+});
+
+export const WsCloudContinueConversationRpc = Rpc.make(WS_METHODS.cloudContinueConversation, {
+  payload: CloudContinueConversationInput,
+  success: CloudStartConversationResult,
+  error: CloudDesktopAuthError,
+});
+export const WsCloudSwitchConversationRpc = Rpc.make(WS_METHODS.cloudSwitchConversation, {
+  payload: CloudSwitchInput,
+  success: CloudSwitchStatus,
+  error: CloudDesktopAuthError,
+});
+export const WsCloudSwitchStatusRpc = Rpc.make(WS_METHODS.cloudSwitchStatus, {
+  payload: CloudSwitchStatusInput,
+  success: CloudSwitchStatus,
+  error: CloudDesktopAuthError,
+});
+export const WsCloudResolveSwitchRpc = Rpc.make(WS_METHODS.cloudResolveSwitch, {
+  payload: CloudSwitchResolveInput,
+  success: CloudSwitchStatus,
+  error: CloudDesktopAuthError,
+});
+export const WsCloudCancelSwitchRpc = Rpc.make(WS_METHODS.cloudCancelSwitch, {
+  payload: CloudSwitchCancelInput,
+  success: CloudSwitchStatus,
+  error: CloudDesktopAuthError,
+});
+export const WsCloudStartConversationRpc = Rpc.make(WS_METHODS.cloudStartConversation, {
+  payload: CloudStartConversationInput,
+  success: CloudStartConversationResult,
+  error: Schema.Union([CloudDesktopAuthError, EnvironmentAuthorizationError]),
+});
+export const WsCloudStartProgressRpc = Rpc.make(WS_METHODS.cloudStartProgress, {
+  payload: Schema.Struct({ idempotencyKey: Schema.String, cancel: Schema.Boolean }),
+  success: CloudStartProgress,
+  error: CloudDesktopAuthError,
+});
+
+export const WsCloudGetDesktopSessionRpc = Rpc.make(WS_METHODS.cloudGetDesktopSession, {
+  payload: Schema.Struct({ authorize: Schema.Boolean, cancel: Schema.optionalKey(Schema.Boolean) }),
+  success: CloudDesktopSession,
+  error: Schema.Union([CloudDesktopAuthError, EnvironmentAuthorizationError]),
 });
 
 export const WsCloudInstallRelayClientRpc = Rpc.make(WS_METHODS.cloudInstallRelayClient, {
@@ -1085,6 +1148,14 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetProcessResourceHistoryRpc,
   WsServerSignalProcessRpc,
   WsCloudGetRelayClientStatusRpc,
+  WsCloudGetDesktopSessionRpc,
+  WsCloudStartConversationRpc,
+  WsCloudStartProgressRpc,
+  WsCloudSwitchConversationRpc,
+  WsCloudSwitchStatusRpc,
+  WsCloudCancelSwitchRpc,
+  WsCloudResolveSwitchRpc,
+  WsCloudContinueConversationRpc,
   WsCloudInstallRelayClientRpc,
   WsClaudeGetBinaryStatusRpc,
   WsClaudeInstallBinaryRpc,

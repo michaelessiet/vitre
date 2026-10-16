@@ -15,6 +15,7 @@ import { ServerSettingsError } from "@t3tools/contracts";
 interface ProviderSnapshotState {
   readonly snapshot: ServerProvider;
   readonly enrichmentGeneration: number;
+  readonly checkRetained: boolean;
 }
 
 export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(function* <
@@ -26,6 +27,10 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
   readonly haveSettingsChanged: (previous: Settings, next: Settings) => boolean;
   readonly initialSnapshot: (settings: Settings) => Effect.Effect<ServerProvider>;
   readonly checkProvider: Effect.Effect<ServerProvider, ServerSettingsError>;
+  /** Stop probing once this predicate succeeds; scoped probe cleanup finishes
+   * before publication. Used by resident workers whose auth lease can move to
+   * another backend while this instance stays available. */
+  readonly retainSuccessfulCheck?: (snapshot: ServerProvider) => boolean;
   readonly enrichSnapshot?: (input: {
     readonly settings: Settings;
     readonly snapshot: ServerProvider;
@@ -44,6 +49,7 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
   const snapshotStateRef = yield* Ref.make<ProviderSnapshotState>({
     snapshot: initialSnapshot,
     enrichmentGeneration: 0,
+    checkRetained: false,
   });
   const settingsRef = yield* Ref.make(initialSettings);
   const enrichmentFiberRef = yield* Ref.make<Fiber.Fiber<void, unknown> | null>(null);
@@ -101,6 +107,11 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
     nextSettings: Settings,
     options?: { readonly forceRefresh?: boolean },
   ) {
+    const current = yield* Ref.get(snapshotStateRef);
+    if (current.checkRetained) {
+      yield* Ref.set(settingsRef, nextSettings);
+      return current.snapshot;
+    }
     const forceRefresh = options?.forceRefresh === true;
     const previousSettings = yield* Ref.get(settingsRef);
     if (!forceRefresh && !input.haveSettingsChanged(previousSettings, nextSettings)) {
@@ -118,6 +129,7 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
         {
           snapshot: nextSnapshot,
           enrichmentGeneration: generation,
+          checkRetained: input.retainSuccessfulCheck?.(nextSnapshot) === true,
         },
       ] as const;
     });

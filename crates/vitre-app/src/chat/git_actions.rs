@@ -60,6 +60,7 @@ const GIT_TOAST_KEY: &str = "git-action";
 pub(super) struct GitState {
     /// The status-stream target (`activeThread.worktreePath ?? workspaceRoot`).
     cwd: Option<String>,
+    environment_key: Option<String>,
     /// The folded `subscribeVcsStatus` result. Kept renderable across
     /// resubscribes; the fold accumulator itself lives in the task. The
     /// branch toolbar reads it too (closed-state trigger label, PR pill).
@@ -144,10 +145,12 @@ impl ChatApp {
         } else {
             None
         };
-        if desired == self.git.cwd {
+        let environment_key = self.workspace_cache_key("");
+        if desired == self.git.cwd && environment_key == self.git.environment_key {
             return;
         }
         self.git.cwd = desired.clone();
+        self.git.environment_key = environment_key;
         self.git.status = None;
         self.git.status_error = None;
         self.git._status_task = None;
@@ -155,7 +158,7 @@ impl ChatApp {
             cx.notify();
             return;
         };
-        let Some(client) = self.client.clone() else {
+        let Some(client) = self.workspace_client() else {
             cx.notify();
             return;
         };
@@ -249,7 +252,7 @@ impl ChatApp {
 
     /// Fire-and-forget `vcs.refreshStatus` — the stream delivers the update.
     pub(super) fn git_refresh_status(&self, cx: &mut Context<Self>) {
-        let (Some(client), Some(cwd)) = (self.client.clone(), self.git.cwd.clone()) else {
+        let (Some(client), Some(cwd)) = (self.workspace_client(), self.git.cwd.clone()) else {
             return;
         };
         cx.spawn(async move |_, _| {
@@ -463,7 +466,7 @@ impl ChatApp {
     }
 
     fn git_init(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        let (Some(client), Some(cwd)) = (self.client.clone(), self.git.cwd.clone()) else {
+        let (Some(client), Some(cwd)) = (self.workspace_client(), self.git.cwd.clone()) else {
             return;
         };
         if self.git.busy {
@@ -494,7 +497,7 @@ impl ChatApp {
     }
 
     fn run_git_pull(&mut self, cx: &mut Context<Self>) {
-        let (Some(client), Some(cwd)) = (self.client.clone(), self.git.cwd.clone()) else {
+        let (Some(client), Some(cwd)) = (self.workspace_client(), self.git.cwd.clone()) else {
             return;
         };
         if self.git.busy {
@@ -560,7 +563,7 @@ impl ChatApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let (Some(client), Some(cwd)) = (self.client.clone(), self.git.cwd.clone()) else {
+        let (Some(client), Some(cwd)) = (self.workspace_client(), self.git.cwd.clone()) else {
             return;
         };
         if self.git.busy {
@@ -911,7 +914,7 @@ impl ChatApp {
     /// `persistThreadBranchSync`: adopt a created feature branch on the open
     /// thread (primary root only — the only root Vitre drives today).
     fn persist_thread_branch(&mut self, branch: String, cx: &mut Context<Self>) {
-        let Some(client) = self.client.clone() else {
+        let Some(client) = self.workspace_client() else {
             return;
         };
         let Some(open) = self.thread.as_ref() else {

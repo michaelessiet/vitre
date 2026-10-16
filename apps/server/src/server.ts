@@ -1,3 +1,4 @@
+import { previewPortTunnelLayer } from "./preview/PortTunnel.ts";
 import { EnvironmentHttpApi } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -105,6 +106,7 @@ import {
   persistServerRuntimeState,
 } from "./serverRuntimeState.ts";
 import { orchestrationHttpApiLayer } from "./orchestration/http.ts";
+import * as CloudHandoff from "./cloud/HandoffService.ts";
 import * as NetService from "@t3tools/shared/Net";
 import * as RelayClient from "@t3tools/shared/relayClient";
 import { layerClaudeManagedBinary } from "./provider/Drivers/ClaudeManagedBinary.ts";
@@ -364,7 +366,7 @@ const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
   Layer.provideMerge(OrchestrationLayerLive),
 );
 
-const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
+const RuntimeCoreDependenciesLive = Layer.mergeAll(ReactorLayerLive, CloudHandoff.layer).pipe(
   // Core Services
   // Merged with the checkpointing layer rather than given its own entry
   // because `.pipe()` tops out at twenty arguments and this chain is at the
@@ -448,6 +450,7 @@ export const makeRoutesLayer = Layer.mergeAll(
       Layer.provide(serverEnvironmentHttpApiLayer),
       Layer.provide(environmentAuthenticatedAuthLayer),
     ),
+    previewPortTunnelLayer,
     otlpTracesProxyRouteLayer,
     assetRouteLayer,
     staticAndDevRouteLayer,

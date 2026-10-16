@@ -1,17 +1,21 @@
 import * as Alchemy from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
-import * as Drizzle from "alchemy/Drizzle";
 import * as Config from "effect/Config";
 import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Redacted from "effect/Redacted";
 import * as Stream from "effect/Stream";
 import * as Etag from "effect/unstable/http/Etag";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
+import * as HttpEffect from "effect/unstable/http/HttpEffect";
+import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
+import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
-import * as HttpApiScalar from "effect/unstable/httpapi/HttpApiScalar";
+import { documentationLayer } from "./http/documentation.ts";
+import { requestRouteFamily } from "./http/requestRouting.ts";
 
 import { RelayApi } from "@t3tools/contracts/relay";
 
@@ -44,6 +48,7 @@ import * as EnvironmentLinks from "./environments/EnvironmentLinks.ts";
 import * as ManagedEndpointAllocations from "./environments/ManagedEndpointAllocations.ts";
 import * as LiveActivities from "./agentActivity/LiveActivities.ts";
 import * as RelayDb from "./db.ts";
+import { requestPostgres } from "./postgres.ts";
 import { RelayApnsDeliveryDeadLetterQueue, RelayApnsDeliveryQueue } from "./queues.ts";
 import * as RelayConfiguration from "./Config.ts";
 import * as AgentActivityPublisher from "./agentActivity/AgentActivityPublisher.ts";
@@ -57,6 +62,21 @@ import * as EnvironmentPublishSignatures from "./environments/EnvironmentPublish
 import * as ManagedEndpointProvider from "./environments/ManagedEndpointProvider.ts";
 import * as ManagedTunnelLimits from "./environments/ManagedTunnelLimits.ts";
 import * as MobileRegistrations from "./agentActivity/MobileRegistrations.ts";
+import { CloudApi, cloudApiLayer, cloudWorkerApiLayer } from "./cloud/api.ts";
+import { CloudConfiguration } from "./cloud/config.ts";
+import { CloudError } from "./cloud/policy.ts";
+import * as CloudStore from "./cloud/store.ts";
+import * as CloudService from "./cloud/service.ts";
+import * as CloudScheduler from "./cloud/scheduler.ts";
+import {
+  beginReconciliation,
+  needsFrequentReconciliation,
+  wakeReconciliation,
+} from "./cloud/reconciliation.ts";
+import * as CloudAuxiliary from "./cloud/auxiliary.ts";
+import { VitreCloudQueue } from "./queues.ts";
+import { CloudArtifacts } from "./cloud/artifacts.ts";
+import * as CloudWorkerControl from "./cloud/workerControl.ts";
 
 const webcryptoLayer = Layer.succeed(
   Crypto.Crypto,
@@ -87,6 +107,16 @@ const relayApiLayer = Layer.mergeAll(
 );
 
 const CloudMintKeyPair = Alchemy.KeyPair("CloudMintKeyPair");
+const CloudArtifactBucket = Cloudflare.R2Bucket("VitreCloudArtifacts", {
+  lifecycleRules: [
+    {
+      id: "expire-cloud-results",
+      deleteObjectsTransition: {
+        condition: { type: "Age", maxAge: 30 * 24 * 60 * 60 },
+      },
+    },
+  ],
+});
 const ApnsDeliveryJobSigningSecret = Alchemy.makeRandom("ApnsDeliveryJobSigningSecret", {
   bytes: 32,
 });
@@ -108,28 +138,66 @@ export default class Api extends Cloudflare.Worker<Api>()(
     //
     // 1. Provision Infrastructure for the Worker to use
     //
-    const { relayPublicOrigin, stage } = yield* RelayDeploymentConfig;
-    const apnsDeliveryQueue = yield* RelayApnsDeliveryQueue;
-    const apnsDeliveryDeadLetterQueue = yield* RelayApnsDeliveryDeadLetterQueue;
+    const { relayPublicOrigin, stage, personalDeployment } = yield* RelayDeploymentConfig;
+    const httpTracingEnabled = yield* Config.boolean("RELAY_HTTP_TRACING_ENABLED").pipe(
+      Config.withDefault(!personalDeployment),
+    );
+    const mobileEnabled = yield* Config.boolean("RELAY_MOBILE_ENABLED").pipe(
+      Config.withDefault(!personalDeployment),
+    );
+    const apnsDeliveryQueue = mobileEnabled ? yield* RelayApnsDeliveryQueue : undefined;
+    const apnsDeliveryDeadLetterQueue = mobileEnabled
+      ? yield* RelayApnsDeliveryDeadLetterQueue
+      : undefined;
     const cloudMintKeyPair = yield* CloudMintKeyPair;
     const relayApiZone = yield* RelayApiZone;
     const managedEndpointZone = yield* ManagedEndpointZone;
-    const randomApnsDeliveryJobSigningSecret = yield* ApnsDeliveryJobSigningSecret;
+    const randomApnsDeliveryJobSigningSecret = mobileEnabled
+      ? yield* ApnsDeliveryJobSigningSecret
+      : undefined;
     const observability = yield* RelayObservability;
 
     //
     // 2. Create bindings
     //
-    const environment = yield* Config.schema(
-      RelayConfiguration.ApnsEnvironment,
-      "APNS_ENVIRONMENT",
+    const environment = mobileEnabled
+      ? yield* Config.schema(RelayConfiguration.ApnsEnvironment, "APNS_ENVIRONMENT")
+      : "sandbox";
+    const apnsTeamId = mobileEnabled ? yield* Config.string("APNS_TEAM_ID") : "";
+    const apnsKeyId = mobileEnabled ? yield* Config.string("APNS_KEY_ID") : "";
+    const apnsBundleId = mobileEnabled ? yield* Config.string("APNS_BUNDLE_ID") : "";
+    const apnsPrivateKey = mobileEnabled
+      ? yield* Config.redacted("APNS_PRIVATE_KEY")
+      : Redacted.make("");
+    const apnsDeliveryJobSigningSecret = randomApnsDeliveryJobSigningSecret
+      ? yield* randomApnsDeliveryJobSigningSecret
+      : Effect.succeed(Redacted.make(""));
+    const apnsDeliveryQueueSender = apnsDeliveryQueue
+      ? yield* Cloudflare.QueueBinding.bind(apnsDeliveryQueue)
+      : undefined;
+    const cloudQueue = yield* VitreCloudQueue;
+    const cloudQueueSender = yield* Cloudflare.QueueBinding.bind(cloudQueue);
+    const cloudBucket = yield* Cloudflare.R2BucketBinding.bind(yield* CloudArtifactBucket);
+    const cloudEnabled = yield* Config.boolean("VITRE_CLOUD_ENABLED").pipe(
+      Config.withDefault(false),
     );
-    const apnsTeamId = yield* Config.string("APNS_TEAM_ID");
-    const apnsKeyId = yield* Config.string("APNS_KEY_ID");
-    const apnsBundleId = yield* Config.string("APNS_BUNDLE_ID");
-    const apnsPrivateKey = yield* Config.redacted("APNS_PRIVATE_KEY");
-    const apnsDeliveryJobSigningSecret = yield* randomApnsDeliveryJobSigningSecret;
-    const apnsDeliveryQueueSender = yield* Cloudflare.QueueBinding.bind(apnsDeliveryQueue);
+    const cloudAllowedUserId = yield* Config.string("VITRE_CLOUD_ALLOWED_USER_ID").pipe(
+      Config.withDefault(""),
+    );
+    const machineUrl = yield* Config.string("VITRE_CLOUD_MACHINE_URL").pipe(Config.withDefault(""));
+    const machineToken = yield* Config.redacted("VITRE_CLOUD_MACHINE_TOKEN").pipe(
+      Config.withDefault(Redacted.make("")),
+    );
+    const cloudEncryptionKey = yield* Config.redacted("VITRE_CLOUD_ENCRYPTION_KEY").pipe(
+      Config.withDefault(Redacted.make("")),
+    );
+    const githubAppId = yield* Config.string("VITRE_GITHUB_APP_ID").pipe(Config.withDefault(""));
+    const githubPrivateKey = yield* Config.redacted("VITRE_GITHUB_PRIVATE_KEY").pipe(
+      Config.withDefault(Redacted.make("")),
+    );
+    const githubInstallationIds = yield* Config.string("VITRE_GITHUB_INSTALLATION_IDS").pipe(
+      Config.withDefault(""),
+    );
 
     const axiomDatasetName = yield* observability.traces.name;
     const axiomIngestToken = yield* observability.workerIngestToken.token;
@@ -142,7 +210,7 @@ export default class Api extends Cloudflare.Worker<Api>()(
     const cloudMintPrivateKey = yield* cloudMintKeyPair.privateKey;
     const cloudMintPublicKey = yield* cloudMintKeyPair.publicKey;
     const hyperdrive = yield* Cloudflare.Hyperdrive.bind(yield* RelayDb.RelayHyperdrive);
-    const db = yield* Drizzle.postgres(hyperdrive.connectionString);
+    const db = yield* requestPostgres(hyperdrive.connectionString);
 
     const managedEndpointTunnelBinding = yield* Cloudflare.TunnelReadWrite.bind();
     // Keep Worker custom-domain reconciliation ordered after API zone provisioning.
@@ -184,42 +252,136 @@ export default class Api extends Cloudflare.Worker<Api>()(
       }).pipe(Effect.map(makeRelayTraceLayer)),
     );
 
-    const runtimeLayer = Layer.empty.pipe(
-      Layer.provideMerge(MobileRegistrations.layer),
-      Layer.provideMerge(AgentActivityPublisher.layer),
-      Layer.provideMerge(EnvironmentConnector.layer),
-      Layer.provideMerge(EnvironmentLinker.layer),
-      Layer.provideMerge(EnvironmentPublishSignatures.layer),
-      Layer.provideMerge(
-        ManagedEndpointProvider.layerCloudflareBindings(
-          managedEndpointTunnelBinding,
-          managedEndpointDnsBinding,
-          alchemyRuntimeContext,
+    const runtimeLayer = Layer.empty
+      .pipe(
+        Layer.provideMerge(CloudWorkerControl.layer),
+        Layer.provideMerge(CloudScheduler.layer),
+        Layer.provideMerge(CloudAuxiliary.layer),
+        Layer.provideMerge(CloudService.layer),
+        Layer.provideMerge(CloudStore.layer),
+        Layer.provideMerge(
+          Layer.effect(
+            CloudArtifacts,
+            Effect.gen(function* () {
+              const bucket = yield* cloudBucket.raw;
+              return CloudArtifacts.of({
+                put: async (key, bytes, metadata) => {
+                  await bucket.put(key, bytes.buffer, { customMetadata: metadata });
+                },
+                get: async (key) => {
+                  const object = await bucket.get(key);
+                  return object ? new Uint8Array(await object.arrayBuffer()) : null;
+                },
+                head: async (key) => {
+                  const object = await bucket.head(key);
+                  return object
+                    ? { size: object.size, metadata: object.customMetadata ?? {} }
+                    : null;
+                },
+                delete: async (keys) => {
+                  await bucket.delete(keys);
+                },
+                deletePrefix: async (prefix) => {
+                  // Re-list from the beginning as deletion changes the key set.
+                  for (;;) {
+                    const page = await bucket.list({ prefix, limit: 1000 });
+                    if (!page.objects.length) break;
+                    await bucket.delete(page.objects.map((object) => object.key));
+                  }
+                },
+              });
+            }).pipe(Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext)),
+          ),
         ),
-      ),
-      Layer.provideMerge(DpopProofs.layer),
-      Layer.provideMerge(ApnsDeliveries.layer),
-      Layer.provideMerge(ApnsClient.layer.pipe(Layer.provideMerge(ApnsProviderTokens.layer))),
-      Layer.provideMerge(
-        ApnsDeliveryQueue.layerCloudflareQueues(apnsDeliveryQueueSender, alchemyRuntimeContext),
-      ),
-      Layer.provideMerge(AgentActivityRows.layer),
-      Layer.provideMerge(Devices.layer),
-      Layer.provideMerge(EnvironmentCredentials.layer),
-      Layer.provideMerge(
-        Layer.mergeAll(
-          EnvironmentLinks.layer,
-          ManagedEndpointAllocations.layer,
-          ManagedTunnelLimits.layer,
+        Layer.provideMerge(
+          Layer.succeed(CloudConfiguration, {
+            enabled: cloudEnabled,
+            allowedUserId: cloudAllowedUserId,
+            controlUrl: relayPublicOrigin,
+            encryptionKey: Redacted.value(cloudEncryptionKey),
+            ...(machineUrl
+              ? {
+                  machine: {
+                    url: machineUrl,
+                    token: Redacted.value(machineToken),
+                    ownerId: cloudAllowedUserId,
+                  },
+                }
+              : {}),
+            github: {
+              appId: githubAppId,
+              privateKey: Redacted.value(githubPrivateKey),
+              installationIds: githubInstallationIds
+                .split(",")
+                .map((s) => s.trim())
+                .filter(Boolean),
+            },
+            wake: (userId) =>
+              Effect.gen(function* () {
+                const bucket = yield* cloudBucket.raw;
+                // Queue remains available if the marker write fails; the hourly sweep
+                // also recovers durable operations if both wakeup channels fail.
+                yield* Effect.tryPromise(() => wakeReconciliation(bucket, userId)).pipe(
+                  Effect.ignore,
+                );
+                yield* cloudQueueSender.send({ userId });
+              }).pipe(
+                Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
+                Effect.mapError(
+                  () =>
+                    new CloudError(
+                      "queue_unavailable",
+                      "Cloud scheduling wakeup will be retried",
+                      503,
+                    ),
+                ),
+              ),
+          }),
         ),
-      ),
-      Layer.provideMerge(LiveActivities.layer),
-      Layer.provideMerge(DeliveryAttempts.layer),
-      Layer.provideMerge(RelayTokens.layer),
-      Layer.provideMerge(Layer.succeed(RelayDb.RelayDb, db)),
-      Layer.provideMerge(Layer.effect(RelayConfiguration.RelayConfiguration, loadSettings)),
-      Layer.provideMerge(webcryptoLayer),
-    );
+        Layer.provideMerge(MobileRegistrations.layer),
+        Layer.provideMerge(AgentActivityPublisher.layer),
+        Layer.provideMerge(EnvironmentConnector.layer),
+        Layer.provideMerge(EnvironmentLinker.layer),
+        Layer.provideMerge(EnvironmentPublishSignatures.layer),
+        Layer.provideMerge(
+          ManagedEndpointProvider.layerCloudflareBindings(
+            managedEndpointTunnelBinding,
+            managedEndpointDnsBinding,
+            alchemyRuntimeContext,
+          ),
+        ),
+        Layer.provideMerge(DpopProofs.layer),
+        Layer.provideMerge(ApnsDeliveries.layer),
+        Layer.provideMerge(ApnsClient.layer.pipe(Layer.provideMerge(ApnsProviderTokens.layer))),
+        Layer.provideMerge(
+          apnsDeliveryQueueSender
+            ? ApnsDeliveryQueue.layerCloudflareQueues(
+                apnsDeliveryQueueSender,
+                alchemyRuntimeContext,
+              )
+            : ApnsDeliveryQueue.layerDisabled,
+        ),
+        Layer.provideMerge(AgentActivityRows.layer),
+      )
+      .pipe(
+        Layer.provideMerge(Devices.layer),
+        Layer.provideMerge(EnvironmentCredentials.layer),
+        Layer.provideMerge(
+          Layer.mergeAll(
+            EnvironmentLinks.layer,
+            ManagedEndpointAllocations.layer,
+            ManagedTunnelLimits.layer,
+          ),
+        ),
+      )
+      .pipe(
+        Layer.provideMerge(LiveActivities.layer),
+        Layer.provideMerge(DeliveryAttempts.layer),
+        Layer.provideMerge(RelayTokens.layer),
+        Layer.provideMerge(Layer.succeed(RelayDb.RelayDb, db)),
+        Layer.provideMerge(Layer.effect(RelayConfiguration.RelayConfiguration, loadSettings)),
+        Layer.provideMerge(webcryptoLayer),
+      );
 
     const appLayer = relayApiLayer.pipe(
       Layer.provideMerge(relayClientAuthLayer),
@@ -228,27 +390,84 @@ export default class Api extends Cloudflare.Worker<Api>()(
       Layer.provide(runtimeLayer),
     );
 
-    yield* Cloudflare.messages<unknown>(apnsDeliveryQueue, {
-      batchSize: 10,
+    const cloudAppLayer = Layer.mergeAll(cloudApiLayer, cloudWorkerApiLayer).pipe(
+      Layer.provideMerge(relayClientAuthLayer),
+      Layer.provide(runtimeLayer),
+    );
+
+    const reconcileCloud = (userId: string, force: boolean) =>
+      Effect.gen(function* () {
+        if (userId !== cloudAllowedUserId) return;
+        const bucket = yield* cloudBucket.raw.pipe(
+          Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
+        );
+        // A queue retry can arrive after an idle marker was saved. Keep cron
+        // monitoring active even if this reconciliation fails partway through.
+        if (force)
+          yield* Effect.tryPromise(() => wakeReconciliation(bucket, userId)).pipe(Effect.ignore);
+        const now = yield* DateTime.now;
+        const gate = yield* Effect.promise(() =>
+          beginReconciliation(bucket, userId, DateTime.toEpochMillis(now), force),
+        );
+        if (!gate) return;
+        const scheduler = yield* CloudScheduler.CloudScheduler;
+        yield* scheduler.tick(userId);
+        const store = yield* CloudStore.CloudStore;
+        const state = yield* store.read(userId);
+        yield* Effect.promise(() => gate.complete(needsFrequentReconciliation(state.state)));
+      });
+
+    yield* Cloudflare.messages<unknown>(cloudQueue, {
+      batchSize: 1,
       maxRetries: 5,
-      maxWaitTime: "5 seconds",
-      retryDelay: "30 seconds",
-      // Alchemy beta.45 expects a resolved string here although Queue names are Outputs.
-      deadLetterQueue: apnsDeliveryDeadLetterQueue.queueName as unknown as string,
+      maxWaitTime: "1 second",
     }).subscribe((stream) =>
       stream.pipe(
-        Stream.withSpan("relay.apn_delivery_queue.process_batch"),
         Stream.runForEach((message) =>
-          ApnsDeliveries.ApnsDeliveries.pipe(
-            Effect.flatMap((deliveries) => deliveries.processSignedJob(message.body)),
-            Effect.withSpan("relay.apn_delivery_queue.process_message"),
-          ),
+          Effect.gen(function* () {
+            const body = message.body;
+            if (
+              typeof body !== "object" ||
+              body === null ||
+              !("userId" in body) ||
+              typeof body.userId !== "string"
+            )
+              return;
+            yield* reconcileCloud(body.userId, true);
+          }),
         ),
         Effect.provide(runtimeLayer),
       ),
     );
 
-    yield* Cloudflare.cron("*/5 * * * *").subscribe(() =>
+    yield* Cloudflare.cron("* * * * *").subscribe(() =>
+      Effect.gen(function* () {
+        if (cloudAllowedUserId) yield* reconcileCloud(cloudAllowedUserId, false);
+      }).pipe(Effect.provide(runtimeLayer)),
+    );
+
+    if (apnsDeliveryQueue && apnsDeliveryDeadLetterQueue)
+      yield* Cloudflare.messages<unknown>(apnsDeliveryQueue, {
+        batchSize: 10,
+        maxRetries: 5,
+        maxWaitTime: "5 seconds",
+        retryDelay: "30 seconds",
+        // Alchemy beta.45 expects a resolved string here although Queue names are Outputs.
+        deadLetterQueue: apnsDeliveryDeadLetterQueue.queueName as unknown as string,
+      }).subscribe((stream) =>
+        stream.pipe(
+          Stream.withSpan("relay.apn_delivery_queue.process_batch"),
+          Stream.runForEach((message) =>
+            ApnsDeliveries.ApnsDeliveries.pipe(
+              Effect.flatMap((deliveries) => deliveries.processSignedJob(message.body)),
+              Effect.withSpan("relay.apn_delivery_queue.process_message"),
+            ),
+          ),
+          Effect.provide(runtimeLayer),
+        ),
+      );
+
+    yield* Cloudflare.cron(mobileEnabled ? "*/5 * * * *" : "0 * * * *").subscribe(() =>
       DpopProofs.DpopProofReplay.pipe(
         Effect.flatMap((dpopProofs) => dpopProofs.pruneExpired),
         // Terminal thread rows are kept briefly so finished agents show as
@@ -267,19 +486,41 @@ export default class Api extends Cloudflare.Worker<Api>()(
       ),
     );
 
+    const routeLayers = {
+      documentation: Layer.merge(documentationLayer, relayDocsRedirectRoute),
+      cloud: HttpApiBuilder.layer(CloudApi).pipe(Layer.provide(cloudAppLayer)),
+      relay: HttpApiBuilder.layer(RelayApi).pipe(Layer.provide(appLayer)),
+    };
+    type RouteRequirements = Layer.Services<(typeof routeLayers)[keyof typeof routeLayers]>;
     const fetch = Layer.merge(
-      Layer.mergeAll(
-        HttpApiBuilder.layer(RelayApi, { openapiPath: "/openapi.json" }).pipe(
-          Layer.provide(appLayer),
+      Layer.unwrap(
+        HttpServerRequest.HttpServerRequest.pipe(
+          Effect.map(
+            (request): Layer.Layer<never, never, RouteRequirements> =>
+              routeLayers[requestRouteFamily(request.url)],
+          ),
         ),
-        HttpApiScalar.layer(RelayApi, { path: "/docs" }),
-        relayDocsRedirectRoute,
       ).pipe(Layer.provide([Etag.layerWeak, httpPlatformNotSupportedLayer, relayCors])),
       relayNotFoundRoute,
     ).pipe(
       HttpRouter.toHttpEffect,
       withoutCapturedParentSpan,
-      Effect.flatMap((httpEffect) => traceRelayHttpRequestWith(httpEffect, relayTraceLayer)),
+      Effect.flatMap((httpEffect) =>
+        traceRelayHttpRequestWith(
+          Effect.andThen(
+            HttpEffect.appendPreResponseHandler((request, response) =>
+              Effect.succeed(
+                request.url.startsWith("/v1/cloud")
+                  ? HttpServerResponse.setHeader(response, "cache-control", "no-store")
+                  : response,
+              ),
+            ),
+            httpEffect,
+          ),
+          relayTraceLayer,
+          httpTracingEnabled,
+        ),
+      ),
     );
 
     return { fetch };
@@ -290,6 +531,7 @@ export default class Api extends Cloudflare.Worker<Api>()(
         Layer.provideMerge(Cloudflare.CronEventSourceLive),
         Layer.provideMerge(Cloudflare.QueueBindingLive),
         Layer.provideMerge(Cloudflare.QueueEventSourceLive),
+        Layer.provideMerge(Cloudflare.R2BucketBindingLive),
         Layer.provideMerge(Cloudflare.TunnelReadWriteLive),
         Layer.provideMerge(Cloudflare.DnsReadWriteLive),
       ),

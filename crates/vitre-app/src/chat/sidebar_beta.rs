@@ -35,9 +35,9 @@ fn auto_settle_eligible(
 impl ChatApp {
     pub(super) fn render_beta_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let mut list = v_flex().gap_2();
-        if let Some(snapshot) = &self.shell.snapshot {
-            let mut threads = snapshot
-                .threads
+        {
+            let all_threads = self.shell_threads();
+            let mut threads = all_threads
                 .iter()
                 .filter(|t| !is_archived(t))
                 .filter(|t| {
@@ -47,95 +47,124 @@ impl ChatApp {
                 .collect::<Vec<_>>();
             threads.sort_by(|a, b| b.created_at.0.cmp(&a.created_at.0));
             for thread in threads {
-                let status =
-                    resolve_thread_status(thread, self.sidebar.thread_last_visited(&thread.id.0));
+                let visited = self.sidebar.thread_last_visited(&thread.id.0);
+                let status = if self
+                    .thread
+                    .as_ref()
+                    .is_some_and(|open| open.id == thread.id)
+                {
+                    self.conversation_status(cx).sidebar().or_else(|| {
+                        self.sidebar_conversation_status(thread, visited)
+                            .filter(|status| {
+                                matches!(status, ThreadStatus::Completed | ThreadStatus::PlanReady)
+                            })
+                    })
+                } else {
+                    self.sidebar_conversation_status(thread, visited)
+                };
                 let settled = settled(thread);
                 let id = thread.id.clone();
-                let project = snapshot
-                    .projects
+                let project = self
+                    .shell
+                    .snapshot
                     .iter()
+                    .flat_map(|s| s.projects.iter())
                     .find(|p| p.id == thread.project_id)
                     .map(|p| p.title.0.clone())
                     .unwrap_or_default();
                 let selected = self.thread.as_ref().is_some_and(|t| t.id == thread.id);
                 let menu_owner = cx.entity().downgrade();
                 let menu_target = self.thread_menu_target(&thread.id);
-                let mut card = v_flex()
-                    .id(SharedString::from(format!("beta-thread-{}", thread.id.0)))
-                    .p_2()
-                    .gap_1()
-                    .rounded_md()
-                    .cursor_pointer()
-                    .when(selected, |d| d.bg(cx.theme().list_active))
-                    .when(!settled, |d| d.border_1().border_color(cx.theme().border))
-                    .child(
-                        h_flex()
-                            .w_full()
-                            .gap_2()
-                            .child(self.render_thread_title(
-                                &thread.id,
-                                thread.title.0.clone().into(),
-                                cx,
-                            ))
-                            .child(
-                                Button::new(SharedString::from(format!(
-                                    "beta-menu-{}",
-                                    thread.id.0
-                                )))
-                                .ghost()
-                                .xsmall()
-                                .icon(IconName::Ellipsis)
-                                .tooltip("Conversation actions")
-                                .dropdown_menu(
-                                    move |menu, window, cx| {
-                                        if let Some(target) = &menu_target {
-                                            super::thread_actions::thread_context_menu(
-                                                menu,
-                                                &menu_owner,
-                                                target,
-                                                true,
-                                                window,
-                                                cx,
-                                            )
-                                        } else {
-                                            menu
-                                        }
-                                    },
+                let mut card =
+                    v_flex()
+                        .id(SharedString::from(format!("beta-thread-{}", thread.id.0)))
+                        .p_2()
+                        .gap_1()
+                        .rounded_md()
+                        .cursor_pointer()
+                        .when(selected, |d| d.bg(cx.theme().list_active))
+                        .when(!settled, |d| d.border_1().border_color(cx.theme().border))
+                        .child(
+                            h_flex()
+                                .w_full()
+                                .gap_2()
+                                .children(status.map(|status| {
+                                    div().size(px(7.)).flex_shrink_0().rounded_full().bg(
+                                        super::sidebar::status_colors(status, cx.theme().is_dark())
+                                            .dot,
+                                    )
+                                }))
+                                .child(self.render_thread_title(
+                                    &thread.id,
+                                    thread.title.0.clone().into(),
+                                    cx,
+                                ))
+                                .when(self.thread_location(&thread.id).is_cloud(), |row| {
+                                    row.child(
+                                        Icon::new(IconName::Globe)
+                                            .size_3()
+                                            .text_color(cx.theme().muted_foreground),
+                                    )
+                                })
+                                .child(
+                                    Button::new(SharedString::from(format!(
+                                        "beta-menu-{}",
+                                        thread.id.0
+                                    )))
+                                    .ghost()
+                                    .xsmall()
+                                    .icon(IconName::Ellipsis)
+                                    .tooltip("Conversation actions")
+                                    .dropdown_menu(
+                                        move |menu, window, cx| {
+                                            if let Some(target) = &menu_target {
+                                                super::thread_actions::thread_context_menu(
+                                                    menu,
+                                                    &menu_owner,
+                                                    target,
+                                                    true,
+                                                    window,
+                                                    cx,
+                                                )
+                                            } else {
+                                                menu
+                                            }
+                                        },
+                                    ),
                                 ),
-                            ),
-                    )
-                    .on_click(cx.listener(move |p, _, _, cx| p.select_thread(id.clone(), cx)));
+                        )
+                        .on_click(cx.listener(move |p, _, _, cx| p.select_thread(id.clone(), cx)));
                 if !settled {
                     card = card.child(
                         div()
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
-                            .child(format!(
-                                "{project} · {}",
-                                status.map(|s| s.label()).unwrap_or("Ready")
-                            )),
+                            .child(project),
                     );
                 }
                 let id = thread.id.clone();
-                card = card.child(
-                    Button::new("settle-thread")
-                        .label(if settled { "Resume" } else { "Settle" })
-                        .ghost()
-                        .xsmall()
-                        .disabled(matches!(
-                            status,
-                            Some(
-                                ThreadStatus::Working
-                                    | ThreadStatus::Connecting
-                                    | ThreadStatus::PendingApproval
-                                    | ThreadStatus::AwaitingInput
-                            )
-                        ))
-                        .on_click(cx.listener(move |p, _, _, cx| {
-                            cx.stop_propagation();
-                            p.set_thread_settled(id.clone(), !settled, cx);
-                        })),
-                );
+                card = card.when(!self.thread_location(&thread.id).is_cloud(), |card| {
+                    card.child(
+                        Button::new("settle-thread")
+                            .label(if settled { "Resume" } else { "Settle" })
+                            .ghost()
+                            .xsmall()
+                            .disabled(matches!(
+                                status,
+                                Some(
+                                    ThreadStatus::Working
+                                        | ThreadStatus::Connecting
+                                        | ThreadStatus::PendingApproval
+                                        | ThreadStatus::AwaitingInput
+                                        | ThreadStatus::NeedsAttention
+                                )
+                            ))
+                            .on_click(cx.listener(move |p, _, _, cx| {
+                                cx.stop_propagation();
+                                p.set_thread_settled(id.clone(), !settled, cx);
+                            })),
+                    )
+                });
                 let owner = cx.entity().downgrade();
                 let target = self.thread_menu_target(&thread.id);
                 if self.is_thread_renaming(&thread.id) {
@@ -162,6 +191,9 @@ impl ChatApp {
         settle: bool,
         cx: &mut Context<Self>,
     ) {
+        if self.thread_location(&id).is_cloud() {
+            return;
+        }
         let Some(client) = self.client.clone() else {
             return;
         };

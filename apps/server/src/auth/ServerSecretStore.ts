@@ -1,3 +1,4 @@
+import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
@@ -166,7 +167,27 @@ export const make = Effect.gen(function* () {
     ),
   );
 
-  const resolveSecretPath = (name: string) => path.join(serverConfig.secretsDir, `${name}.bin`);
+  const sharedAuth = yield* Config.string("VITRE_CLOUD_SHARED_AUTH_DIR").pipe(
+    Config.option,
+    Effect.orDie,
+  );
+  const sharedAuthDir = Option.getOrElse(sharedAuth, () => serverConfig.secretsDir);
+  if (sharedAuthDir !== serverConfig.secretsDir) {
+    yield* fileSystem.makeDirectory(sharedAuthDir, { recursive: true });
+    yield* fileSystem
+      .chmod(sharedAuthDir, 0o700)
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new SecretStoreSecureError({ resource: "shared cloud account directory", cause }),
+        ),
+      );
+  }
+  const resolveSecretPath = (name: string) =>
+    path.join(
+      name === "cloud-cli-oauth-token" ? sharedAuthDir : serverConfig.secretsDir,
+      `${name}.bin`,
+    );
 
   const get: ServerSecretStore["Service"]["get"] = (name) =>
     fileSystem.readFile(resolveSecretPath(name)).pipe(

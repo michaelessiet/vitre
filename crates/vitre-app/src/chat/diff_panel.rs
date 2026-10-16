@@ -241,6 +241,10 @@ fn new_diff_list(count: usize) -> ListState {
 }
 
 impl DiffPanel {
+    pub fn uses_client(&self, client: &Arc<EnvironmentClient>) -> bool {
+        Arc::ptr_eq(&self.client, client)
+    }
+
     pub fn new(
         client: Arc<EnvironmentClient>,
         thread_key: String,

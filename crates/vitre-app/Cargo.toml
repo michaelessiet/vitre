@@ -27,6 +27,7 @@ percent-encoding.workspace = true
 raw-window-handle.workspace = true
 regex.workspace = true
 reqwest.workspace = true
+tokio-tungstenite.workspace = true
 roxmltree = "0.21.1"
 ropey.workspace = true
 serde.workspace = true

@@ -225,9 +225,10 @@ pub fn sort_project_groups<'a, F>(
     });
 }
 
-/// `ThreadStatusPill["label"]` — the five states a sidebar row can advertise.
+/// The execution and attention states a sidebar row can advertise.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThreadStatus {
+    NeedsAttention,
     PendingApproval,
     AwaitingInput,
     Working,
@@ -239,6 +240,7 @@ pub enum ThreadStatus {
 impl ThreadStatus {
     pub fn label(self) -> &'static str {
         match self {
+            Self::NeedsAttention => "Needs attention",
             Self::PendingApproval => "Pending Approval",
             Self::AwaitingInput => "Awaiting Input",
             Self::Working => "Working",
@@ -252,6 +254,7 @@ impl ThreadStatus {
     /// when its threads disagree.
     pub fn priority(self) -> u8 {
         match self {
+            Self::NeedsAttention => 6,
             Self::PendingApproval => 5,
             Self::AwaitingInput => 4,
             Self::Working | Self::Connecting => 3,
@@ -605,6 +608,20 @@ mod tests {
             Some(ThreadStatus::PendingApproval)
         );
         assert_eq!(resolve_project_status([None, None]), None);
+    }
+
+    #[test]
+    fn attention_is_static_and_remains_visible_above_active_work() {
+        assert_eq!(ThreadStatus::NeedsAttention.label(), "Needs attention");
+        assert!(!ThreadStatus::NeedsAttention.pulse());
+        assert_eq!(
+            resolve_project_status([
+                Some(ThreadStatus::Working),
+                Some(ThreadStatus::NeedsAttention),
+                Some(ThreadStatus::PendingApproval),
+            ]),
+            Some(ThreadStatus::NeedsAttention)
+        );
     }
 
     #[test]

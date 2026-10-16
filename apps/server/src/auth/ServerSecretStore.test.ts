@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
+import * as ConfigProvider from "effect/ConfigProvider";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -264,5 +265,40 @@ it.layer(NodeServices.layer)("ServerSecretStore.layer", (it) => {
       assert.instanceOf(error.cause, PlatformError.PlatformError);
       assert.equal((error.cause as PlatformError.PlatformError).reason._tag, "PermissionDenied");
     }).pipe(Effect.provide(makeRemoveFailureSecretStoreLayer())),
+  );
+});
+
+it.layer(NodeServices.layer)("shared cloud credentials", (it) => {
+  it.effect("shares only cloud login across independent server homes and restarts", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const shared = yield* fs.makeTempDirectoryScoped({ prefix: "vitre-shared-auth-" });
+      const homeA = yield* fs.makeTempDirectoryScoped({ prefix: "vitre-home-a-" });
+      const homeB = yield* fs.makeTempDirectoryScoped({ prefix: "vitre-home-b-" });
+      const atHome = (home: string) =>
+        ServerSecretStore.layer.pipe(
+          Layer.provide(ServerConfig.layerTest(process.cwd(), home)),
+          Layer.provide(
+            ConfigProvider.layer(
+              ConfigProvider.fromEnv({ env: { VITRE_CLOUD_SHARED_AUTH_DIR: shared } }),
+            ),
+          ),
+          Layer.fresh,
+        );
+      const token = new TextEncoder().encode("test-token");
+      yield* Effect.gen(function* () {
+        const secrets = yield* ServerSecretStore.ServerSecretStore;
+        yield* secrets.set("cloud-cli-oauth-token", token);
+        yield* secrets.set("session-signing-key", token);
+      }).pipe(Effect.provide(atHome(homeA)));
+      for (const home of [homeB, homeA]) {
+        yield* Effect.gen(function* () {
+          const secrets = yield* ServerSecretStore.ServerSecretStore;
+          assert.deepEqual(yield* secrets.get("cloud-cli-oauth-token"), Option.some(token));
+          if (home === homeB)
+            assert.isTrue(Option.isNone(yield* secrets.get("session-signing-key")));
+        }).pipe(Effect.provide(atHome(home)));
+      }
+    }).pipe(Effect.scoped),
   );
 });

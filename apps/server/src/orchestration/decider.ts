@@ -8,6 +8,7 @@ import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import type * as PlatformError from "effect/PlatformError";
+import { historicalActivityIds } from "@t3tools/shared/historyActivities";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import {
@@ -62,11 +63,17 @@ function isStaleRequestFailureDetail(payload: Record<string, unknown> | null): b
 // the window is one whose turn kept running, i.e. it was resolved or went
 // stale. (The projection pipeline's pendingApprovalCount reads the same
 // capped stream and stays consistent with this view.)
-function hasOpenBlockingRequest(thread: {
-  readonly activities: ReadonlyArray<{ readonly kind: string; readonly payload: unknown }>;
+export function hasOpenBlockingRequest(thread: {
+  readonly activities: ReadonlyArray<{
+    readonly id?: string;
+    readonly kind: string;
+    readonly payload: unknown;
+  }>;
 }): boolean {
   const openRequestIds = new Set<string>();
+  const historicalIds = historicalActivityIds(thread.activities);
   for (const activity of thread.activities) {
+    if (activity.id !== undefined && historicalIds.has(activity.id)) continue;
     const payload =
       typeof activity.payload === "object" && activity.payload !== null
         ? (activity.payload as Record<string, unknown>)
@@ -106,9 +113,14 @@ function hasOpenBlockingRequest(thread: {
  * as long as the skew lasts, extending the block far past the intended two
  * minutes.
  */
-function threadHasQueuedTurnStart(
+export function threadHasQueuedTurnStart(
   thread: {
-    readonly messages: ReadonlyArray<{ readonly role: string; readonly createdAt: string }>;
+    readonly messages: ReadonlyArray<{
+      readonly id?: string;
+      readonly role: string;
+      readonly createdAt: string;
+    }>;
+    readonly activities?: ReadonlyArray<{ readonly kind: string; readonly payload?: unknown }>;
     readonly latestTurn: {
       readonly requestedAt: string;
       readonly startedAt: string | null;
@@ -118,9 +130,21 @@ function threadHasQueuedTurnStart(
   },
   occurredAt: string,
 ): boolean {
+  const imported = thread.activities?.findLast(
+    (activity) => activity.kind === "thread.history.imported",
+  )?.payload;
+  const importedId =
+    imported && typeof imported === "object" && "lastMessageId" in imported
+      ? imported.lastMessageId
+      : null;
+  const importedThrough = importedId
+    ? thread.messages.findIndex((message) => message.id === importedId)
+    : -1;
   const latestUserMessageAtMs = thread.messages.reduce(
-    (latest, message) =>
-      message.role === "user" ? Math.max(latest, Date.parse(message.createdAt)) : latest,
+    (latest, message, index) =>
+      index > importedThrough && message.role === "user"
+        ? Math.max(latest, Date.parse(message.createdAt))
+        : latest,
     Number.NEGATIVE_INFINITY,
   );
   const latestTurnAtMs =
@@ -226,6 +250,180 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
   Crypto.Crypto
 > {
   switch (command.type) {
+    case "thread.execution.restore": {
+      const commands: OrchestrationCommand[] = [
+        {
+          type: "thread.meta.update",
+          commandId: command.commandId,
+          threadId: command.threadId,
+          title: command.title,
+          modelSelection: command.modelSelection,
+          worktreePath: command.worktreePath,
+          branch: command.branch,
+          additionalRoots: command.additionalRoots,
+        },
+        {
+          type: "thread.runtime-mode.set",
+          commandId: command.commandId,
+          threadId: command.threadId,
+          runtimeMode: command.runtimeMode,
+          createdAt: command.createdAt,
+        },
+        {
+          type: "thread.interaction-mode.set",
+          commandId: command.commandId,
+          threadId: command.threadId,
+          interactionMode: command.interactionMode,
+          createdAt: command.createdAt,
+        },
+        {
+          type: "thread.history.import",
+          commandId: command.commandId,
+          threadId: command.threadId,
+          messages: command.messages,
+          proposedPlans: command.proposedPlans,
+          ...(command.activities ? { activities: command.activities } : {}),
+          createdAt: command.createdAt,
+        },
+      ];
+      const events: Array<Omit<OrchestrationEvent, "sequence">> = [];
+      for (const next of commands) {
+        const decided = yield* decideOrchestrationCommand({ command: next, readModel });
+        events.push(...(Array.isArray(decided) ? decided : [decided]));
+      }
+      return events;
+    }
+    case "thread.execution.set": {
+      const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      if (
+        command.execution.status === "frozen" &&
+        (thread.session?.status === "running" ||
+          thread.session?.status === "starting" ||
+          thread.latestTurn?.state === "running" ||
+          hasOpenBlockingRequest(thread) ||
+          threadHasQueuedTurnStart(thread, yield* nowIso))
+      )
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Wait for the active turn and pending requests before moving.",
+          code: "execution_busy",
+        });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.activity-appended",
+        payload: {
+          threadId: command.threadId,
+          activity: {
+            id: EventId.make(`${command.commandId}-execution`),
+            kind: "thread.execution.changed",
+            tone: "info",
+            summary:
+              command.execution.status === "active" ? "Conversation ready" : "Conversation moving",
+            payload: command.execution,
+            turnId: null,
+            createdAt: command.createdAt,
+          },
+        },
+      };
+    }
+    case "thread.history.import": {
+      const thread = yield* requireThread({ readModel, command, threadId: command.threadId });
+      if (
+        thread.session?.status === "running" ||
+        thread.session?.status === "starting" ||
+        hasOpenBlockingRequest(thread) ||
+        threadHasQueuedTurnStart(thread, yield* nowIso)
+      )
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Wait for the active turn before importing conversation history.",
+        });
+      const events: Array<Omit<OrchestrationEvent, "sequence">> = [];
+      for (const message of command.messages) {
+        events.push({
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.message-sent",
+          payload: {
+            threadId: command.threadId,
+            messageId: message.id,
+            role: message.role,
+            text: message.text,
+            ...(message.attachments ? { attachments: message.attachments } : {}),
+            turnId: null,
+            streaming: false,
+            createdAt: message.createdAt,
+            updatedAt: message.updatedAt,
+          },
+        });
+      }
+      for (const proposedPlan of command.proposedPlans) {
+        events.push({
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.proposed-plan-upserted",
+          payload: { threadId: command.threadId, proposedPlan },
+        });
+      }
+      const importedActivities = new Map(
+        (command.activities ?? []).map((activity) => [activity.id, activity]),
+      );
+      // Stream the historical fence before its records. Incremental clients
+      // must never briefly offer an approval while waiting for the marker.
+      events.push({
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.activity-appended",
+        payload: {
+          threadId: command.threadId,
+          activity: {
+            id: EventId.make(`${command.commandId}-history`),
+            kind: "thread.history.imported",
+            tone: "info",
+            summary: "Conversation moved",
+            payload: {
+              lastMessageId: command.messages.at(-1)?.id ?? null,
+              historicalActivityIds: [...importedActivities.keys()],
+            },
+            turnId: null,
+            createdAt: command.createdAt,
+          },
+        },
+      });
+      for (const activity of importedActivities.values()) {
+        events.push({
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+            // Imported provider requests must not mutate pending-request ownership.
+            metadata: { adapterKey: "history-import" },
+          })),
+          type: "thread.activity-appended",
+          payload: { threadId: command.threadId, activity },
+        });
+      }
+      return events;
+    }
+
     case "project.create": {
       yield* requireProjectAbsent({
         readModel,

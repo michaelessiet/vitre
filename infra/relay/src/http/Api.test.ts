@@ -14,13 +14,14 @@ import * as Tracer from "effect/Tracer";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
-import { RelayEnvironmentAuth } from "@t3tools/contracts/relay";
+import { RelayClientAuth, RelayEnvironmentAuth } from "@t3tools/contracts/relay";
 
 import {
   RELAY_REQUEST_DEADLINE_MS,
   relayCors,
   relayDocsRedirectRoute,
   relayEnvironmentAuthLayer,
+  relayClientAuthLayer,
   relayNotFoundRoute,
   traceRelayHttpRequestWith,
   verifyRelayClientBearerToken,
@@ -54,6 +55,48 @@ const relaySettings: RelayConfiguration.RelayConfiguration["Service"] = {
 };
 
 describe("relay client authentication", () => {
+  it.effect("reports separate auth and handler timings without credential details", () =>
+    Effect.gen(function* () {
+      vi.mocked(verifyToken).mockResolvedValue({
+        sub: "user_session",
+        aud: relaySettings.clerkJwtAudience,
+      } as never);
+      const auth = yield* RelayClientAuth;
+      const response = yield* auth.clientBearer(
+        Effect.gen(function* () {
+          yield* TestClock.adjust(Duration.millis(75));
+          return HttpServerResponse.empty({ headers: { "server-timing": "existing;dur=3" } });
+        }),
+        {
+          credential: Redacted.make("private-test-token"),
+          endpoint: {} as never,
+          group: {} as never,
+        },
+      );
+      expect(response.headers["server-timing"]).toBe(
+        "existing;dur=3, relay_auth;dur=0, relay_handler;dur=75",
+      );
+      expect(response.headers["server-timing"]).not.toContain("private-test-token");
+      expect(response.headers["server-timing"]).not.toContain("user_session");
+    }).pipe(
+      Effect.provideService(
+        HttpServerRequest.HttpServerRequest,
+        HttpServerRequest.fromWeb(new Request("https://relay.test/v1/cloud")),
+      ),
+      Effect.provideService(HttpServerRequest.ParsedSearchParams, {}),
+      Effect.provideService(HttpRouter.RouteContext, { params: {}, route: {} as never }),
+      Effect.provide(
+        relayClientAuthLayer.pipe(Layer.provide(RelayConfiguration.layer(relaySettings))),
+      ),
+      Effect.ensuring(
+        Effect.sync(() => {
+          vi.mocked(verifyToken).mockReset();
+          vi.mocked(createClerkClient).mockReset();
+        }),
+      ),
+    ),
+  );
+
   it.effect("preserves the existing Clerk session JWT path", () =>
     Effect.gen(function* () {
       vi.mocked(verifyToken).mockResolvedValue({
@@ -156,6 +199,18 @@ describe("relay environment authentication", () => {
 });
 
 describe("relay request tracing", () => {
+  it.effect("keeps the deadline without constructing an exporter when tracing is disabled", () =>
+    Effect.gen(function* () {
+      const exporter = Layer.effectDiscard(Effect.die("Exporter must not be constructed"));
+      const request = HttpServerRequest.fromWeb(new Request("https://relay.test/v1/cloud"));
+      const fiber = yield* traceRelayHttpRequestWith(Effect.never, exporter, false).pipe(
+        Effect.provideService(HttpServerRequest.HttpServerRequest, request),
+        Effect.forkChild,
+      );
+      yield* TestClock.adjust(Duration.millis(RELAY_REQUEST_DEADLINE_MS));
+      expect((yield* Fiber.join(fiber)).status).toBe(504);
+    }),
+  );
   it.effect(
     "does not parent endpoint spans to an ambient parent captured while building handlers",
     () =>

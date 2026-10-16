@@ -699,6 +699,70 @@ pub type ClaudeInstallBinaryPayload = serde_json::Value;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ClientOrchestrationCommand {
+    ThreadExecutionRestore {
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            with = "crate::support::double_option"
+        )]
+        activities: Option<Option<Vec<OrchestrationThreadActivity>>>,
+        #[serde(rename = "additionalRoots")]
+        additional_roots: Vec<WorkspaceRootRef>,
+        branch: Option<TrimmedNonEmptyString>,
+        #[serde(rename = "commandId")]
+        command_id: CommandId,
+        #[serde(rename = "createdAt")]
+        created_at: TrimmedNonEmptyString,
+        #[serde(rename = "expectedGeneration")]
+        expected_generation: NonNegativeInt,
+        #[serde(rename = "interactionMode")]
+        interaction_mode: ProviderInteractionMode,
+        messages: Vec<OrchestrationMessage>,
+        #[serde(rename = "modelSelection")]
+        model_selection: ModelSelection,
+        #[serde(rename = "operationId")]
+        operation_id: TrimmedNonEmptyString,
+        #[serde(rename = "proposedPlans")]
+        proposed_plans: Vec<OrchestrationProposedPlan>,
+        #[serde(rename = "runtimeMode")]
+        runtime_mode: RuntimeMode,
+        #[serde(rename = "threadId")]
+        thread_id: ThreadId,
+        title: TrimmedNonEmptyString,
+        r#type: ClientOrchestrationCommandThreadExecutionRestoreType,
+        #[serde(rename = "worktreePath")]
+        worktree_path: TrimmedNonEmptyString,
+    },
+    ThreadExecutionSet {
+        #[serde(rename = "commandId")]
+        command_id: CommandId,
+        #[serde(rename = "createdAt")]
+        created_at: TrimmedNonEmptyString,
+        execution: ThreadExecutionState,
+        #[serde(rename = "expectedGeneration")]
+        expected_generation: NonNegativeInt,
+        #[serde(rename = "threadId")]
+        thread_id: ThreadId,
+        r#type: ClientOrchestrationCommandThreadExecutionSetType,
+    },
+    ThreadHistoryImport {
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            with = "crate::support::double_option"
+        )]
+        activities: Option<Option<Vec<OrchestrationThreadActivity>>>,
+        #[serde(rename = "commandId")]
+        command_id: CommandId,
+        #[serde(rename = "createdAt")]
+        created_at: TrimmedNonEmptyString,
+        messages: Vec<OrchestrationMessage>,
+        #[serde(rename = "proposedPlans")]
+        proposed_plans: Vec<OrchestrationProposedPlan>,
+        #[serde(rename = "threadId")]
+        thread_id: ThreadId,
+        r#type: ClientOrchestrationCommandThreadHistoryImportType,
+    },
     ProjectCreateCommand(ProjectCreateCommand),
     ProjectMetaUpdate {
         #[serde(
@@ -1015,6 +1079,27 @@ pub enum ClientOrchestrationCommand {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum ClientOrchestrationCommandThreadExecutionRestoreType {
+    #[default]
+    #[serde(rename = "thread.execution.restore")]
+    ThreadExecutionRestore,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum ClientOrchestrationCommandThreadExecutionSetType {
+    #[default]
+    #[serde(rename = "thread.execution.set")]
+    ThreadExecutionSet,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum ClientOrchestrationCommandThreadHistoryImportType {
+    #[default]
+    #[serde(rename = "thread.history.import")]
+    ThreadHistoryImport,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum ClientOrchestrationCommandProjectMetaUpdateType {
     #[default]
     #[serde(rename = "project.meta.update")]
@@ -1192,34 +1277,6 @@ pub struct ClientOrchestrationCommandThreadTurnStartBootstrap {
     pub run_setup_script: Option<Option<bool>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum ClientOrchestrationCommandThreadTurnStartMessageAttachments {
-    #[serde(rename = "image")]
-    Image {
-        #[serde(rename = "dataUrl")]
-        data_url: TrimmedNonEmptyString,
-        #[serde(rename = "mimeType")]
-        mime_type: TrimmedNonEmptyString,
-        name: TrimmedNonEmptyString,
-        #[serde(rename = "sizeBytes")]
-        size_bytes: i64,
-    },
-    #[serde(rename = "file")]
-    File {
-        #[serde(rename = "dataUrl")]
-        data_url: TrimmedNonEmptyString,
-        #[serde(rename = "mimeType")]
-        mime_type: TrimmedNonEmptyString,
-        name: TrimmedNonEmptyString,
-        #[serde(rename = "sizeBytes")]
-        size_bytes: i64,
-    },
-    /// Forward compatibility: an event kind this build does not know.
-    #[serde(untagged)]
-    Unknown(serde_json::Value),
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum ClientOrchestrationCommandThreadTurnStartMessageRole {
     #[default]
@@ -1229,7 +1286,7 @@ pub enum ClientOrchestrationCommandThreadTurnStartMessageRole {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ClientOrchestrationCommandThreadTurnStartMessage {
-    pub attachments: Vec<ClientOrchestrationCommandThreadTurnStartMessageAttachments>,
+    pub attachments: Vec<UploadChatAttachment>,
     #[serde(rename = "messageId")]
     pub message_id: MessageId,
     pub role: ClientOrchestrationCommandThreadTurnStartMessageRole,
@@ -1286,11 +1343,1689 @@ pub enum ClientOrchestrationCommandThreadSessionStopType {
     ThreadSessionStop,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudAttachment {
+    pub chunks: Vec<String>,
+    #[serde(rename = "mimeType")]
+    pub mime_type: String,
+    pub name: String,
+    pub sha256: String,
+    #[serde(rename = "sizeBytes")]
+    pub size_bytes: i64,
+    pub r#type: CloudAttachmentType,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CloudAttachmentType {
+    #[serde(rename = "image")]
+    Image,
+    #[serde(rename = "file")]
+    File,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudCheckpoint {
+    #[serde(rename = "attemptId")]
+    pub attempt_id: String,
+    #[serde(rename = "createdAt")]
+    pub created_at: TrimmedNonEmptyString,
+    pub id: String,
+    #[serde(rename = "objectKey")]
+    pub object_key: String,
+    pub sequence: i64,
+    pub sha256: String,
+    #[serde(rename = "sizeBytes")]
+    pub size_bytes: i64,
+    #[serde(rename = "taskId")]
+    pub task_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum CloudCommand {
+    #[serde(rename = "handoff.request")]
+    HandoffRequest {
+        #[serde(rename = "cloudTaskId")]
+        cloud_task_id: Option<String>,
+        #[serde(rename = "conversationId")]
+        conversation_id: String,
+        #[serde(rename = "expectedGeneration")]
+        expected_generation: i64,
+        #[serde(rename = "idempotencyKey")]
+        idempotency_key: String,
+        #[serde(rename = "localThreadId")]
+        local_thread_id: String,
+        target: CloudExecutionTarget,
+    },
+    #[serde(rename = "handoff.advance")]
+    HandoffAdvance {
+        checkpoint: Option<CloudSnapshotRef>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(rename = "cloudTaskId")]
+        cloud_task_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(rename = "destinationOwner")]
+        destination_owner: Option<String>,
+        #[serde(rename = "expectedPhase")]
+        expected_phase: CloudHandoffPhase,
+        #[serde(rename = "idempotencyKey")]
+        idempotency_key: String,
+        #[serde(rename = "nextPhase")]
+        next_phase: CloudHandoffPhase,
+        #[serde(rename = "operationId")]
+        operation_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        roots: Option<Vec<CloudRootBinding>>,
+    },
+    #[serde(rename = "handoff.cancel")]
+    HandoffCancel {
+        #[serde(rename = "idempotencyKey")]
+        idempotency_key: String,
+        #[serde(rename = "operationId")]
+        operation_id: String,
+    },
+    #[serde(rename = "publication.retry")]
+    PublicationRetry {
+        #[serde(rename = "idempotencyKey")]
+        idempotency_key: String,
+        #[serde(rename = "publicationId")]
+        publication_id: String,
+    },
+    #[serde(rename = "repository.save")]
+    RepositorySave {
+        #[serde(rename = "idempotencyKey")]
+        idempotency_key: String,
+        repository: CloudRepository,
+    },
+    #[serde(rename = "task.create")]
+    TaskCreate {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attachments: Option<Vec<CloudAttachment>>,
+        #[serde(rename = "baseBranch")]
+        base_branch: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        handoff: Option<CloudCommandTaskCreateHandoff>,
+        #[serde(rename = "idempotencyKey")]
+        idempotency_key: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(rename = "interactionMode")]
+        interaction_mode: Option<CloudCommandTaskCreateInteractionMode>,
+        #[serde(rename = "issueNumber")]
+        issue_number: Option<i64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(rename = "keepAliveSeconds")]
+        keep_alive_seconds: Option<i64>,
+        kind: CloudCommandTaskCreateKind,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(rename = "modelOptions")]
+        model_options: Option<serde_json::Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(rename = "projectId")]
+        project_id: Option<String>,
+        prompt: String,
+        provider: CloudProvider,
+        #[serde(rename = "repositoryId")]
+        repository_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(rename = "runtimeMode")]
+        runtime_mode: Option<CloudCommandTaskCreateRuntimeMode>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<CloudCommandTaskCreateSource>,
+    },
+    #[serde(rename = "task.cancel")]
+    TaskCancel {
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            with = "crate::support::double_option"
+        )]
+        #[serde(rename = "expectedTurnRequestId")]
+        expected_turn_request_id: Option<Option<String>>,
+        #[serde(rename = "idempotencyKey")]
+        idempotency_key: String,
+        #[serde(rename = "taskId")]
+        task_id: String,
+    },
+    #[serde(rename = "task.update")]
+    TaskUpdate {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        archived: Option<bool>,
+        #[serde(rename = "idempotencyKey")]
+        idempotency_key: String,
+        #[serde(rename = "taskId")]
+        task_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+    },
+    #[serde(rename = "task.wake")]
+    TaskWake {
+        #[serde(rename = "idempotencyKey")]
+        idempotency_key: String,
+        #[serde(rename = "taskId")]
+        task_id: String,
+    },
+    #[serde(rename = "task.continue")]
+    TaskContinue {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        attachments: Option<Vec<CloudAttachment>>,
+        #[serde(rename = "idempotencyKey")]
+        idempotency_key: String,
+        prompt: String,
+        #[serde(rename = "taskId")]
+        task_id: String,
+    },
+    #[serde(rename = "task.resume")]
+    TaskResume {
+        #[serde(rename = "idempotencyKey")]
+        idempotency_key: String,
+        #[serde(rename = "taskId")]
+        task_id: String,
+    },
+    #[serde(rename = "task.delete")]
+    TaskDelete {
+        #[serde(rename = "idempotencyKey")]
+        idempotency_key: String,
+        #[serde(rename = "taskId")]
+        task_id: String,
+    },
+    #[serde(rename = "provider.disconnect")]
+    ProviderDisconnect {
+        #[serde(rename = "idempotencyKey")]
+        idempotency_key: String,
+        provider: CloudProvider,
+    },
+    #[serde(rename = "publication.create")]
+    PublicationCreate {
+        body: String,
+        #[serde(rename = "idempotencyKey")]
+        idempotency_key: String,
+        kind: CloudCommandPublicationCreateKind,
+        #[serde(rename = "resultId")]
+        result_id: String,
+        #[serde(rename = "resultSha256")]
+        result_sha256: String,
+        #[serde(rename = "taskId")]
+        task_id: String,
+        title: String,
+    },
+    #[serde(rename = "limits.update")]
+    LimitsUpdate {
+        #[serde(rename = "idempotencyKey")]
+        idempotency_key: String,
+        #[serde(rename = "monthlyComputeMicroDollars")]
+        monthly_compute_micro_dollars: i64,
+    },
+    /// Forward compatibility: an event kind this build does not know.
+    #[serde(untagged)]
+    Unknown(serde_json::Value),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudCommandTaskCreateHandoff {
+    #[serde(rename = "conversationId")]
+    pub conversation_id: String,
+    pub generation: i64,
+    pub history: CloudWorkspaceBlob,
+    #[serde(rename = "operationId")]
+    pub operation_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CloudCommandTaskCreateInteractionMode {
+    #[serde(rename = "default")]
+    Default,
+    #[serde(rename = "plan")]
+    Plan,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CloudCommandTaskCreateKind {
+    #[serde(rename = "build")]
+    Build,
+    #[serde(rename = "ask")]
+    Ask,
+    #[serde(rename = "investigate")]
+    Investigate,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CloudCommandTaskCreateRuntimeMode {
+    #[serde(rename = "approval-required")]
+    ApprovalRequired,
+    #[serde(rename = "auto-accept-edits")]
+    AutoAcceptEdits,
+    #[serde(rename = "auto")]
+    Auto,
+    #[serde(rename = "full-access")]
+    FullAccess,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum CloudCommandTaskCreateSource {
+    #[serde(rename = "github")]
+    Github {
+        revision: String,
+        snapshot: CloudSnapshotRef,
+    },
+    #[serde(rename = "local")]
+    Local {
+        name: String,
+        snapshot: CloudSnapshotRef,
+    },
+    /// Forward compatibility: an event kind this build does not know.
+    #[serde(untagged)]
+    Unknown(serde_json::Value),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CloudCommandPublicationCreateKind {
+    #[serde(rename = "pull_request")]
+    PullRequest,
+    #[serde(rename = "issue_comment")]
+    IssueComment,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudConnection {
+    #[serde(rename = "bootstrapToken")]
+    pub bootstrap_token: String,
+    #[serde(rename = "environmentId")]
+    pub environment_id: String,
+    #[serde(rename = "httpBaseUrl")]
+    pub http_base_url: TrimmedNonEmptyString,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudContinueConversationInput {
+    pub attachments: Vec<UploadChatAttachment>,
+    #[serde(rename = "idempotencyKey")]
+    pub idempotency_key: String,
+    pub prompt: String,
+    #[serde(rename = "taskId")]
+    pub task_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudConversationBinding {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aliases: Option<Vec<String>>,
+    #[serde(rename = "cloudTaskId")]
+    pub cloud_task_id: Option<String>,
+    #[serde(rename = "conversationId")]
+    pub conversation_id: String,
+    pub generation: i64,
+    #[serde(rename = "leaseExpiresAt")]
+    pub lease_expires_at: Option<TrimmedNonEmptyString>,
+    #[serde(rename = "leaseOwner")]
+    pub lease_owner: Option<String>,
+    #[serde(rename = "localThreadId")]
+    pub local_thread_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roots: Option<Vec<CloudRootBinding>>,
+    pub target: CloudExecutionTarget,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudConversationSnapshot {
+    pub history: CloudWorkspaceBlob,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "projectId")]
+    pub project_id: Option<String>,
+    pub roots: Vec<CloudConversationSnapshotRoots>,
+    pub version: i64,
+    pub workspace: CloudWorkspaceManifest,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudConversationSnapshotRoots {
+    pub id: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudDependencySetup {
+    #[serde(rename = "attemptId")]
+    pub attempt_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    pub outcome: CloudDependencySetupOutcome,
+    pub sequence: i64,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: TrimmedNonEmptyString,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CloudDependencySetupOutcome {
+    #[serde(rename = "running")]
+    Running,
+    #[serde(rename = "succeeded")]
+    Succeeded,
+    #[serde(rename = "reused")]
+    Reused,
+    #[serde(rename = "unnecessary")]
+    Unnecessary,
+    #[serde(rename = "failed")]
+    Failed,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudDesktopAuthError {
+    #[serde(rename = "_tag")]
+    pub tag: CloudDesktopAuthErrorTag,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    pub message: TrimmedNonEmptyString,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "requestDisposition")]
+    pub request_disposition: Option<CloudDesktopAuthErrorRequestDisposition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retryable: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum CloudDesktopAuthErrorTag {
+    #[default]
+    #[serde(rename = "CloudDesktopAuthError")]
+    CloudDesktopAuthError,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CloudDesktopAuthErrorRequestDisposition {
+    #[serde(rename = "rejected")]
+    Rejected,
+    #[serde(rename = "unknown")]
+    UnknownX,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudDesktopSession {
+    #[serde(rename = "accessToken")]
+    pub access_token: Option<TrimmedNonEmptyString>,
+    pub enabled: bool,
+    #[serde(rename = "expiresAtEpochMs")]
+    pub expires_at_epoch_ms: Option<DurationMillis>,
+    #[serde(rename = "relayUrl")]
+    pub relay_url: Option<TrimmedNonEmptyString>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CloudExecutionTarget {
+    #[serde(rename = "local")]
+    Local,
+    #[serde(rename = "cloud-github")]
+    CloudGithub,
+    #[serde(rename = "cloud-local")]
+    CloudLocal,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudGetDesktopSessionPayload {
+    pub authorize: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cancel: Option<bool>,
+}
+
 /// Void payload — send `{}` on the wire.
 pub type CloudGetRelayClientStatusPayload = serde_json::Value;
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CloudHandoffErrorDisposition {
+    #[serde(rename = "retryable")]
+    Retryable,
+    #[serde(rename = "terminal")]
+    Terminal,
+    #[serde(rename = "unknown")]
+    UnknownX,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudHandoffOperation {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "cancelRequested")]
+    pub cancel_requested: Option<bool>,
+    pub checkpoint: Option<CloudSnapshotRef>,
+    #[serde(rename = "conversationId")]
+    pub conversation_id: String,
+    pub error: Option<TrimmedNonEmptyString>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "errorDisposition")]
+    pub error_disposition: Option<CloudHandoffOperationErrorDisposition>,
+    pub from: CloudExecutionTarget,
+    pub generation: i64,
+    pub id: String,
+    pub phase: CloudHandoffPhase,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "startedAt")]
+    pub started_at: Option<String>,
+    pub to: CloudExecutionTarget,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "updatedAt")]
+    pub updated_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "waitReason")]
+    pub wait_reason: Option<CloudHandoffOperationWaitReason>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CloudHandoffOperationErrorDisposition {
+    #[serde(rename = "retryable")]
+    Retryable,
+    #[serde(rename = "terminal")]
+    Terminal,
+    #[serde(rename = "unknown")]
+    UnknownX,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CloudHandoffOperationWaitReason {
+    #[serde(rename = "active-turn")]
+    ActiveTurn,
+    #[serde(rename = "cloud-preparation")]
+    CloudPreparation,
+    #[serde(rename = "cloud-activation")]
+    CloudActivation,
+    #[serde(rename = "ownership-confirmation")]
+    OwnershipConfirmation,
+    #[serde(rename = "conflict")]
+    Conflict,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CloudHandoffPhase {
+    #[serde(rename = "waiting")]
+    Waiting,
+    #[serde(rename = "preparing")]
+    Preparing,
+    #[serde(rename = "checkpointing")]
+    Checkpointing,
+    #[serde(rename = "transferring")]
+    Transferring,
+    #[serde(rename = "verifying")]
+    Verifying,
+    #[serde(rename = "activating")]
+    Activating,
+    #[serde(rename = "releasing")]
+    Releasing,
+    #[serde(rename = "completed")]
+    Completed,
+    #[serde(rename = "cancelled")]
+    Cancelled,
+    #[serde(rename = "failed")]
+    Failed,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CloudHandoffWaitReason {
+    #[serde(rename = "active-turn")]
+    ActiveTurn,
+    #[serde(rename = "cloud-preparation")]
+    CloudPreparation,
+    #[serde(rename = "cloud-activation")]
+    CloudActivation,
+    #[serde(rename = "ownership-confirmation")]
+    OwnershipConfirmation,
+    #[serde(rename = "conflict")]
+    Conflict,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
 /// Void payload — send `{}` on the wire.
 pub type CloudInstallRelayClientPayload = serde_json::Value;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudLoginStatus {
+    pub error: Option<TrimmedNonEmptyString>,
+    pub id: String,
+    pub state: CloudLoginStatusState,
+    #[serde(rename = "userCode")]
+    pub user_code: Option<TrimmedNonEmptyString>,
+    #[serde(rename = "verificationUrl")]
+    pub verification_url: Option<TrimmedNonEmptyString>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CloudLoginStatusState {
+    #[serde(rename = "starting")]
+    Starting,
+    #[serde(rename = "running")]
+    Running,
+    #[serde(rename = "completed")]
+    Completed,
+    #[serde(rename = "failed")]
+    Failed,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudOverview {
+    pub accounts: Vec<CloudProviderAccount>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bindings: Option<Vec<CloudConversationBinding>>,
+    pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoffs: Option<Vec<CloudHandoffOperation>>,
+    pub publications: Vec<CloudPublication>,
+    pub repositories: Vec<CloudRepository>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<i64>,
+    pub tasks: Vec<CloudTask>,
+    pub usage: CloudUsageSummary,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudPreparation {
+    #[serde(rename = "attemptId")]
+    pub attempt_id: String,
+    pub phase: CloudPreparationPhase,
+    pub sequence: i64,
+    #[serde(rename = "startedAt")]
+    pub started_at: TrimmedNonEmptyString,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: TrimmedNonEmptyString,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CloudPreparationPhase {
+    #[serde(rename = "restoring")]
+    Restoring,
+    #[serde(rename = "cloning")]
+    Cloning,
+    #[serde(rename = "dependencies")]
+    Dependencies,
+    #[serde(rename = "backend")]
+    Backend,
+    #[serde(rename = "provider")]
+    Provider,
+    #[serde(rename = "ready")]
+    Ready,
+    #[serde(rename = "failed")]
+    Failed,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudPreparedConversation {
+    #[serde(rename = "conversationId")]
+    pub conversation_id: String,
+    pub generation: i64,
+    pub history: CloudWorkspaceBlob,
+    #[serde(rename = "operationId")]
+    pub operation_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CloudProvider {
+    #[serde(rename = "codex")]
+    Codex,
+    #[serde(rename = "claude")]
+    Claude,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudProviderAccount {
+    #[serde(rename = "credentialVersion")]
+    pub credential_version: i64,
+    #[serde(rename = "leasedBy")]
+    pub leased_by: Option<String>,
+    pub provider: CloudProvider,
+    pub state: CloudProviderAccountState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CloudProviderAccountState {
+    #[serde(rename = "disconnected")]
+    Disconnected,
+    #[serde(rename = "connected")]
+    Connected,
+    #[serde(rename = "needs_auth")]
+    NeedsAuth,
+    #[serde(rename = "usage_limited")]
+    UsageLimited,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudPublication {
+    pub body: String,
+    pub id: String,
+    pub kind: CloudPublicationKind,
+    #[serde(rename = "resultId")]
+    pub result_id: String,
+    #[serde(rename = "resultSha256")]
+    pub result_sha256: String,
+    pub state: CloudPublicationState,
+    #[serde(rename = "taskId")]
+    pub task_id: String,
+    pub title: String,
+    pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CloudPublicationKind {
+    #[serde(rename = "pull_request")]
+    PullRequest,
+    #[serde(rename = "issue_comment")]
+    IssueComment,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CloudPublicationState {
+    #[serde(rename = "queued")]
+    Queued,
+    #[serde(rename = "publishing")]
+    Publishing,
+    #[serde(rename = "published")]
+    Published,
+    #[serde(rename = "failed")]
+    Failed,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudRepository {
+    #[serde(rename = "defaultBranch")]
+    pub default_branch: String,
+    pub id: String,
+    #[serde(rename = "installationId")]
+    pub installation_id: String,
+    pub name: String,
+    pub owner: String,
+    pub revision: i64,
+    #[serde(rename = "setupCommand")]
+    pub setup_command: String,
+    #[serde(rename = "testCommand")]
+    pub test_command: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudResultRevision {
+    #[serde(rename = "checkpointId")]
+    pub checkpoint_id: String,
+    #[serde(rename = "createdAt")]
+    pub created_at: TrimmedNonEmptyString,
+    pub id: String,
+    pub sha256: String,
+    pub summary: TrimmedNonEmptyString,
+    #[serde(rename = "taskId")]
+    pub task_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudRootBinding {
+    #[serde(rename = "cloudPath")]
+    pub cloud_path: Option<String>,
+    pub id: String,
+    #[serde(rename = "localPath")]
+    pub local_path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudSavedResult {
+    pub result: CloudSavedResultResult,
+    pub revision: Option<CloudResultRevision>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudSavedResultResult {
+    pub conversation: serde_json::Value,
+    pub diff: TrimmedNonEmptyString,
+    pub summary: TrimmedNonEmptyString,
+    #[serde(rename = "testExitCode")]
+    pub test_exit_code: Option<i64>,
+    #[serde(rename = "testOutput")]
+    pub test_output: TrimmedNonEmptyString,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudSnapshotRef {
+    pub id: String,
+    pub sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudStartConversationInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachments: Option<Vec<UploadChatAttachment>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoff: Option<CloudStartConversationInputHandoff>,
+    #[serde(rename = "idempotencyKey")]
+    pub idempotency_key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "interactionMode")]
+    pub interaction_mode: Option<CloudStartConversationInputInteractionMode>,
+    pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "modelOptions")]
+    pub model_options: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "projectId")]
+    pub project_id: Option<String>,
+    pub prompt: String,
+    pub provider: CloudProvider,
+    pub roots: Vec<CloudStartConversationInputRoots>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "runtimeMode")]
+    pub runtime_mode: Option<CloudStartConversationInputRuntimeMode>,
+    pub target: CloudStartConversationInputTarget,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudStartConversationInputHandoff {
+    #[serde(rename = "conversationId")]
+    pub conversation_id: String,
+    pub generation: i64,
+    pub history: CloudWorkspaceBlob,
+    #[serde(rename = "operationId")]
+    pub operation_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CloudStartConversationInputInteractionMode {
+    #[serde(rename = "default")]
+    Default,
+    #[serde(rename = "plan")]
+    Plan,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudStartConversationInputRoots {
+    pub id: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CloudStartConversationInputRuntimeMode {
+    #[serde(rename = "approval-required")]
+    ApprovalRequired,
+    #[serde(rename = "auto-accept-edits")]
+    AutoAcceptEdits,
+    #[serde(rename = "auto")]
+    Auto,
+    #[serde(rename = "full-access")]
+    FullAccess,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CloudStartConversationInputTarget {
+    #[serde(rename = "cloud-github")]
+    CloudGithub,
+    #[serde(rename = "cloud-local")]
+    CloudLocal,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudStartConversationResult {
+    #[serde(rename = "entityId")]
+    pub entity_id: String,
+    pub overview: CloudOverview,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudStartProgress {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "completedBytes")]
+    pub completed_bytes: Option<i64>,
+    pub message: TrimmedNonEmptyString,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase: Option<CloudStartProgressPhase>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "requestId")]
+    pub request_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sequence: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "startedAt")]
+    pub started_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "totalBytes")]
+    pub total_bytes: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "updatedAt")]
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CloudStartProgressPhase {
+    #[serde(rename = "collection")]
+    Collection,
+    #[serde(rename = "upload")]
+    Upload,
+    #[serde(rename = "creation")]
+    Creation,
+    #[serde(rename = "cancelling")]
+    Cancelling,
+    #[serde(rename = "cancelled")]
+    Cancelled,
+    #[serde(rename = "completed")]
+    Completed,
+    #[serde(rename = "failed")]
+    Failed,
+    #[serde(rename = "unknown")]
+    UnknownX,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudStartProgressPayload {
+    pub cancel: bool,
+    #[serde(rename = "idempotencyKey")]
+    pub idempotency_key: TrimmedNonEmptyString,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudSwitchCancelInput {
+    #[serde(rename = "operationId")]
+    pub operation_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudSwitchInput {
+    #[serde(rename = "cloudTaskId")]
+    pub cloud_task_id: Option<String>,
+    #[serde(rename = "conversationId")]
+    pub conversation_id: String,
+    #[serde(rename = "idempotencyKey")]
+    pub idempotency_key: String,
+    #[serde(rename = "localThreadId")]
+    pub local_thread_id: ThreadId,
+    pub target: CloudExecutionTarget,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudSwitchResolveInput {
+    pub choice: CloudSwitchResolveInputChoice,
+    #[serde(rename = "operationId")]
+    pub operation_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CloudSwitchResolveInputChoice {
+    #[serde(rename = "local")]
+    Local,
+    #[serde(rename = "cloud")]
+    Cloud,
+    #[serde(rename = "edited")]
+    Edited,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudSwitchStatus {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "accountRevision")]
+    pub account_revision: Option<i64>,
+    pub binding: Option<CloudConversationBinding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "conflictRoots")]
+    pub conflict_roots: Option<Vec<CloudSwitchStatusConflictRoots>>,
+    pub conflicts: Vec<TrimmedNonEmptyString>,
+    pub operation: Option<CloudHandoffOperation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudSwitchStatusConflictRoots {
+    pub id: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudSwitchStatusInput {
+    #[serde(rename = "conversationId")]
+    pub conversation_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudTask {
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::support::double_option"
+    )]
+    #[serde(rename = "archivedAt")]
+    pub archived_at: Option<Option<TrimmedNonEmptyString>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachments: Option<Vec<CloudAttachment>>,
+    pub attempt: Option<CloudTaskAttempt>,
+    #[serde(rename = "baseBranch")]
+    pub base_branch: String,
+    #[serde(rename = "baseSha")]
+    pub base_sha: Option<String>,
+    pub branch: String,
+    pub checkpoint: Option<CloudCheckpoint>,
+    #[serde(rename = "createdAt")]
+    pub created_at: TrimmedNonEmptyString,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "dependencySetup")]
+    pub dependency_setup: Option<CloudTaskDependencySetup>,
+    pub error: Option<TrimmedNonEmptyString>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoff: Option<CloudTaskHandoff>,
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "interactionMode")]
+    pub interaction_mode: Option<CloudTaskInteractionMode>,
+    #[serde(rename = "issueNumber")]
+    pub issue_number: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "keepAliveSeconds")]
+    pub keep_alive_seconds: Option<i64>,
+    pub kind: CloudTaskKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "modelOptions")]
+    pub model_options: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preparation: Option<CloudTaskPreparation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "projectId")]
+    pub project_id: Option<String>,
+    pub prompt: String,
+    pub provider: CloudProvider,
+    pub repository: CloudRepository,
+    pub result: Option<CloudResultRevision>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "runtimeMode")]
+    pub runtime_mode: Option<CloudTaskRuntimeMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<CloudTaskSource>,
+    pub state: CloudTaskState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "turnRequestId")]
+    pub turn_request_id: Option<String>,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: TrimmedNonEmptyString,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "wakeOnly")]
+    pub wake_only: Option<bool>,
+    pub worker: Option<CloudWorker>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CloudTaskDependencySetupOutcome {
+    #[serde(rename = "running")]
+    Running,
+    #[serde(rename = "succeeded")]
+    Succeeded,
+    #[serde(rename = "reused")]
+    Reused,
+    #[serde(rename = "unnecessary")]
+    Unnecessary,
+    #[serde(rename = "failed")]
+    Failed,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudTaskDependencySetup {
+    #[serde(rename = "attemptId")]
+    pub attempt_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    pub outcome: CloudTaskDependencySetupOutcome,
+    pub sequence: i64,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: TrimmedNonEmptyString,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudTaskHandoff {
+    #[serde(rename = "conversationId")]
+    pub conversation_id: String,
+    pub generation: i64,
+    pub history: CloudWorkspaceBlob,
+    #[serde(rename = "operationId")]
+    pub operation_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CloudTaskInteractionMode {
+    #[serde(rename = "default")]
+    Default,
+    #[serde(rename = "plan")]
+    Plan,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CloudTaskKind {
+    #[serde(rename = "build")]
+    Build,
+    #[serde(rename = "ask")]
+    Ask,
+    #[serde(rename = "investigate")]
+    Investigate,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CloudTaskPreparationPhase {
+    #[serde(rename = "restoring")]
+    Restoring,
+    #[serde(rename = "cloning")]
+    Cloning,
+    #[serde(rename = "dependencies")]
+    Dependencies,
+    #[serde(rename = "backend")]
+    Backend,
+    #[serde(rename = "provider")]
+    Provider,
+    #[serde(rename = "ready")]
+    Ready,
+    #[serde(rename = "failed")]
+    Failed,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudTaskPreparation {
+    #[serde(rename = "attemptId")]
+    pub attempt_id: String,
+    pub phase: CloudTaskPreparationPhase,
+    pub sequence: i64,
+    #[serde(rename = "startedAt")]
+    pub started_at: TrimmedNonEmptyString,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: TrimmedNonEmptyString,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CloudTaskRuntimeMode {
+    #[serde(rename = "approval-required")]
+    ApprovalRequired,
+    #[serde(rename = "auto-accept-edits")]
+    AutoAcceptEdits,
+    #[serde(rename = "auto")]
+    Auto,
+    #[serde(rename = "full-access")]
+    FullAccess,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum CloudTaskSource {
+    #[serde(rename = "github")]
+    Github {
+        revision: String,
+        snapshot: CloudSnapshotRef,
+    },
+    #[serde(rename = "local")]
+    Local {
+        name: String,
+        snapshot: CloudSnapshotRef,
+    },
+    /// Forward compatibility: an event kind this build does not know.
+    #[serde(untagged)]
+    Unknown(serde_json::Value),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudTaskAttempt {
+    #[serde(rename = "billedThrough")]
+    pub billed_through: TrimmedNonEmptyString,
+    #[serde(rename = "deadlineAt")]
+    pub deadline_at: TrimmedNonEmptyString,
+    pub generation: i64,
+    #[serde(rename = "heartbeatAt")]
+    pub heartbeat_at: TrimmedNonEmptyString,
+    pub id: String,
+    #[serde(rename = "lastSequence")]
+    pub last_sequence: i64,
+    #[serde(rename = "reservedMicroDollars")]
+    pub reserved_micro_dollars: i64,
+    #[serde(rename = "startedAt")]
+    pub started_at: TrimmedNonEmptyString,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudTaskEvent {
+    #[serde(rename = "attemptId")]
+    pub attempt_id: String,
+    #[serde(rename = "createdAt")]
+    pub created_at: TrimmedNonEmptyString,
+    pub cursor: i64,
+    pub detail: TrimmedNonEmptyString,
+    pub phase: TrimmedNonEmptyString,
+    pub sequence: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudTaskFeed {
+    pub conversation: serde_json::Value,
+    pub cursor: i64,
+    pub events: Vec<CloudTaskEvent>,
+    pub reset: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CloudTaskState {
+    #[serde(rename = "queued")]
+    Queued,
+    #[serde(rename = "preparing")]
+    Preparing,
+    #[serde(rename = "running")]
+    Running,
+    #[serde(rename = "waiting_for_input")]
+    WaitingForInput,
+    #[serde(rename = "needs_auth")]
+    NeedsAuth,
+    #[serde(rename = "usage_limited")]
+    UsageLimited,
+    #[serde(rename = "completed")]
+    Completed,
+    #[serde(rename = "failed")]
+    Failed,
+    #[serde(rename = "cancelled")]
+    Cancelled,
+    #[serde(rename = "interrupted")]
+    Interrupted,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudTerminalState {
+    pub history: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "managedCommand")]
+    pub managed_command: Option<String>,
+    #[serde(rename = "relativeCwd")]
+    pub relative_cwd: String,
+    #[serde(rename = "rootId")]
+    pub root_id: String,
+    #[serde(rename = "terminalId")]
+    pub terminal_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum CloudTransferRequest {
+    #[serde(rename = "validateProvider")]
+    ValidateProvider {
+        #[serde(rename = "threadId")]
+        thread_id: ThreadId,
+    },
+    #[serde(rename = "ownership")]
+    Ownership {
+        #[serde(rename = "threadId")]
+        thread_id: ThreadId,
+    },
+    #[serde(rename = "restoreTerminals")]
+    RestoreTerminals {
+        generation: i64,
+        #[serde(rename = "operationId")]
+        operation_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(rename = "resumeCommands")]
+        resume_commands: Option<bool>,
+        terminals: Vec<CloudTerminalState>,
+        #[serde(rename = "threadId")]
+        thread_id: ThreadId,
+    },
+    #[serde(rename = "closeTerminals")]
+    CloseTerminals {
+        generation: i64,
+        #[serde(rename = "operationId")]
+        operation_id: String,
+        #[serde(rename = "threadId")]
+        thread_id: ThreadId,
+    },
+    #[serde(rename = "capture")]
+    Capture {
+        generation: i64,
+        #[serde(rename = "operationId")]
+        operation_id: String,
+        #[serde(rename = "threadId")]
+        thread_id: ThreadId,
+    },
+    #[serde(rename = "read")]
+    Read { sha256: String },
+    #[serde(rename = "write")]
+    Write { base64: String },
+    /// Forward compatibility: an event kind this build does not know.
+    #[serde(untagged)]
+    Unknown(serde_json::Value),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum CloudTransferResult {
+    #[serde(rename = "providerValidation")]
+    ProviderValidation {
+        reason: Option<TrimmedNonEmptyString>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retryable: Option<bool>,
+        supported: bool,
+    },
+    #[serde(rename = "terminalsRestored")]
+    TerminalsRestored {},
+    #[serde(rename = "ownership")]
+    Ownership { execution: ThreadExecutionState },
+    #[serde(rename = "snapshot")]
+    Snapshot { snapshot: CloudConversationSnapshot },
+    #[serde(rename = "chunk")]
+    Chunk {
+        base64: TrimmedNonEmptyString,
+        sha256: String,
+    },
+    #[serde(rename = "stored")]
+    Stored { sha256: String },
+    /// Forward compatibility: an event kind this build does not know.
+    #[serde(untagged)]
+    Unknown(serde_json::Value),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudUsageSummary {
+    #[serde(rename = "limitMicroDollars")]
+    pub limit_micro_dollars: i64,
+    pub month: TrimmedNonEmptyString,
+    #[serde(rename = "reservedMicroDollars")]
+    pub reserved_micro_dollars: i64,
+    #[serde(rename = "spentMicroDollars")]
+    pub spent_micro_dollars: i64,
+    pub warning: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudWorker {
+    pub cpu: DurationMillis,
+    #[serde(rename = "diskGiB")]
+    pub disk_gi_b: DurationMillis,
+    #[serde(rename = "environmentId")]
+    pub environment_id: String,
+    pub id: String,
+    #[serde(rename = "memoryGiB")]
+    pub memory_gi_b: DurationMillis,
+    #[serde(rename = "sandboxId")]
+    pub sandbox_id: Option<String>,
+    pub state: CloudWorkerState,
+    #[serde(rename = "stoppedAt")]
+    pub stopped_at: Option<TrimmedNonEmptyString>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudWorkerCallback {
+    #[serde(rename = "attemptId")]
+    pub attempt_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "baseSha")]
+    pub base_sha: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkpoint: Option<CloudWorkerCallbackCheckpoint>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "closeIdle")]
+    pub close_idle: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "dependencySetup")]
+    pub dependency_setup: Option<CloudWorkerCallbackDependencySetup>,
+    pub detail: String,
+    pub generation: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle: Option<bool>,
+    pub phase: CloudWorkerCallbackPhase,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preparation: Option<CloudWorkerCallbackPreparation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<CloudWorkerCallbackResult>,
+    pub sequence: i64,
+    #[serde(rename = "taskId")]
+    pub task_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "turnRequestId")]
+    pub turn_request_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudWorkerCallbackCheckpoint {
+    #[serde(rename = "attemptId")]
+    pub attempt_id: String,
+    #[serde(rename = "createdAt")]
+    pub created_at: TrimmedNonEmptyString,
+    pub id: String,
+    #[serde(rename = "objectKey")]
+    pub object_key: String,
+    pub sequence: i64,
+    pub sha256: String,
+    #[serde(rename = "sizeBytes")]
+    pub size_bytes: i64,
+    #[serde(rename = "taskId")]
+    pub task_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CloudWorkerCallbackDependencySetupOutcome {
+    #[serde(rename = "running")]
+    Running,
+    #[serde(rename = "succeeded")]
+    Succeeded,
+    #[serde(rename = "reused")]
+    Reused,
+    #[serde(rename = "unnecessary")]
+    Unnecessary,
+    #[serde(rename = "failed")]
+    Failed,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudWorkerCallbackDependencySetup {
+    #[serde(rename = "attemptId")]
+    pub attempt_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    pub outcome: CloudWorkerCallbackDependencySetupOutcome,
+    pub sequence: i64,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: TrimmedNonEmptyString,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CloudWorkerCallbackPhase {
+    #[serde(rename = "heartbeat")]
+    Heartbeat,
+    #[serde(rename = "running")]
+    Running,
+    #[serde(rename = "waiting_for_input")]
+    WaitingForInput,
+    #[serde(rename = "completed")]
+    Completed,
+    #[serde(rename = "failed")]
+    Failed,
+    #[serde(rename = "needs_auth")]
+    NeedsAuth,
+    #[serde(rename = "usage_limited")]
+    UsageLimited,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CloudWorkerCallbackPreparationPhase {
+    #[serde(rename = "restoring")]
+    Restoring,
+    #[serde(rename = "cloning")]
+    Cloning,
+    #[serde(rename = "dependencies")]
+    Dependencies,
+    #[serde(rename = "backend")]
+    Backend,
+    #[serde(rename = "provider")]
+    Provider,
+    #[serde(rename = "ready")]
+    Ready,
+    #[serde(rename = "failed")]
+    Failed,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudWorkerCallbackPreparation {
+    #[serde(rename = "attemptId")]
+    pub attempt_id: String,
+    pub phase: CloudWorkerCallbackPreparationPhase,
+    pub sequence: i64,
+    #[serde(rename = "startedAt")]
+    pub started_at: TrimmedNonEmptyString,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: TrimmedNonEmptyString,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudWorkerCallbackResult {
+    #[serde(rename = "checkpointId")]
+    pub checkpoint_id: String,
+    #[serde(rename = "createdAt")]
+    pub created_at: TrimmedNonEmptyString,
+    pub id: String,
+    pub sha256: String,
+    pub summary: TrimmedNonEmptyString,
+    #[serde(rename = "taskId")]
+    pub task_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CloudWorkerState {
+    #[serde(rename = "provisioning")]
+    Provisioning,
+    #[serde(rename = "starting")]
+    Starting,
+    #[serde(rename = "ready")]
+    Ready,
+    #[serde(rename = "paused")]
+    Paused,
+    #[serde(rename = "stopped")]
+    Stopped,
+    #[serde(rename = "deleting")]
+    Deleting,
+    #[serde(rename = "deleted")]
+    Deleted,
+    #[serde(rename = "error")]
+    Error,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudWorkspaceBlob {
+    pub chunks: Vec<String>,
+    pub sha256: String,
+    #[serde(rename = "sizeBytes")]
+    pub size_bytes: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudWorkspaceChunkUpload {
+    pub base64: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encoding: Option<CloudWorkspaceChunkUploadEncoding>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum CloudWorkspaceChunkUploadEncoding {
+    #[default]
+    #[serde(rename = "gzip")]
+    Gzip,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudWorkspaceEntry {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "chunkOffset")]
+    pub chunk_offset: Option<i64>,
+    pub chunks: Vec<String>,
+    pub executable: bool,
+    pub kind: CloudWorkspaceEntryKind,
+    pub path: String,
+    #[serde(rename = "rootId")]
+    pub root_id: String,
+    pub sha256: String,
+    #[serde(rename = "sizeBytes")]
+    pub size_bytes: i64,
+    pub target: Option<TrimmedNonEmptyString>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CloudWorkspaceEntryKind {
+    #[serde(rename = "file")]
+    File,
+    #[serde(rename = "symlink")]
+    Symlink,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudWorkspaceGit {
+    pub branch: Option<String>,
+    pub bundle: CloudWorkspaceBlob,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "commitIdentity")]
+    pub commit_identity: Option<CloudWorkspaceGitCommitIdentity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "githubRemote")]
+    pub github_remote: Option<String>,
+    pub head: String,
+    pub index: CloudWorkspaceBlob,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "publishedRevision")]
+    pub published_revision: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudWorkspaceGitCommitIdentity {
+    pub email: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudWorkspaceManifest {
+    pub entries: Vec<CloudWorkspaceEntry>,
+    pub roots: Vec<CloudWorkspaceManifestRoots>,
+    pub version: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudWorkspaceManifestRootsGitCommitIdentity {
+    pub email: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudWorkspaceManifestRootsGit {
+    pub branch: Option<String>,
+    pub bundle: CloudWorkspaceBlob,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "commitIdentity")]
+    pub commit_identity: Option<CloudWorkspaceManifestRootsGitCommitIdentity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "githubRemote")]
+    pub github_remote: Option<String>,
+    pub head: String,
+    pub index: CloudWorkspaceBlob,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "publishedRevision")]
+    pub published_revision: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudWorkspaceManifestRoots {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git: Option<CloudWorkspaceManifestRootsGit>,
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum CloudWorkspaceSource {
+    #[serde(rename = "github")]
+    Github {
+        revision: String,
+        snapshot: CloudSnapshotRef,
+    },
+    #[serde(rename = "local")]
+    Local {
+        name: String,
+        snapshot: CloudSnapshotRef,
+    },
+    /// Forward compatibility: an event kind this build does not know.
+    #[serde(untagged)]
+    Unknown(serde_json::Value),
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -3383,7 +5118,12 @@ pub struct OrchestrationDispatchCommandError {
         with = "crate::support::double_option"
     )]
     pub cause: Option<Option<serde_json::Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
     pub message: TrimmedNonEmptyString,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "requestDisposition")]
+    pub request_disposition: Option<OrchestrationDispatchCommandErrorRequestDisposition>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
@@ -3391,6 +5131,17 @@ pub enum OrchestrationDispatchCommandErrorTag {
     #[default]
     #[serde(rename = "OrchestrationDispatchCommandError")]
     OrchestrationDispatchCommandError,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum OrchestrationDispatchCommandErrorRequestDisposition {
+    #[serde(rename = "rejected")]
+    Rejected,
+    #[serde(rename = "unknown")]
+    UnknownX,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -10553,6 +12304,9 @@ pub struct TerminalSessionSnapshot {
     pub exit_signal: Option<i64>,
     pub history: TrimmedNonEmptyString,
     pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "managedCommand")]
+    pub managed_command: Option<String>,
     pub pid: Option<i64>,
     #[serde(
         default,
@@ -10631,6 +12385,9 @@ pub enum TerminalWriteErrorTag {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TerminalWriteInput {
     pub data: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "managedCommand")]
+    pub managed_command: Option<bool>,
     #[serde(rename = "terminalId")]
     pub terminal_id: TrimmedNonEmptyString,
     #[serde(rename = "threadId")]
@@ -10766,6 +12523,27 @@ pub enum ThreadEnvMode {
     Local,
     #[serde(rename = "worktree")]
     Worktree,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ThreadExecutionState {
+    pub generation: NonNegativeInt,
+    #[serde(rename = "operationId")]
+    pub operation_id: TrimmedNonEmptyString,
+    pub status: ThreadExecutionStateStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ThreadExecutionStateStatus {
+    #[serde(rename = "active")]
+    Active,
+    #[serde(rename = "frozen")]
+    Frozen,
+    #[serde(rename = "released")]
+    Released,
     /// Forward compatibility: a literal this build does not know.
     #[serde(untagged)]
     Unknown(String),
@@ -11068,6 +12846,34 @@ pub struct TrimmedNonEmptyString(pub String);
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct TurnId(pub String);
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum UploadChatAttachment {
+    #[serde(rename = "image")]
+    Image {
+        #[serde(rename = "dataUrl")]
+        data_url: TrimmedNonEmptyString,
+        #[serde(rename = "mimeType")]
+        mime_type: TrimmedNonEmptyString,
+        name: TrimmedNonEmptyString,
+        #[serde(rename = "sizeBytes")]
+        size_bytes: i64,
+    },
+    #[serde(rename = "file")]
+    File {
+        #[serde(rename = "dataUrl")]
+        data_url: TrimmedNonEmptyString,
+        #[serde(rename = "mimeType")]
+        mime_type: TrimmedNonEmptyString,
+        name: TrimmedNonEmptyString,
+        #[serde(rename = "sizeBytes")]
+        size_bytes: i64,
+    },
+    /// Forward compatibility: an event kind this build does not know.
+    #[serde(untagged)]
+    Unknown(serde_json::Value),
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VcsBaselineBlob {
@@ -11946,6 +13752,58 @@ pub mod methods {
         Unknown(serde_json::Value),
     }
 
+    pub struct CloudCancelSwitch;
+
+    impl RpcMethod for CloudCancelSwitch {
+        const TAG: &'static str = "cloud.cancelSwitch";
+        const STREAM: bool = false;
+        type Payload = super::CloudSwitchCancelInput;
+        type Success = super::CloudSwitchStatus;
+        type Error = CloudCancelSwitchError;
+    }
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    #[serde(untagged)]
+    pub enum CloudCancelSwitchError {
+        CloudDesktopAuthError(super::CloudDesktopAuthError),
+        Unknown(serde_json::Value),
+    }
+
+    pub struct CloudContinueConversation;
+
+    impl RpcMethod for CloudContinueConversation {
+        const TAG: &'static str = "cloud.continueConversation";
+        const STREAM: bool = false;
+        type Payload = super::CloudContinueConversationInput;
+        type Success = super::CloudStartConversationResult;
+        type Error = CloudContinueConversationError;
+    }
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    #[serde(untagged)]
+    pub enum CloudContinueConversationError {
+        CloudDesktopAuthError(super::CloudDesktopAuthError),
+        Unknown(serde_json::Value),
+    }
+
+    pub struct CloudGetDesktopSession;
+
+    impl RpcMethod for CloudGetDesktopSession {
+        const TAG: &'static str = "cloud.getDesktopSession";
+        const STREAM: bool = false;
+        type Payload = super::CloudGetDesktopSessionPayload;
+        type Success = super::CloudDesktopSession;
+        type Error = CloudGetDesktopSessionError;
+    }
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    #[serde(untagged)]
+    pub enum CloudGetDesktopSessionError {
+        CloudDesktopAuthError(super::CloudDesktopAuthError),
+        EnvironmentAuthorizationError(super::EnvironmentAuthorizationError),
+        Unknown(serde_json::Value),
+    }
+
     pub struct CloudGetRelayClientStatus;
 
     impl RpcMethod for CloudGetRelayClientStatus {
@@ -11978,6 +13836,92 @@ pub mod methods {
     pub enum CloudInstallRelayClientError {
         RelayClientInstallFailedError(super::RelayClientInstallFailedError),
         EnvironmentAuthorizationError(super::EnvironmentAuthorizationError),
+        Unknown(serde_json::Value),
+    }
+
+    pub struct CloudResolveSwitch;
+
+    impl RpcMethod for CloudResolveSwitch {
+        const TAG: &'static str = "cloud.resolveSwitch";
+        const STREAM: bool = false;
+        type Payload = super::CloudSwitchResolveInput;
+        type Success = super::CloudSwitchStatus;
+        type Error = CloudResolveSwitchError;
+    }
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    #[serde(untagged)]
+    pub enum CloudResolveSwitchError {
+        CloudDesktopAuthError(super::CloudDesktopAuthError),
+        Unknown(serde_json::Value),
+    }
+
+    pub struct CloudStartConversation;
+
+    impl RpcMethod for CloudStartConversation {
+        const TAG: &'static str = "cloud.startConversation";
+        const STREAM: bool = false;
+        type Payload = super::CloudStartConversationInput;
+        type Success = super::CloudStartConversationResult;
+        type Error = CloudStartConversationError;
+    }
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    #[serde(untagged)]
+    pub enum CloudStartConversationError {
+        CloudDesktopAuthError(super::CloudDesktopAuthError),
+        EnvironmentAuthorizationError(super::EnvironmentAuthorizationError),
+        Unknown(serde_json::Value),
+    }
+
+    pub struct CloudStartProgress;
+
+    impl RpcMethod for CloudStartProgress {
+        const TAG: &'static str = "cloud.startProgress";
+        const STREAM: bool = false;
+        type Payload = super::CloudStartProgressPayload;
+        type Success = super::CloudStartProgress;
+        type Error = CloudStartProgressError;
+    }
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    #[serde(untagged)]
+    pub enum CloudStartProgressError {
+        CloudDesktopAuthError(super::CloudDesktopAuthError),
+        Unknown(serde_json::Value),
+    }
+
+    pub struct CloudSwitchConversation;
+
+    impl RpcMethod for CloudSwitchConversation {
+        const TAG: &'static str = "cloud.switchConversation";
+        const STREAM: bool = false;
+        type Payload = super::CloudSwitchInput;
+        type Success = super::CloudSwitchStatus;
+        type Error = CloudSwitchConversationError;
+    }
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    #[serde(untagged)]
+    pub enum CloudSwitchConversationError {
+        CloudDesktopAuthError(super::CloudDesktopAuthError),
+        Unknown(serde_json::Value),
+    }
+
+    pub struct CloudSwitchStatus;
+
+    impl RpcMethod for CloudSwitchStatus {
+        const TAG: &'static str = "cloud.switchStatus";
+        const STREAM: bool = false;
+        type Payload = super::CloudSwitchStatusInput;
+        type Success = super::CloudSwitchStatus;
+        type Error = CloudSwitchStatusError;
+    }
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    #[serde(untagged)]
+    pub enum CloudSwitchStatusError {
+        CloudDesktopAuthError(super::CloudDesktopAuthError),
         Unknown(serde_json::Value),
     }
 
@@ -13790,6 +15734,62 @@ mod fixture_tests {
     use crate::support::assert_fixture_roundtrip;
 
     #[test]
+    fn cloud_command_fenced_stop() {
+        assert_fixture_roundtrip::<super::CloudCommand>(include_str!(
+            "../fixtures/CloudCommand.fenced-stop.json"
+        ));
+    }
+
+    #[test]
+    fn cloud_command_initial_stop() {
+        assert_fixture_roundtrip::<super::CloudCommand>(include_str!(
+            "../fixtures/CloudCommand.initial-stop.json"
+        ));
+    }
+
+    #[test]
+    fn cloud_desktop_auth_error() {
+        assert_fixture_roundtrip::<super::CloudDesktopAuthError>(include_str!(
+            "../fixtures/CloudDesktopAuthError.json"
+        ));
+    }
+
+    #[test]
+    fn cloud_handoff_operation_legacy() {
+        assert_fixture_roundtrip::<super::CloudHandoffOperation>(include_str!(
+            "../fixtures/CloudHandoffOperation.legacy.json"
+        ));
+    }
+
+    #[test]
+    fn cloud_handoff_operation_structured() {
+        assert_fixture_roundtrip::<super::CloudHandoffOperation>(include_str!(
+            "../fixtures/CloudHandoffOperation.structured.json"
+        ));
+    }
+
+    #[test]
+    fn cloud_start_progress_legacy() {
+        assert_fixture_roundtrip::<super::CloudStartProgress>(include_str!(
+            "../fixtures/CloudStartProgress.legacy.json"
+        ));
+    }
+
+    #[test]
+    fn cloud_start_progress_structured() {
+        assert_fixture_roundtrip::<super::CloudStartProgress>(include_str!(
+            "../fixtures/CloudStartProgress.structured.json"
+        ));
+    }
+
+    #[test]
+    fn cloud_worker_callback() {
+        assert_fixture_roundtrip::<super::CloudWorkerCallback>(include_str!(
+            "../fixtures/CloudWorkerCallback.json"
+        ));
+    }
+
+    #[test]
     fn environment_authorization_error() {
         assert_fixture_roundtrip::<super::EnvironmentAuthorizationError>(include_str!(
             "../fixtures/EnvironmentAuthorizationError.json"
@@ -13800,6 +15800,20 @@ mod fixture_tests {
     fn keybinding_when_node() {
         assert_fixture_roundtrip::<super::KeybindingWhenNode>(include_str!(
             "../fixtures/KeybindingWhenNode.json"
+        ));
+    }
+
+    #[test]
+    fn orchestration_dispatch_command_error_legacy() {
+        assert_fixture_roundtrip::<super::OrchestrationDispatchCommandError>(include_str!(
+            "../fixtures/OrchestrationDispatchCommandError.legacy.json"
+        ));
+    }
+
+    #[test]
+    fn orchestration_dispatch_command_error_rejected() {
+        assert_fixture_roundtrip::<super::OrchestrationDispatchCommandError>(include_str!(
+            "../fixtures/OrchestrationDispatchCommandError.rejected.json"
         ));
     }
 

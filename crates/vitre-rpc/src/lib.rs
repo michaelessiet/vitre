@@ -10,6 +10,7 @@
 //! until the client sends `Ack{requestId}`. A client that forgets Acks receives
 //! exactly one chunk and hangs.
 
+pub mod cloud;
 pub mod envelope;
 pub mod error;
 pub mod http;

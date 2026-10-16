@@ -1,0 +1,7 @@
+{
+  "encoded": {
+    "_tag": "OrchestrationDispatchCommandError",
+    "message": "Response lost"
+  },
+  "schema": "OrchestrationDispatchCommandError"
+}

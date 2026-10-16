@@ -108,6 +108,7 @@ impl SettingsPanel {
             ("General", "General", IconName::Settings),
             ("Keybindings", "Keybindings", IconName::Settings),
             ("Providers", "Providers", IconName::Bot),
+            ("Cloud", "Cloud", IconName::Globe),
             (
                 "Language Servers",
                 "Language servers",
@@ -140,6 +141,9 @@ impl SettingsPanel {
                     .when(selected == page, |b| b.bg(cx.theme().list_active))
                     .on_click(cx.listener(move |p, _, window, cx| {
                         p.layout.selected = page.into();
+                        if page == "Cloud" {
+                            p.cloud.update(cx, |cloud, cx| cloud.select(None, cx));
+                        }
                         if page == "Knowledge Graph" {
                             p.refresh_graph_runtime(cx);
                         }

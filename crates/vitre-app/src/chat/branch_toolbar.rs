@@ -36,9 +36,8 @@ use vitre_contracts::{
 use vitre_state::branch_toolbar::BranchSelectionTarget;
 use vitre_state::branch_toolbar::{
     MergedRefs, REF_LIST_LIMIT, branch_trigger_label, create_item_label, create_item_query,
-    locked_workspace_label, merge_ref_pages, pr_state_label, refs_status_text,
-    resolve_branch_selection_target, resolve_branch_toolbar_value, resolve_ref_badge,
-    should_include_branch_picker_item,
+    merge_ref_pages, pr_state_label, refs_status_text, resolve_branch_selection_target,
+    resolve_branch_toolbar_value, resolve_ref_badge, should_include_branch_picker_item,
 };
 use vitre_state::source_control::{
     derive_local_branch_name_from_remote_ref, resolve_thread_pr, status_terminology,
@@ -215,6 +214,7 @@ pub(super) struct BranchToolbarState {
     was_open: bool,
     /// The `branchCwd` the pages below belong to (worktree ?? project root).
     cwd: Option<String>,
+    environment_key: Option<String>,
     /// The live (non-deferred) search text.
     query: String,
     /// Requested page cursors, in order: `[None, Some(c1), ...]`.
@@ -268,6 +268,7 @@ impl BranchToolbarState {
             _subscriptions: subscriptions,
             was_open: false,
             cwd: None,
+            environment_key: None,
             query: String::new(),
             cursors: Vec::new(),
             pages: Vec::new(),
@@ -308,10 +309,12 @@ impl ChatApp {
             .is_some()
             .then(|| self.search_root())
             .flatten();
-        if desired == self.branch.cwd {
+        let environment_key = self.workspace_cache_key("");
+        if desired == self.branch.cwd && environment_key == self.branch.environment_key {
             return;
         }
         self.branch.cwd = desired;
+        self.branch.environment_key = environment_key;
         self.branch.reset_data();
         // Clearing rows touches the picker's list entity, which may be
         // mid-render right now — defer a tick.
@@ -329,6 +332,9 @@ impl ChatApp {
     /// Workspace root of the open thread's project (NOT the worktree) — the
     /// badge and checkout-target logic compare against this.
     fn thread_project_root(&self) -> Option<String> {
+        if self.is_cloud_thread() {
+            return self.search_root();
+        }
         if let Some(root) = self.root_for_file_tab() {
             return Some(root);
         }
@@ -428,7 +434,7 @@ impl ChatApp {
     }
 
     fn branch_fetch(&mut self, index: usize, cursor: Option<i64>, cx: &mut Context<Self>) {
-        let (Some(client), Some(cwd)) = (self.client.clone(), self.branch.cwd.clone()) else {
+        let (Some(client), Some(cwd)) = (self.workspace_client(), self.branch.cwd.clone()) else {
             return;
         };
         let seq = self.branch.fetch_seq;
@@ -542,7 +548,8 @@ impl ChatApp {
         if self.branch.action_pending {
             return;
         }
-        let (Some(client), Some(project_cwd)) = (self.client.clone(), self.thread_project_root())
+        let (Some(client), Some(project_cwd)) =
+            (self.workspace_client(), self.thread_project_root())
         else {
             return;
         };
@@ -633,7 +640,7 @@ impl ChatApp {
         if self.branch.action_pending {
             return;
         }
-        let (Some(client), Some(cwd)) = (self.client.clone(), self.branch.cwd.clone()) else {
+        let (Some(client), Some(cwd)) = (self.workspace_client(), self.branch.cwd.clone()) else {
             return;
         };
         let active_worktree = self
@@ -693,15 +700,17 @@ impl ChatApp {
         worktree_path: Option<String>,
         cx: &mut Context<Self>,
     ) {
-        let Some(client) = self.client.clone() else {
+        let Some(client) = self.workspace_client() else {
             return;
         };
         let Some(open) = self.thread.as_ref() else {
             return;
         };
-        let thread_id = open.id.clone();
+        let Some(thread_id) = self.execution_thread_id() else {
+            return;
+        };
         let (current_worktree, has_session) = self
-            .shell_thread(&thread_id)
+            .shell_thread(&open.id)
             .map(|thread| {
                 (
                     thread.worktree_path.as_ref().map(|path| path.0.clone()),
@@ -789,14 +798,31 @@ impl ChatApp {
         } else {
             Icon::new(IconName::Folder)
         };
+        let workspace_path = self.open_project_root().unwrap_or_default();
+        let workspace_name = self
+            .cloud_task(cx)
+            .map(|task| crate::cloud::repo_label(&task))
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| {
+                std::path::Path::new(&workspace_path)
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "Workspace".into())
+            });
         let workspace = h_flex()
+            .id("workspace-details")
+            .min_w_0()
+            .max_w(px(240.))
             .gap_1()
             .px_2()
             .text_xs()
             .font_medium()
             .text_color(cx.theme().muted_foreground.opacity(0.7))
             .child(workspace_icon.with_size(px(12.)))
-            .child(locked_workspace_label(has_worktree));
+            .child(gpui::div().min_w_0().truncate().child(workspace_name))
+            .tooltip(move |window, cx| {
+                gpui_component::tooltip::Tooltip::new(workspace_path.clone()).build(window, cx)
+            });
 
         // The PR pill, when the status's PR belongs to this branch.
         let pr_pill = resolve_thread_pr(value.as_deref(), status, has_worktree).map(|pr| {

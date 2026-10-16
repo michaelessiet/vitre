@@ -3,6 +3,8 @@ import { AuthAdministrativeScopes } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Duration from "effect/Duration";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerConfig from "../config.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
@@ -141,6 +143,61 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
 
       expect(token.scope).toBe("orchestration:read");
     }).pipe(Effect.provide(makeEnvironmentAuthLayer())),
+  );
+
+  it.effect(
+    "bundles an optional websocket ticket bound to the newly issued session and scopes",
+    () =>
+      Effect.gen(function* () {
+        const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+        const sessions = yield* SessionStore.SessionStore;
+        const ordinary = yield* serverAuth.issuePairingCredential();
+        const tokenOnly = yield* serverAuth.exchangeBootstrapCredentialForAccessToken(
+          ordinary.credential,
+          undefined,
+          requestMetadata,
+        );
+        expect(tokenOnly.websocket_ticket).toBeUndefined();
+
+        const constrained = yield* serverAuth.issuePairingCredential({
+          scopes: ["orchestration:read"],
+        });
+        const bundled = yield* serverAuth.exchangeBootstrapCredentialForAccessToken(
+          constrained.credential,
+          undefined,
+          requestMetadata,
+          { includeWebSocketTicket: true },
+        );
+        const bearer = yield* sessions.verify(bundled.access_token);
+        const websocket = yield* sessions.verifyWebSocketToken(bundled.websocket_ticket!.ticket);
+        expect(websocket.sessionId).toBe(bearer.sessionId);
+        expect(websocket.scopes).toEqual(["orchestration:read"]);
+        yield* sessions.revoke(bearer.sessionId);
+        const error = yield* Effect.flip(
+          sessions.verifyWebSocketToken(bundled.websocket_ticket!.ticket),
+        );
+        expect(error._tag).toBe("WebSocketSessionRevokedError");
+      }).pipe(Effect.provide(makeEnvironmentAuthLayer())),
+  );
+
+  it.effect("keeps bundled websocket tickets short-lived", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      const sessions = yield* SessionStore.SessionStore;
+      const credential = yield* serverAuth.issuePairingCredential();
+      const bundled = yield* serverAuth.exchangeBootstrapCredentialForAccessToken(
+        credential.credential,
+        undefined,
+        requestMetadata,
+        { includeWebSocketTicket: true },
+      );
+      yield* TestClock.adjust(Duration.minutes(5));
+      const error = yield* Effect.flip(
+        sessions.verifyWebSocketToken(bundled.websocket_ticket!.ticket),
+      );
+      expect(error._tag).toBe("WebSocketTokenExpiredError");
+      expect((yield* sessions.verify(bundled.access_token)).sessionId).toBeTruthy();
+    }).pipe(Effect.provide(Layer.merge(makeEnvironmentAuthLayer(), TestClock.layer()))),
   );
 
   it.effect("keeps user-issued administrative pairing links manageable", () =>

@@ -1,0 +1,25 @@
+{
+  "encoded": {
+    "attemptId": "attempt-fixture",
+    "dependencySetup": {
+      "attemptId": "attempt-fixture",
+      "detail": "Dependency setup failed",
+      "outcome": "failed",
+      "sequence": 4,
+      "updatedAt": "2026-10-16T00:00:01Z"
+    },
+    "detail": "",
+    "generation": 1,
+    "phase": "heartbeat",
+    "preparation": {
+      "attemptId": "attempt-fixture",
+      "phase": "dependencies",
+      "sequence": 4,
+      "startedAt": "2026-10-16T00:00:00Z",
+      "updatedAt": "2026-10-16T00:00:01Z"
+    },
+    "sequence": 4,
+    "taskId": "task-fixture"
+  },
+  "schema": "CloudWorkerCallback"
+}

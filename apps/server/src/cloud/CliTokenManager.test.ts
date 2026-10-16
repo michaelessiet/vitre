@@ -1,11 +1,13 @@
 import { readConnectAuthorizeRequest } from "@t3tools/shared/connectAuth";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import { assert, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
@@ -16,6 +18,8 @@ import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 
 import * as CliTokenManager from "./CliTokenManager.ts";
 import type { OutOfBandOAuthPromptInput } from "./CliTokenManager.ts";
+import { ServerSecretStore } from "../auth/ServerSecretStore.ts";
+import { ExternalLauncher } from "../process/externalLauncher.ts";
 
 // pk_test_<base64 of "clerk.example.test$">
 const TEST_ENV = {
@@ -97,7 +101,7 @@ it("formats loopback authorization with a headless-host fallback", () => {
   assert.equal(
     CliTokenManager.formatLoopbackAuthorizationPrompt("https://clerk.example.test/authorize"),
     [
-      "Open this URL to authorize T3 Connect:",
+      "Open this URL to authorize Vitre Connect:",
       "  https://clerk.example.test/authorize",
       "",
       "Press \u001b[1mEnter\u001b[22m to open it in your browser.",
@@ -159,6 +163,85 @@ it.effect("finishes normally when the browser callback wins", () =>
 );
 
 it.layer(NodeServices.layer)("CliTokenManager.outOfBandOAuthLogin", (it) => {
+  it.effect(
+    "desktop login opens the browser without reading terminal input and persists the PKCE exchange",
+    () =>
+      Effect.gen(function* () {
+        const requests: Array<RecordedTokenRequest> = [];
+        const stored = new Map<string, Uint8Array>();
+        const opened: string[] = [];
+        const firstOpened = yield* Deferred.make<void>();
+        const manager = yield* CliTokenManager.make.pipe(
+          Effect.provide(makeTokenEndpointLayer(requests)),
+          Effect.provideService(
+            ServerSecretStore,
+            ServerSecretStore.of({
+              get: (name) => Effect.succeed(Option.fromUndefinedOr(stored.get(name))),
+              set: (name, value) =>
+                Effect.sync(() => {
+                  stored.set(name, value);
+                }),
+              create: () => Effect.die("unexpected create"),
+              getOrCreateRandom: () => Effect.die("unexpected random secret"),
+              remove: (name) =>
+                Effect.sync(() => {
+                  stored.delete(name);
+                }),
+            }),
+          ),
+          Effect.provideService(
+            Terminal.Terminal,
+            Terminal.make({
+              columns: Effect.succeed(80),
+              rows: Effect.succeed(24),
+              readInput: Effect.die("desktop must not read stdin"),
+              readLine: Effect.die("desktop must not read stdin"),
+              display: () => Effect.void,
+            }),
+          ),
+          Effect.provideService(
+            ExternalLauncher,
+            ExternalLauncher.of({
+              resolveAvailableEditors: () => Effect.succeed([]),
+              launchEditor: () => Effect.void,
+              launchBrowser: (target) =>
+                Effect.gen(function* () {
+                  opened.push(target);
+                  if (opened.length === 1) {
+                    yield* Deferred.succeed(firstOpened, undefined);
+                    return;
+                  }
+                  const url = new URL(target);
+                  const callback = new URL(url.searchParams.get("redirect_uri")!);
+                  callback.searchParams.set("code", "desktop-code");
+                  callback.searchParams.set("state", "invalid-state");
+                  assert.equal((yield* HttpClient.get(callback)).status, 400);
+                  callback.searchParams.set("state", url.searchParams.get("state")!);
+                  assert.equal((yield* HttpClient.get(callback)).status, 200);
+                }).pipe(Effect.provide(NodeHttpClient.layerUndici), Effect.orDie),
+            }),
+          ),
+        );
+        const abandoned = yield* manager.getInBrowser!.pipe(Effect.exit, Effect.forkChild);
+        yield* Deferred.await(firstOpened);
+        yield* manager.cancelLogin!;
+        const cancelled = yield* Fiber.join(abandoned);
+        assert.equal(cancelled._tag, "Failure");
+        assert.equal(stored.size, 0);
+        const result = yield* manager.getInBrowser!;
+        assert.equal(result._tag, "Authorized");
+        assert.lengthOf(opened, 2);
+        assert.equal(requests[0]?.params.get("code"), "desktop-code");
+        assert.isNotEmpty(requests[0]?.params.get("code_verifier"));
+        assert.equal(stored.size, 1);
+        const repeated = yield* manager.getInBrowser!;
+        assert.equal(repeated._tag, "Authorized");
+        assert.lengthOf(opened, 2);
+      }).pipe(
+        provideTestEnv,
+        Effect.provideService(Layer.CurrentMemoMap, Layer.makeMemoMapUnsafe()),
+      ),
+  );
   it.effect("prints a hosted authorize URL and exchanges the out-of-band code with PKCE", () =>
     Effect.gen(function* () {
       const requests: Array<RecordedTokenRequest> = [];

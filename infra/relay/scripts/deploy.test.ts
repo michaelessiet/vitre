@@ -6,6 +6,7 @@ import * as Path from "effect/Path";
 
 import {
   hasDeployChanges,
+  existingStackViolation,
   missingRelayPublicConfigFields,
   publicConfigFromOutput,
   reconcileRootEnvPublicConfig,
@@ -243,5 +244,26 @@ describe("publicConfigFromOutput", () => {
 
   it("rejects incomplete stack output", () => {
     expect(publicConfigFromOutput({ url: "https://relay.example.test" })).toBeNull();
+  });
+});
+
+describe("existing deployment identity", () => {
+  it("rejects replacement stacks and signing keys but permits worker updates", () => {
+    const plan = (resources: unknown) => ({ resources, deletions: {} }) as never;
+    expect(existingStackViolation(plan({ api: { action: "create" } }))).toContain("new stack");
+    expect(
+      existingStackViolation(
+        plan({ api: { action: "update" }, CloudMintKeyPair: { action: "replace" } }),
+      ),
+    ).toContain("signing identity");
+    expect(
+      existingStackViolation(
+        plan({
+          api: { action: "update" },
+          CloudMintKeyPair: { action: "noop" },
+          artifact: { action: "create" },
+        }),
+      ),
+    ).toBeNull();
   });
 });

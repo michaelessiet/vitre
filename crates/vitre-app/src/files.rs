@@ -304,6 +304,9 @@ pub struct FilesPanel {
     filter_query: String,
     markdown_preview: bool,
     client: Arc<EnvironmentClient>,
+    remote: bool,
+    asset_thread_id: Option<vitre_contracts::ThreadId>,
+    transfer_locked: bool,
     cwd: String,
     tree: Option<FileTreeModel>,
     /// Recomputed only after a listing/expansion change, not on scroll or hover.
@@ -478,6 +481,9 @@ impl FilesPanel {
             filter_query: String::new(),
             markdown_preview: false,
             client,
+            remote: false,
+            asset_thread_id: None,
+            transfer_locked: false,
             cwd,
             tree: None,
             tree_truncated: false,
@@ -522,6 +528,25 @@ impl FilesPanel {
     }
 
     /// Which workspace this panel browses (ChatApp recreates on change).
+    pub fn set_asset_thread(&mut self, thread_id: Option<vitre_contracts::ThreadId>) {
+        self.asset_thread_id = thread_id;
+    }
+    pub fn set_remote(&mut self, remote: bool) {
+        self.remote = remote;
+    }
+    pub fn set_transfer_locked(&mut self, locked: bool, cx: &mut Context<Self>) {
+        self.transfer_locked = locked;
+        cx.notify();
+    }
+
+    pub fn uses_client(&self, client: &Arc<EnvironmentClient>) -> bool {
+        Arc::ptr_eq(&self.client, client)
+    }
+
+    pub fn cache_key(&self) -> String {
+        format!("{:p}:{}", Arc::as_ptr(&self.client), self.cwd)
+    }
+
     pub fn cwd(&self) -> &str {
         &self.cwd
     }
@@ -2215,6 +2240,7 @@ impl FilesPanel {
             .id(SharedString::from(format!("file-tree-row:{}", row.path)))
             .on_drag(
                 FileContext {
+                    client: self.client.clone(),
                     cwd: self.cwd.clone(),
                     path: row.path.clone(),
                 },
@@ -2324,6 +2350,7 @@ impl FilesPanel {
                 menu.item(PopupMenuItem::new("Add to chat").on_click(move |_, _, cx| {
                     let _ = add_panel.update(cx, |panel, cx| {
                         cx.emit(FilesEvent::AddToChat(FileContext {
+                            client: panel.client.clone(),
                             cwd: panel.cwd.clone(),
                             path: add.clone(),
                         }))
@@ -2346,6 +2373,7 @@ impl FilesPanel {
                     PopupMenuItem::new("Copy file or folder").on_click(move |_, _, cx| {
                         let _ = copy.0.update(cx, |panel, cx| {
                             cx.set_global(extras::FileClipboard(FileContext {
+                                client: panel.client.clone(),
                                 cwd: panel.cwd.clone(),
                                 path: copy.1.clone(),
                             }))
@@ -2367,6 +2395,7 @@ impl FilesPanel {
                     PopupMenuItem::new("Copy to conversation…").on_click(move |_, _, cx| {
                         let _ = across.0.update(cx, |panel, cx| {
                             cx.emit(FilesEvent::CopyToThread(FileContext {
+                                client: panel.client.clone(),
                                 cwd: panel.cwd.clone(),
                                 path: across.1.clone(),
                             }))
@@ -3054,7 +3083,7 @@ impl FilesPanel {
                 div().flex_1().min_h_0().child(
                     Editor::new(&self.editor)
                         .text_size(px(ClientSettings::get(cx).editor_font_size as f32))
-                        .readonly(truncated || self.refactor_busy)
+                        .readonly(truncated || self.refactor_busy || self.transfer_locked)
                         .context_menu(move |menu, _, _| {
                             menu.menu("Go to Definition", Box::new(GoToDefinition))
                                 .menu("Find References", Box::new(FindReferences))

@@ -35,6 +35,8 @@ import {
 import { makeGitVcsDriverCore } from "./GitVcsDriverCore.ts";
 import * as VcsDriver from "./VcsDriver.ts";
 import * as VcsProcess from "./VcsProcess.ts";
+import { ServerConfig } from "../config.ts";
+import { managedWorkspaceGitEnv } from "./managedWorkspaceGitEnv.ts";
 
 export interface ExecuteGitInput {
   readonly operation: string;
@@ -404,7 +406,18 @@ const gitCommand = (
 export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const vcsProcess = yield* VcsProcess.VcsProcess;
+  const vcsProcessService = yield* VcsProcess.VcsProcess;
+  const config = yield* Effect.serviceOption(ServerConfig);
+  const vcsProcess = VcsProcess.VcsProcess.of({
+    run: (input) => {
+      const env = managedWorkspaceGitEnv(
+        input.cwd,
+        Option.isSome(config) ? config.value.stateDir : undefined,
+        input.env,
+      );
+      return vcsProcessService.run({ ...input, ...(env ? { env } : {}) });
+    },
+  });
   const capabilities = {
     kind: "git" as const,
     supportsWorktrees: true,

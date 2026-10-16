@@ -17,6 +17,14 @@ pub enum RpcError {
     ConnectionClosed,
     #[error("transport failure: {0}")]
     Transport(String),
+    /// Keep cloud request certainty separate from the human-readable diagnosis.
+    #[error("{message}")]
+    CloudRequest {
+        message: String,
+        code: Option<String>,
+        rejected: bool,
+        retryable: bool,
+    },
     #[error("rpc exit failure: {}", summarize_cause(cause))]
     Failed { cause: Vec<CauseEncoded> },
 }

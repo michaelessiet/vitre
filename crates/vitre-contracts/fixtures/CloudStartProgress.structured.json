@@ -1,0 +1,13 @@
+{
+  "encoded": {
+    "completedBytes": 1024,
+    "message": "Uploading workspace",
+    "phase": "upload",
+    "requestId": "request-fixture",
+    "sequence": 3,
+    "startedAt": "2026-10-16T00:00:00Z",
+    "totalBytes": 2048,
+    "updatedAt": "2026-10-16T00:00:01Z"
+  },
+  "schema": "CloudStartProgress"
+}

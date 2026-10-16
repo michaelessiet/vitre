@@ -13,9 +13,19 @@ impl ChatApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.is_cloud_thread() {
+            window.push_notification(
+                Notification::warning(
+                    "Copying between cloud and local conversations is not available yet.",
+                ),
+                cx,
+            );
+            return;
+        }
         let destinations: Arc<Vec<_>> = Arc::new(
             self.shell_threads()
                 .into_iter()
+                .filter(|thread| !self.thread_location(&thread.id).is_cloud())
                 .filter_map(|thread| {
                     let cwd = thread
                         .worktree_path
@@ -48,7 +58,14 @@ impl ChatApp {
         cwd: String,
         cx: &mut Context<Self>,
     ) {
-        let Some(client) = self.client.clone() else {
+        let Some(client) = self
+            .client
+            .clone()
+            .filter(|client| Arc::ptr_eq(client, &source.client))
+        else {
+            self.runtime_notice =
+                Some("Copying across execution environments is not available yet.".into());
+            cx.notify();
             return;
         };
         let input = vitre_contracts::ProjectCopyEntryInput {
@@ -89,6 +106,9 @@ impl ChatApp {
         .detach();
     }
     pub(super) fn workspace_roots(&self) -> Vec<String> {
+        if self.is_cloud_thread() {
+            return self.remote_workspace_roots();
+        }
         let mut roots = self.open_project_root().into_iter().collect::<Vec<_>>();
         if let Some(thread) = self.thread.as_ref().and_then(|t| self.shell_thread(&t.id)) {
             for root in thread
@@ -141,7 +161,7 @@ impl ChatApp {
         roots: Vec<WorkspaceRootRef>,
         cx: &mut Context<Self>,
     ) {
-        let (Some(client), Some(thread)) = (self.client.clone(), self.thread.as_ref()) else {
+        let (Some(client), Some(thread)) = (self.workspace_client(), self.thread.as_ref()) else {
             return;
         };
         let id = thread.id.clone();
@@ -209,6 +229,9 @@ impl ChatApp {
         }).detach();
     }
     pub(super) fn attach_workspace_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.is_cloud_thread() {
+            return;
+        }
         let thread_id = self.thread.as_ref().map(|t| t.id.clone());
         let paths = cx.prompt_for_paths(PathPromptOptions {
             files: false,
@@ -247,6 +270,7 @@ impl ChatApp {
             if roots.len() == 1 { "root" } else { "roots" }
         );
         let owner = cx.entity().downgrade();
+        let cloud = self.is_cloud_thread();
         Button::new("workspace-roots")
             .ghost()
             .small()
@@ -285,6 +309,9 @@ impl ChatApp {
                             });
                         }),
                     );
+                }
+                if cloud {
+                    return menu;
                 }
                 let attach_owner = owner.clone();
                 menu = menu

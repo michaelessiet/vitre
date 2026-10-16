@@ -744,7 +744,13 @@ export function projectEvent(
             payload.activity,
           ]
             .toSorted(compareThreadActivities)
-            .slice(-500);
+            // Imported records may retain high provider sequence numbers. Keep
+            // their historical fences even when the ordinary activity window
+            // advances, so old requests cannot become live blockers again.
+            .filter(
+              (activity, index, ordered) =>
+                activity.kind === "thread.history.imported" || index >= ordered.length - 500,
+            );
 
           return {
             ...nextBase,

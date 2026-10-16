@@ -28,6 +28,7 @@
 //!   as Electron does it — *not* applied optimistically: the switch moves when
 //!   the server's new settings come back.
 
+pub(crate) mod cloud;
 mod forms;
 mod graph;
 mod keybindings;
@@ -38,8 +39,8 @@ mod providers;
 use std::sync::Arc;
 
 use gpui::{
-    AnyElement, App, Context, Focusable, InteractiveElement as _, IntoElement, ParentElement as _,
-    Render, SharedString, Styled as _, WeakEntity, Window, actions, div, px,
+    AnyElement, App, AppContext as _, Context, Focusable, InteractiveElement as _, IntoElement,
+    ParentElement as _, Render, SharedString, Styled as _, WeakEntity, Window, actions, div, px,
 };
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::setting::{
@@ -162,6 +163,7 @@ fn format_when(node: &KeybindingWhenNode) -> String {
 }
 
 pub struct SettingsPanel {
+    cloud: gpui::Entity<cloud::CloudPanel>,
     layout: layout::SettingsLayout,
     providers: providers::ProviderUi,
     graph: graph::GraphSettingsUi,
@@ -189,7 +191,9 @@ impl SettingsPanel {
         cx: &mut Context<Self>,
     ) -> Self {
         let connected = client.is_some();
+        let cloud = cx.new(|cx| cloud::CloudPanel::new(client.clone(), cx));
         let mut panel = Self {
+            cloud,
             layout: Default::default(),
             providers: Default::default(),
             graph: Default::default(),
@@ -220,6 +224,8 @@ impl SettingsPanel {
             return;
         }
         self.client = Some(client);
+        let client = self.client.as_ref().unwrap().clone();
+        self.cloud.update(cx, |panel, cx| panel.attach(client, cx));
         self.server = ServerState::Loading;
         self.config = None;
         self.load(cx);
@@ -920,6 +926,7 @@ impl SettingsPanel {
     }
 
     fn pages(&self, cx: &Context<Self>) -> Vec<SettingPage> {
+        let cloud = self.cloud.clone();
         let weak = cx.entity().downgrade();
         let mut models = vec![(
             SharedString::from(""),
@@ -965,6 +972,7 @@ impl SettingsPanel {
                 ))
                 .group(self.about_group(cx)),
             self.providers_page(cx),
+            SettingPage::new("Cloud").icon(IconName::Globe).resettable(false).group(SettingGroup::new().item(SettingItem::render(move |_: &RenderOptions, _, _| cloud.clone().into_any_element()))),
             self.keybindings_page(cx),
             self.language_servers_page(cx),
             self.graph_page(cx),

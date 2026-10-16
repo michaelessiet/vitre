@@ -199,6 +199,11 @@ fn verified_lines(response: &Value) -> Vec<u32> {
 
 impl FilesPanel {
     pub(super) fn debug_start(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.remote {
+            self.status = Some("Debug adapters are not connected to cloud workspaces yet.".into());
+            cx.notify();
+            return;
+        }
         self.debugger.visible = true;
         if self.debugger.client.is_some() {
             if self.debugger.thread.is_some() {

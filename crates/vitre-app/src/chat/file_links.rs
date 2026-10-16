@@ -102,6 +102,32 @@ impl ChatApp {
             }
             return;
         };
+        if self.is_cloud_thread() {
+            // Resolve against remote roots without consulting or revealing desktop files.
+            let matching_root = self
+                .workspace_roots()
+                .into_iter()
+                .filter(|root| path.starts_with(root))
+                .max_by_key(|root| root.len());
+            if let (Some(root), Some(key)) = (matching_root, self.dock_thread_key()) {
+                if let Ok(relative) = path.strip_prefix(&root) {
+                    self.right_panel.map.open_file(
+                        &key,
+                        &relative.to_string_lossy(),
+                        line,
+                        column,
+                        Some(&root),
+                    );
+                    self.after_dock_change(true, window, cx);
+                }
+            } else {
+                window.push_notification(
+                    Notification::warning("This file is outside the connected cloud workspace."),
+                    cx,
+                );
+            }
+            return;
+        }
         let key = self.dock_thread_key();
         let inspect = path.clone();
         let task = cx

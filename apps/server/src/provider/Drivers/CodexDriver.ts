@@ -179,6 +179,15 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
         initialSnapshot: (settings) =>
           makePendingCodexProvider(settings.provider).pipe(Effect.map(stampIdentity)),
         checkProvider,
+        ...(processEnv.VITRE_CLOUD_RESIDENT_PROVIDER === "codex"
+          ? {
+              retainSuccessfulCheck: (snapshot: ServerProvider) =>
+                snapshot.enabled &&
+                snapshot.installed &&
+                snapshot.status === "ready" &&
+                snapshot.auth.status === "authenticated",
+            }
+          : {}),
         enrichSnapshot: ({ settings, snapshot, publishSnapshot }) =>
           enrichProviderSnapshotWithVersionAdvisory(snapshot, maintenanceCapabilities, {
             enableProviderUpdateChecks: settings.enableProviderUpdateChecks,

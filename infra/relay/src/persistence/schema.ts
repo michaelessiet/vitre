@@ -3,6 +3,7 @@ import type {
   RelayAgentActivityState,
   RelayAgentAwarenessPreferences,
 } from "@t3tools/contracts/relay";
+import type { CloudAccountDocument } from "../cloud/store.ts";
 import {
   boolean,
   index,
@@ -14,6 +15,14 @@ import {
   uniqueIndex,
   varchar,
 } from "drizzle-orm/pg-core";
+
+// The personal cloud aggregate atomically commits task receipts, budget reservations,
+// provider leases and its durable operation outbox with one compare-and-swap.
+export const relayCloudAccounts = pgTable("relay_cloud_accounts", {
+  userId: varchar("user_id", { length: 255 }).primaryKey(),
+  revision: integer("revision").notNull(),
+  document: jsonb("document").notNull().$type<CloudAccountDocument>(),
+});
 
 export const relayMobileDevices = pgTable(
   "relay_mobile_devices",

@@ -45,6 +45,7 @@ import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -61,6 +62,8 @@ import {
   type ProviderInstanceRegistryMutatorShape,
 } from "../Services/ProviderInstanceRegistryMutator.ts";
 import type { AnyProviderDriver, ProviderInstance } from "../ProviderDriver.ts";
+import { ServerConfig } from "../../config.ts";
+import { managedProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
 
 /**
  * Live registry entry: the materialized `ProviderInstance` + the fresh
@@ -157,6 +160,7 @@ const buildEntry = <R>(input: {
     }
 
     const typedConfig = decodeResult.success;
+    const serverConfig = yield* Effect.serviceOption(ServerConfig);
     const childScope = yield* Scope.make();
     // Attach the child scope to the registry's parent scope: if the
     // registry scope closes, each surviving instance's child scope is
@@ -170,7 +174,10 @@ const buildEntry = <R>(input: {
         instanceId,
         displayName: entry.displayName,
         accentColor: entry.accentColor,
-        environment: entry.environment ?? [],
+        environment: managedProviderInstanceEnvironment(
+          entry.environment,
+          Option.isSome(serverConfig) ? serverConfig.value.stateDir : undefined,
+        ),
         enabled: entry.enabled ?? decodedConfigEnabled(typedConfig) ?? true,
         config: typedConfig,
       })

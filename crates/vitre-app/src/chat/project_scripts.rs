@@ -122,10 +122,9 @@ impl ChatApp {
     /// root once per root. Missing, truncated, or invalid files resolve to no
     /// import offers.
     fn ensure_file_scripts(&mut self, cx: &mut Context<Self>) {
-        let Some(project) = self.active_project() else {
+        let Some(root) = self.search_root() else {
             return;
         };
-        let root = project.workspace_root.0.clone();
         if self.scripts.file_scripts_root.as_deref() == Some(root.as_str()) {
             return;
         }
@@ -133,7 +132,7 @@ impl ChatApp {
         self.scripts.file_scripts.clear();
         self.scripts.file_scripts_generation += 1;
         let generation = self.scripts.file_scripts_generation;
-        let Some(client) = self.client.clone() else {
+        let Some(client) = self.workspace_client() else {
             return;
         };
         let payload = ProjectReadFileInput {
@@ -920,7 +919,7 @@ impl ChatApp {
         self.focus_active_terminal(&key, cx);
         cx.notify();
 
-        let Some(client) = self.client.clone() else {
+        let Some(client) = self.workspace_client() else {
             return;
         };
         let env: serde_json::Map<String, serde_json::Value> = defaults
@@ -938,6 +937,7 @@ impl ChatApp {
             worktree_path: Some(Some(defaults.worktree.as_deref().map(tnes))),
         };
         let write_payload = TerminalWriteInput {
+            managed_command: Some(true),
             data: format!("{}\r", script.command.0),
             terminal_id: tnes(&target_terminal_id),
             thread_id: tnes(&defaults.thread_id),

@@ -8,7 +8,7 @@ publish = false
 [dependencies]
 futures.workspace = true
 percent-encoding.workspace = true
-reqwest.workspace = true
+reqwest = { workspace = true, features = ["rustls-tls"] }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
