@@ -281,6 +281,22 @@ function stripNullDefaults(value: Schema.Json): Schema.Json {
   ) as Schema.Json;
 }
 
+function applyDefinitionCompatibility(name: string, schema: Schema.Json): Schema.Json {
+  // Codex 0.156.1 emits completed sub-agent activity, absent from the pinned snapshot.
+  if (
+    name === "SubAgentActivityKind" &&
+    schema !== null &&
+    typeof schema === "object" &&
+    !Array.isArray(schema) &&
+    "enum" in schema &&
+    Array.isArray(schema.enum) &&
+    !schema.enum.includes("completed")
+  ) {
+    return { ...schema, enum: [...schema.enum, "completed"] };
+  }
+  return schema;
+}
+
 function toPascalCaseMethod(method: string) {
   return method
     .split("/")
@@ -559,7 +575,7 @@ const generateFiles = Effect.fn("generateFiles")(function* () {
       aggregateSchemas[localDefinitionNames.get(definitionName)!] = stripNullDefaults(
         normalizeNullableTypes(
           rewriteExternalRefs(
-            definitionSchema,
+            applyDefinitionCompatibility(definitionName, definitionSchema),
             localDefinitionNames,
             file.namespace,
             exportNameByQualifiedName,

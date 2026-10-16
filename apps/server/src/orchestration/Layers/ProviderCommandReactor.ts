@@ -431,7 +431,7 @@ const make = Effect.gen(function* () {
     }
 
     const desiredRuntimeMode = thread.runtimeMode;
-    const requestedModelSelection = options?.modelSelection;
+    const requestedModelSelection = options?.modelSelection ?? thread.modelSelection;
     const resolveActiveSession = (threadId: ThreadId) =>
       providerService
         .listSessions()
@@ -459,7 +459,7 @@ const make = Effect.gen(function* () {
       activeSession !== undefined &&
       activeSession.providerInstanceId !== undefined
         ? activeSession.providerInstanceId
-        : thread.modelSelection.instanceId;
+        : (thread.session?.providerInstanceId ?? thread.modelSelection.instanceId);
     const desiredModelSelection = requestedModelSelection ?? thread.modelSelection;
     const desiredInstanceId = desiredModelSelection.instanceId;
     const currentInfo = yield* providerService.getInstanceInfo(currentInstanceId).pipe(
@@ -527,29 +527,12 @@ const make = Effect.gen(function* () {
         requestedModelSelection,
       });
     }
-    if (
-      thread.session !== null &&
-      requestedModelSelection !== undefined &&
-      requestedModelSelection.instanceId !== currentInstanceId
-    ) {
-      if (currentInfo.driverKind !== desiredInfo.driverKind) {
-        return yield* new ProviderAdapterRequestError({
-          provider: preferredProvider,
-          method: "thread.turn.start",
-          detail: `Thread '${threadId}' is bound to driver '${currentInfo.driverKind}' and cannot switch to '${desiredInfo.driverKind}'.`,
-        });
-      }
-      if (
-        currentInfo.continuationIdentity.continuationKey !==
-        desiredInfo.continuationIdentity.continuationKey
-      ) {
-        return yield* new ProviderAdapterRequestError({
-          provider: preferredProvider,
-          method: "thread.turn.start",
-          detail: `Thread '${threadId}' cannot switch from instance '${currentInstanceId}' to '${desiredInstanceId}' because their provider resume state is incompatible.`,
-        });
-      }
-    }
+    // Resume cursors belong to a provider's continuation identity. A switch to
+    // another driver (or incompatible instance) starts a fresh session instead.
+    const continuationChanged =
+      currentInfo.driverKind !== desiredInfo.driverKind ||
+      currentInfo.continuationIdentity.continuationKey !==
+        desiredInfo.continuationIdentity.continuationKey;
     const project = yield* resolveProject(thread.projectId);
     const workspaceRoots = yield* isolatedWorkspaceRoots(
       thread.id,
@@ -643,9 +626,10 @@ const make = Effect.gen(function* () {
         return existingSessionThreadId;
       }
 
-      const resumeCursor = shouldRestartForModelChange
-        ? undefined
-        : (activeSession?.resumeCursor ?? undefined);
+      const resumeCursor =
+        shouldRestartForModelChange || continuationChanged
+          ? undefined
+          : (activeSession?.resumeCursor ?? undefined);
       yield* Effect.logInfo("provider command reactor restarting provider session", {
         threadId,
         existingSessionThreadId,
@@ -822,11 +806,26 @@ const make = Effect.gen(function* () {
       ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
       pendingTurnStart: true,
     });
-    if (input.modelSelection !== undefined) {
-      threadModelSelections.set(input.threadId, input.modelSelection);
-    }
+    threadModelSelections.set(input.threadId, input.modelSelection ?? thread.modelSelection);
+    const selectedModel = input.modelSelection ?? thread.modelSelection;
+    const importedInput = importedConversationContext(thread, input.messageText);
+    const providerChanged =
+      thread.session?.providerInstanceId !== undefined &&
+      thread.session.providerInstanceId !== selectedModel.instanceId;
+    const historyBudget = Math.min(
+      60_000,
+      PROVIDER_SEND_TURN_MAX_INPUT_CHARS -
+        importedInput.length -
+        THREAD_REFERENCE_INPUT_SLACK_CHARS,
+    );
+    const transcript =
+      providerChanged && importedInput === input.messageText && historyBudget > 0
+        ? formatThreadReferenceTranscript(thread, historyBudget)
+        : "";
     const normalizedInput = toNonEmptyProviderInput(
-      importedConversationContext(thread, input.messageText),
+      transcript.length > 0
+        ? `The user switched providers in this conversation. Prior messages follow as background context.\n${buildThreadReferenceSection(thread, transcript)}\n\nCurrent user message:\n${importedInput}`
+        : importedInput,
     );
     const inputWithThreadReferences =
       normalizedInput === undefined
@@ -860,8 +859,7 @@ const make = Effect.gen(function* () {
             messageText: inputWithThreadReferences,
           })
         : inputWithThreadReferences;
-    const requestedModelSelection =
-      input.modelSelection ?? threadModelSelections.get(input.threadId) ?? thread.modelSelection;
+    const requestedModelSelection = input.modelSelection ?? thread.modelSelection;
     const modelForTurn =
       sessionModelSwitch === "unsupported" && input.modelSelection === undefined
         ? activeSession?.model !== undefined
@@ -870,7 +868,7 @@ const make = Effect.gen(function* () {
               model: activeSession.model,
             }
           : requestedModelSelection
-        : input.modelSelection;
+        : requestedModelSelection;
 
     return {
       threadId: input.threadId,

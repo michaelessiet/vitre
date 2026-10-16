@@ -40,6 +40,10 @@ impl ChatApp {
             let mut threads = all_threads
                 .iter()
                 .filter(|t| !is_archived(t))
+                .filter(|t| {
+                    !ClientSettings::get(cx).project_tabs_enabled
+                        || self.tab_project_id().as_ref() == Some(&t.project_id)
+                })
                 .collect::<Vec<_>>();
             threads.sort_by(|a, b| b.created_at.0.cmp(&a.created_at.0));
             for thread in threads {

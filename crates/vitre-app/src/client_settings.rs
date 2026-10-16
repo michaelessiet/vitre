@@ -104,6 +104,7 @@ pub struct StoredSettings {
     pub cloud_method_by_project: std::collections::HashMap<String, String>,
     pub default_model: Option<vitre_contracts::ModelSelection>,
     pub favorite_editor: Option<vitre_contracts::EditorId>,
+    pub project_tabs_enabled: bool,
     pub sidebar_v2_enabled: bool,
     pub sidebar_auto_settle_after_days: Option<u32>,
     pub timestamp_format: String,
@@ -133,6 +134,7 @@ impl Default for StoredSettings {
             cloud_method_by_project: Default::default(),
             default_model: None,
             favorite_editor: None,
+            project_tabs_enabled: false,
             sidebar_v2_enabled: false,
             sidebar_auto_settle_after_days: None,
             timestamp_format: "locale".into(),
@@ -318,11 +320,13 @@ mod tests {
         let defaults = StoredSettings::default();
         assert!(!defaults.preview_automation_enabled);
         assert!(!defaults.sidebar_v2_enabled);
+        assert!(!defaults.project_tabs_enabled);
         assert!(defaults.sidebar_auto_settle_after_days.is_none());
-        let configured:StoredSettings=serde_json::from_value(serde_json::json!({"editorFontSize":20,"timestampFormat":"24-hour","autoSaveOnFocusChange":true,"previewAutomationEnabled":true,"sidebarV2Enabled":true,"sidebarAutoSettleAfterDays":7})).unwrap();
+        let configured:StoredSettings=serde_json::from_value(serde_json::json!({"editorFontSize":20,"timestampFormat":"24-hour","autoSaveOnFocusChange":true,"previewAutomationEnabled":true,"sidebarV2Enabled":true,"projectTabsEnabled":true,"sidebarAutoSettleAfterDays":7})).unwrap();
         let decoded: StoredSettings =
             serde_json::from_str(&serde_json::to_string(&configured).unwrap()).unwrap();
         assert_eq!(decoded, configured);
+        assert!(decoded.project_tabs_enabled);
         assert!(decoded.auto_save_on_focus_change);
         assert_eq!(decoded.timestamp_format, "24-hour");
     }

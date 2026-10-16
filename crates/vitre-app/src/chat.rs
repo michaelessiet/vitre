@@ -6707,18 +6707,12 @@ impl ChatApp {
                                         })),
                                 ),
                         )
-                        .child(
-                            div()
-                                .p_3()
-                                .when(collapsible && expanded, |body| body.h(px(360.)))
-                                .child(assistant_markdown_view(
-                                    SharedString::from(format!("plan-{}", plan.id)),
-                                    displayed,
-                                    Some(cx.entity().downgrade()),
-                                    Some(state),
-                                    collapsible && expanded,
-                                )),
-                        )
+                        .child(div().p_3().child(assistant_markdown_with_state(
+                            SharedString::from(format!("plan-{}", plan.id)),
+                            displayed,
+                            Some(cx.entity().downgrade()),
+                            Some(state),
+                        )))
                         .when(collapsible, |card| {
                             card.child(
                                 Button::new(("expand-plan", plan_index))
@@ -7232,7 +7226,7 @@ impl ChatApp {
                 .as_ref()
                 .is_some_and(|session| session.status == OrchestrationSessionStatus::Running)
         });
-        let dispatching = matches!(
+        let dispatching = self.local_dispatch.is_some() || matches!(
             presentation.facts.delivery,
             conversation_status::Delivery::Submitting
         );
@@ -7249,6 +7243,23 @@ impl ChatApp {
             .as_ref()
             .and_then(|selection| selection.instance_id.clone().flatten())
             .and_then(|value| value.as_str().map(str::to_string));
+        let session_error: Option<SharedString> = view.and_then(|view| {
+            view.session
+                .as_ref()
+                .filter(|session| {
+                    // A saved model selection takes effect on the next turn.
+                    // Do not present the previous provider's limit as a failure
+                    // of the provider the user has just selected.
+                    let session_instance = session
+                        .provider_instance_id
+                        .as_ref()
+                        .and_then(Option::as_ref);
+                    !matches!((session_instance, current_instance.as_deref()),
+                        (Some(previous), Some(selected)) if previous.0 != selected)
+                })
+                .and_then(|session| session.last_error.as_ref())
+                .map(|error| error.0.clone().into())
+        });
         let providers = &self.provider_snapshots;
         let model_label: SharedString = providers
             .iter()
@@ -8356,7 +8367,20 @@ impl Render for ChatApp {
                                 .reveal(sidebar_reveal)
                                 .child(self.render_sidebar(cx).into_any_element()),
                         )
-                        .child(resizable_panel().child(self.render_chat(header_inset, window, cx)))
+                        .child(
+                            resizable_panel().child(
+                                v_flex()
+                                    .size_full()
+                                    .when(ClientSettings::get(cx).project_tabs_enabled, |view| {
+                                        view.child(self.render_project_tabs(header_inset, cx))
+                                    })
+                                    .child(div().flex_1().min_h_0().child(self.render_chat(
+                                        header_inset,
+                                        window,
+                                        cx,
+                                    ))),
+                            ),
+                        )
                         .child(
                             // Hidden (not unmounted) when the dock is
                             // closed: the state slot keeps the width,

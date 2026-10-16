@@ -2720,6 +2720,45 @@ describe("ProviderRuntimeIngestion", () => {
     expect(resolvedPayload?.requestType).toBe("command_execution_approval");
   });
 
+  effectIt.effect("ignores delayed limit errors from a provider replaced by a model switch", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() => createHarness());
+      const now = "2026-01-01T00:00:00.000Z";
+      yield* harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("replacement-session"),
+        threadId: asThreadId("thread-1"),
+        session: {
+          threadId: asThreadId("thread-1"),
+          status: "ready",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      });
+      harness.emit({
+        type: "runtime.error",
+        eventId: asEventId("retired-claude-limit"),
+        provider: ProviderDriverKind.make("claudeAgent"),
+        providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+        createdAt: now,
+        threadId: asThreadId("thread-1"),
+        payload: { message: "Session limit reached" },
+      });
+      yield* Effect.promise(() => harness.drain());
+      const thread = (yield* Effect.promise(() => harness.readModel())).threads.find(
+        (entry) => entry.id === "thread-1",
+      );
+      expect(thread?.session?.providerName).toBe("codex");
+      expect(thread?.session?.lastError).toBeNull();
+      expect(thread?.session?.status).toBe("ready");
+    }),
+  );
+
   it("maps runtime.error into errored session state", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";

@@ -1373,6 +1373,15 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const thread = yield* resolveThreadShell(event.threadId);
       if (!thread) return;
+      // A retired provider can still emit queued errors or exit events after a
+      // switch. Never let those overwrite the replacement session's state.
+      if (
+        event.providerInstanceId !== undefined &&
+        thread.session?.providerInstanceId !== undefined &&
+        event.providerInstanceId !== thread.session.providerInstanceId &&
+        event.providerInstanceId !== thread.modelSelection.instanceId
+      )
+        return;
 
       let loadedThreadDetail: OrchestrationThread | null | undefined;
       const getLoadedThreadDetail = () =>

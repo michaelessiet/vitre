@@ -9,6 +9,10 @@ import type * as Types from "effect/Types";
 import { McpSchema, McpServer, Tool } from "effect/unstable/ai";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
+import * as ProcessRunner from "../processRunner.ts";
+import { SystemBrowserToolkit } from "./toolkits/systemBrowser/tools.ts";
+import { SystemBrowserToolkitHandlersLive } from "./toolkits/systemBrowser/handlers.ts";
+
 import packageJson from "../../package.json" with { type: "json" };
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
@@ -219,6 +223,11 @@ export const GraphToolkitRegistrationLive = McpServer.toolkit(GraphToolkit).pipe
   Layer.provide(GraphToolkitHandlersLive),
 );
 
+export const SystemBrowserToolkitRegistrationLive = McpServer.toolkit(SystemBrowserToolkit).pipe(
+  Layer.provide(SystemBrowserToolkitHandlersLive),
+  Layer.provide(ProcessRunner.layer),
+);
+
 const McpTransportLive = McpServer.layerHttp({
   name: "Vitre",
   version: packageJson.version,
@@ -228,4 +237,5 @@ const McpTransportLive = McpServer.layerHttp({
 export const layer = Layer.mergeAll(
   PreviewToolkitRegistrationLive,
   GraphToolkitRegistrationLive,
+  SystemBrowserToolkitRegistrationLive,
 ).pipe(Layer.provideMerge(McpTransportLive));
