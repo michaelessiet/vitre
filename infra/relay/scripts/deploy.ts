@@ -30,6 +30,7 @@ import { Command, Flag, Prompt } from "effect/unstable/cli";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 
 import RelayStack from "../alchemy.run.ts";
+import { prepareRelayDatabase } from "./database.ts";
 
 const relayDeployOutputFields = [
   "url",
@@ -155,6 +156,23 @@ export function hasDeployChanges(plan: Plan.Plan): boolean {
     )
   );
 }
+
+/** Runtime updates must not silently create another deployment or rotate its identity. */
+export function existingStackViolation(plan: Plan.Plan): string | null {
+  const resources = Object.entries(plan.resources);
+  if (resources.length && resources.every(([, node]) => node.action === "create"))
+    return "The deployment plan creates a new stack. Check the existing stack name, stage and credentials profile.";
+  for (const [id, node] of resources) {
+    if (id.includes("CloudMintKeyPair") && (node.action === "create" || node.action === "replace"))
+      return "The deployment plan replaces the cloud signing identity. Restore the existing stack state before updating the runtime.";
+  }
+  return null;
+}
+
+export class RelayDeploymentIdentityError extends Schema.TaggedErrorClass<RelayDeploymentIdentityError>()(
+  "RelayDeploymentIdentityError",
+  { message: Schema.String },
+) {}
 
 export interface RelayDeployOutcome {
   readonly result: RelayDeployResult;
@@ -366,6 +384,11 @@ const runRelayDeploy = Effect.fn("relay.deploy.run")(
     const plan = yield* Plan.make(stack, { force: options.force }).pipe(
       Effect.provide(stack.services),
     );
+    const requireExisting = yield* Config.boolean("VITRE_CLOUD_REQUIRE_EXISTING_STACK").pipe(
+      Config.withDefault(false),
+    );
+    const violation = requireExisting ? existingStackViolation(plan) : null;
+    if (violation) return yield* new RelayDeploymentIdentityError({ message: violation });
     const changed = hasDeployChanges(plan);
     if (options.dryRun) {
       yield* cli.displayPlan(plan);
@@ -391,6 +414,7 @@ const runRelayDeploy = Effect.fn("relay.deploy.run")(
         } satisfies RelayDeployOutcome;
       }
     }
+    yield* prepareRelayDatabase;
     const output = yield* Apply.apply(plan).pipe(Effect.provide(stack.services));
     const publicConfig = publicConfigFromOutput(output);
     if (publicConfig === null) {

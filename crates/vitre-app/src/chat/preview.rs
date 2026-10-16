@@ -94,6 +94,8 @@ pub(super) enum PreviewPanelEvent {
 
 pub(super) struct PreviewPanel {
     client: Arc<EnvironmentClient>,
+    remote: bool,
+    tunnels: std::collections::HashMap<u16, super::preview_tunnel::PreviewTunnel>,
     thread_id: ThreadId,
     tab_id: Option<PreviewTabId>,
     address: Entity<InputState>,
@@ -128,6 +130,7 @@ impl PreviewPanel {
         thread_id: ThreadId,
         tab_id: Option<PreviewTabId>,
         initial_snapshot: Option<PreviewSessionSnapshot>,
+        remote: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -227,6 +230,8 @@ impl PreviewPanel {
         )];
 
         let mut panel = Self {
+            remote,
+            tunnels: Default::default(),
             client,
             thread_id,
             tab_id,
@@ -685,13 +690,56 @@ impl PreviewPanel {
                 self.loading = true;
                 self.load_started = Some(std::time::Instant::now());
                 self.error = None;
-                view.update(cx, |view, _| view.load_url(&url));
+                self.load_environment_url(url, view, cx);
             }
         }
         if was_new {
             cx.emit(PreviewPanelEvent::SessionOpened(snapshot.tab_id));
         }
         cx.notify();
+    }
+
+    fn load_environment_url(&mut self, url: String, view: Entity<WebView>, cx: &mut Context<Self>) {
+        let Some(port) = super::preview_tunnel::loopback_port(&url).filter(|_| self.remote) else {
+            view.update(cx, |view, _| view.load_url(&url));
+            return;
+        };
+        if let Some(tunnel) = self.tunnels.get(&port) {
+            if let Ok(local) = tunnel.local_url(&url) {
+                view.update(cx, |view, _| view.load_url(&local));
+            }
+            return;
+        }
+        let client = self.client.clone();
+        let task = gpui_tokio::Tokio::spawn_result(cx, async move {
+            super::preview_tunnel::PreviewTunnel::open(client, port).await
+        });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |panel, cx| {
+                if panel.url.as_ref() != url {
+                    return;
+                }
+                match result.and_then(|tunnel| Ok((tunnel.local_url(&url)?, tunnel))) {
+                    Ok((local, tunnel)) => {
+                        panel.tunnels.insert(port, tunnel);
+                        view.update(cx, |view, _| view.load_url(&local));
+                    }
+                    Err(error) => {
+                        panel.error = Some(format!("Cloud preview failed: {error}").into());
+                        panel.loading = false;
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+    fn environment_url(&self, url: String) -> String {
+        self.tunnels
+            .values()
+            .find_map(|tunnel| tunnel.remote_url(&url))
+            .unwrap_or(url)
     }
 
     fn apply_host_event(&mut self, event: HostEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -739,7 +787,7 @@ impl PreviewPanel {
             }
             HostEvent::Loading(url) => {
                 if url != "about:blank" {
-                    self.url = url.into();
+                    self.url = self.environment_url(url).into();
                     self.loading = true;
                     self.load_started = Some(std::time::Instant::now());
                     self.error = None;
@@ -750,7 +798,7 @@ impl PreviewPanel {
                     return;
                 }
                 if url != "about:blank" {
-                    self.url = url.into();
+                    self.url = self.environment_url(url).into();
                 }
                 self.loading = false;
                 self.load_started = None;
@@ -760,7 +808,7 @@ impl PreviewPanel {
             }
             HostEvent::Page { url, title } => {
                 if url != "about:blank" {
-                    self.url = url.into();
+                    self.url = self.environment_url(url).into();
                     self.title = title.into();
                 }
             }

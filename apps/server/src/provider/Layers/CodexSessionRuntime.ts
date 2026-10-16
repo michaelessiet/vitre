@@ -19,6 +19,7 @@ import {
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import { normalizeModelSlug } from "@t3tools/shared/model";
 import * as Crypto from "effect/Crypto";
+import type * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -718,7 +719,7 @@ export const makeCodexSessionRuntime = (
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const runtimeScope = yield* Scope.Scope;
     const crypto = yield* Crypto.Crypto;
-    const events = yield* Queue.unbounded<ProviderEvent>();
+    const events = yield* Queue.unbounded<ProviderEvent, Cause.Done>();
     const pendingApprovalsRef = yield* Ref.make(new Map<ApprovalRequestId, PendingApproval>());
     const approvalCorrelationsRef = yield* Ref.make(new Map<string, ApprovalCorrelation>());
     const pendingUserInputsRef = yield* Ref.make(new Map<ApprovalRequestId, PendingUserInput>());
@@ -1260,6 +1261,9 @@ export const makeCodexSessionRuntime = (
       }
       yield* settlePendingApprovals("cancel");
       yield* settlePendingUserInputs({});
+      // A stopped session is the resident worker's credential-release fence.
+      // Await child-process finalization before exposing it to observers.
+      yield* Scope.close(runtimeScope, Exit.void);
       yield* updateSession(sessionRef, {
         status: "closed",
         activeTurnId: undefined,
@@ -1269,10 +1273,10 @@ export const makeCodexSessionRuntime = (
           Effect.logError("Failed to emit Codex session closed event.", { cause }),
         ),
       );
-      yield* Scope.close(runtimeScope, Exit.void);
       yield* Queue.shutdown(serverNotifications);
-      yield* Queue.shutdown(events);
-    });
+      // Preserve the final closed event until the adapter drains it.
+      yield* Queue.end(events);
+    }).pipe(Effect.uninterruptible);
 
     return {
       start,

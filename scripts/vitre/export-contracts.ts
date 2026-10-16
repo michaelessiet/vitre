@@ -7,22 +7,27 @@
 // Run: node scripts/vitre/export-contracts.ts
 
 import * as contracts from "@t3tools/contracts";
+import * as cloud from "@t3tools/contracts/cloud";
 import * as Schema from "effect/Schema";
 import * as SchemaRepresentation from "effect/SchemaRepresentation";
 import * as RpcSchema from "effect/unstable/rpc/RpcSchema";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { annotateContracts, assertOk, sortKeysDeep } from "./lib.ts";
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
+import * as NodeURL from "node:url";
+import { annotateContracts, assertOk, isSchemaLike, sortKeysDeep } from "./lib.ts";
 
 type AnyRecord = Record<string, unknown>;
 
-const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const outPath = join(repoRoot, "crates", "vitre-contracts", "contracts.gen.json");
+const repoRoot = NodePath.join(
+  NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)),
+  "..",
+  "..",
+);
+const outPath = NodePath.join(repoRoot, "crates", "vitre-contracts", "contracts.gen.json");
 
 // --- 1. annotate every contract export so defs get stable names -------------
 
-const annotateSummary = annotateContracts(contracts as unknown as AnyRecord);
+const annotateSummary = annotateContracts({ ...contracts, ...cloud } as unknown as AnyRecord);
 
 // --- 2. collect payload/success/error roots per method ----------------------
 
@@ -84,6 +89,15 @@ for (const [tag, rpc] of group.requests) {
 
 // --- 3. one multi-document JSON Schema generation over all roots ------------
 
+// Cloud is an HTTP surface, not environment RPC. Export its schemas for native
+// clients without inventing RPC methods or duplicating the wire types in Rust.
+const cloudRoots = Object.entries(cloud)
+  .filter(([, value]) => isSchemaLike(value))
+  .map(([name, value]) => ({
+    name,
+    index: roots.push(value as unknown as { ast: AnyRecord }) - 1,
+  }));
+
 const multi = SchemaRepresentation.fromASTs(roots.map((r) => r.ast) as never);
 const doc = SchemaRepresentation.toJsonSchemaMultiDocument(multi as never) as unknown as {
   schemas: unknown[];
@@ -144,6 +158,8 @@ const methods = methodRoots
   })
   .sort((a, b) => (a.tag < b.tag ? -1 : a.tag > b.tag ? 1 : 0));
 
+for (const root of cloudRoots) refFor(root.index, root.name);
+
 // --- 5. verification ---------------------------------------------------------
 
 function collectRefs(value: unknown, into: string[]): void {
@@ -197,8 +213,8 @@ assertOk(
 // --- 6. assemble + write -----------------------------------------------------
 
 const output = sortKeysDeep({ version: 1, methods, $defs: defs });
-mkdirSync(dirname(outPath), { recursive: true });
-writeFileSync(outPath, `${JSON.stringify(output, null, 2)}\n`);
+NodeFS.mkdirSync(NodePath.dirname(outPath), { recursive: true });
+NodeFS.writeFileSync(outPath, `${JSON.stringify(output, null, 2)}\n`);
 
 const streaming = methods.filter((m) => m.stream).length;
 console.log(`wrote ${outPath}`);

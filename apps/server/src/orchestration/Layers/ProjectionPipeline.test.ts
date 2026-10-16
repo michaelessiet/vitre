@@ -1430,6 +1430,15 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
       assert.deepEqual(settledRows, [
         { state: "completed", completedAt: "2026-01-01T00:01:00.000Z" },
       ]);
+      // Non-Git workspaces emit no later checkpoint event to restore this pointer.
+      const latestRows = yield* sql<{ readonly turnId: string; readonly state: string }>`
+        SELECT turns.turn_id AS "turnId", turns.state
+        FROM projection_threads AS threads
+        JOIN projection_turns AS turns
+          ON turns.thread_id = threads.thread_id AND turns.turn_id = threads.latest_turn_id
+        WHERE threads.thread_id = ${threadId}
+      `;
+      assert.deepEqual(latestRows, [{ turnId, state: "completed" }]);
     }),
   );
 

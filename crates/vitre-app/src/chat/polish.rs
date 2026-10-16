@@ -11,14 +11,9 @@ pub(super) fn reveal(id: impl Into<gpui::ElementId>, child: impl IntoElement) ->
         .child(child)
         .with_animation(
             id,
-            Animation::new(Duration::from_millis(180))
+            Animation::new(Duration::from_millis(120))
                 .with_easing(gpui_component::animation::ease_out_cubic),
-            |element, progress| {
-                element
-                    .opacity(progress)
-                    .relative()
-                    .top(px(4. * (1. - progress)))
-            },
+            |element, progress| element.opacity(progress),
         )
         .into_any_element()
 }
@@ -38,6 +33,109 @@ pub(super) fn activity_orb(cx: &mut Context<ChatApp>) -> Entity<Orb> {
 }
 
 impl ChatApp {
+    /// Both draft and active conversations use these exact two control rows.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn render_composer_controls(
+        &self,
+        model: AnyElement,
+        reasoning: Option<AnyElement>,
+        location: AnyElement,
+        mode: AnyElement,
+        runtime: AnyElement,
+        context: Option<AnyElement>,
+        send: AnyElement,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        v_flex()
+            .debug_selector(|| "composer-location-toolbar".into())
+            .px_3()
+            .pb_3()
+            .pt_1()
+            .gap_1()
+            .child(
+                h_flex()
+                    .w_full()
+                    .min_w_0()
+                    .gap_1()
+                    .items_center()
+                    .child(
+                        div()
+                            .min_w_0()
+                            .max_w(px(240.))
+                            .overflow_hidden()
+                            .child(model),
+                    )
+                    .children(reasoning)
+                    .child(location),
+            )
+            .child(
+                h_flex()
+                    .debug_selector(|| "composer-action-row".into())
+                    .w_full()
+                    .min_w_0()
+                    .gap_1()
+                    .items_center()
+                    .child(
+                        Button::new("attach")
+                            .ghost()
+                            .small()
+                            .icon(IconName::Plus)
+                            .tooltip("Attach files")
+                            .disabled(self.location_switch_blocks_turn())
+                            .on_click(
+                                cx.listener(|app, _, window, cx| app.attach_files(window, cx)),
+                            ),
+                    )
+                    .child(mode)
+                    .child(runtime)
+                    .child(div().flex_1())
+                    .children(context)
+                    .child(send),
+            )
+            .into_any_element()
+    }
+
+    pub(super) fn render_runtime_picker(
+        &self,
+        current: RuntimeMode,
+        compact: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let (label, icon) = match current {
+            RuntimeMode::ApprovalRequired => ("Supervised", IconName::Settings),
+            RuntimeMode::AutoAcceptEdits => ("Auto-accept edits", IconName::SquarePen),
+            RuntimeMode::Auto => ("Auto", IconName::CircleCheck),
+            RuntimeMode::FullAccess => ("Full access", IconName::Globe),
+            RuntimeMode::Unknown(_) => ("Permissions", IconName::Settings),
+        };
+        let owner = cx.entity().downgrade();
+        Button::new("runtime-mode")
+            .ghost()
+            .small()
+            .icon(icon)
+            .when(!compact, |button| button.label(label))
+            .tooltip(format!("Permissions: {label}"))
+            .disabled(self.draft_creating || self.location_switch_blocks_turn())
+            .dropdown_menu(move |mut menu, _, _| {
+                for (mode, label) in [
+                    (RuntimeMode::ApprovalRequired, "Supervised"),
+                    (RuntimeMode::AutoAcceptEdits, "Auto-accept edits"),
+                    (RuntimeMode::Auto, "Auto"),
+                    (RuntimeMode::FullAccess, "Full access"),
+                ] {
+                    let owner = owner.clone();
+                    menu = menu.item(PopupMenuItem::new(label).checked(mode == current).on_click(
+                        move |_, _, cx| {
+                            let _ =
+                                owner.update(cx, |app, cx| app.set_runtime_mode(mode.clone(), cx));
+                        },
+                    ));
+                }
+                menu
+            })
+            .into_any_element()
+    }
+
     pub(super) fn render_reasoning_picker(
         &self,
         option_descriptors: Vec<ProviderOptionDescriptor>,
@@ -335,45 +433,6 @@ impl ChatApp {
         });
     }
 
-    pub(super) fn sync_activity_orb(&mut self, cx: &mut Context<Self>) {
-        let view = self.thread.as_ref().and_then(|t| t.state.view.as_ref());
-        let waiting = view.is_some_and(|v| {
-            !derive_pending_approvals(&v.activities).is_empty()
-                || !derive_pending_user_inputs(&v.activities).is_empty()
-        });
-        let running = self.local_dispatch.is_some()
-            || view.is_some_and(|v| {
-                v.session
-                    .as_ref()
-                    .is_some_and(|s| s.status == OrchestrationSessionStatus::Running)
-            });
-        let composing = self
-            .display_messages
-            .last()
-            .is_some_and(|m| m.role == OrchestrationMessageRole::Assistant && m.streaming);
-        let plan = self
-            .thread
-            .as_ref()
-            .is_some_and(|t| self.current_interaction_mode(&t.id) == ProviderInteractionMode::Plan);
-        self.activity_orb.update(cx, |orb, cx| {
-            orb.set_state(
-                if composing {
-                    OrbState::Composing
-                } else if plan {
-                    OrbState::Reasoning
-                } else {
-                    OrbState::Working
-                },
-                cx,
-            );
-            orb.set_paused(waiting, cx);
-            orb.set_visible(
-                self.settings.is_none() && self.thread.is_some() && running,
-                cx,
-            );
-        });
-    }
-
     pub(super) fn render_welcome(&self, cx: &mut Context<Self>) -> AnyElement {
         v_flex().size_full().items_center().justify_center().gap_4().px_8()
             .child(self.welcome_orb.clone())
@@ -427,7 +486,7 @@ fn reasoning_label(
                 .iter()
                 .find(|o| Some(o.id.0.as_str()) == current)
             {
-                return format!("Reasoning: {}", option.label.0);
+                return option.label.0.clone();
             }
         }
     }
@@ -448,12 +507,9 @@ mod reasoning_tests {
             .unwrap()
         };
         let descriptors = vec![descriptor("serviceTier"), descriptor("reasoningEffort")];
-        assert_eq!(
-            reasoning_label(&descriptors, &HashMap::new()),
-            "Reasoning: Medium"
-        );
+        assert_eq!(reasoning_label(&descriptors, &HashMap::new()), "Medium");
         let options = HashMap::from([("reasoningEffort".into(), serde_json::json!("high"))]);
-        assert_eq!(reasoning_label(&descriptors, &options), "Reasoning: High");
+        assert_eq!(reasoning_label(&descriptors, &options), "High");
         assert_eq!(reasoning_label(&[], &options), "Reasoning");
     }
 }

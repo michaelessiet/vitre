@@ -181,8 +181,15 @@ export const AuthTokenExchangeRequest = Schema.Struct({
   client_label: Schema.optionalKey(TrimmedNonEmptyString),
   client_device_type: Schema.optionalKey(AuthClientMetadataDeviceType),
   client_os: Schema.optionalKey(TrimmedNonEmptyString),
+  include_websocket_ticket: Schema.optionalKey(Schema.Literal("true")),
 }).pipe(HttpApiSchema.asFormUrlEncoded());
 export type AuthTokenExchangeRequest = typeof AuthTokenExchangeRequest.Type;
+
+export const AuthWebSocketTicketResult = Schema.Struct({
+  ticket: TrimmedNonEmptyString,
+  expiresAt: Schema.DateTimeUtc,
+});
+export type AuthWebSocketTicketResult = typeof AuthWebSocketTicketResult.Type;
 
 export const AuthAccessTokenResult = Schema.Struct({
   access_token: TrimmedNonEmptyString,
@@ -190,14 +197,9 @@ export const AuthAccessTokenResult = Schema.Struct({
   token_type: Schema.Literals(["Bearer", "DPoP"]),
   expires_in: Schema.Number,
   scope: TrimmedNonEmptyString,
+  websocket_ticket: Schema.optionalKey(AuthWebSocketTicketResult),
 });
 export type AuthAccessTokenResult = typeof AuthAccessTokenResult.Type;
-
-export const AuthWebSocketTicketResult = Schema.Struct({
-  ticket: TrimmedNonEmptyString,
-  expiresAt: Schema.DateTimeUtc,
-});
-export type AuthWebSocketTicketResult = typeof AuthWebSocketTicketResult.Type;
 
 export const AuthPairingCredentialResult = Schema.Struct({
   id: TrimmedNonEmptyString,

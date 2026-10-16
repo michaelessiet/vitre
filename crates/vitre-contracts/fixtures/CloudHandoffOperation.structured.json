@@ -1,0 +1,18 @@
+{
+  "encoded": {
+    "cancelRequested": true,
+    "checkpoint": null,
+    "conversationId": "thread-fixture",
+    "error": null,
+    "from": "local",
+    "generation": 0,
+    "id": "move-fixture",
+    "phase": "waiting",
+    "revision": 4,
+    "startedAt": "2026-10-16T00:00:00Z",
+    "to": "cloud-local",
+    "updatedAt": "2026-10-16T00:00:01Z",
+    "waitReason": "active-turn"
+  },
+  "schema": "CloudHandoffOperation"
+}

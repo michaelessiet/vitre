@@ -13,17 +13,37 @@ const ACCESS_TOKEN_TYPE: &str = "urn:ietf:params:oauth:token-type:access_token";
 const ENVIRONMENT_BOOTSTRAP_TOKEN_TYPE: &str =
     "urn:t3:params:oauth:token-type:environment-bootstrap";
 
+/// Requests carry their own authentication. Sharing only the transport lets
+/// relay polling and bootstrap/ticket/snapshot calls reuse established TLS
+/// connections without retaining an account's token in default headers.
+pub(crate) fn pooled_client() -> reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .expect("HTTP client configuration is valid")
+        })
+        .clone()
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct AccessToken {
     pub access_token: String,
     pub token_type: String,
     pub expires_in: f64,
     pub scope: String,
+    #[serde(default)]
+    pub websocket_ticket: Option<WebSocketTicket>,
 }
 
-#[derive(Debug, Deserialize)]
-struct WebSocketTicket {
-    ticket: String,
+#[derive(Debug, Clone, Deserialize)]
+pub struct WebSocketTicket {
+    pub ticket: String,
+    #[serde(rename = "expiresAt")]
+    pub expires_at: String,
 }
 
 pub struct EnvironmentHttp {
@@ -37,11 +57,7 @@ impl EnvironmentHttp {
     pub fn new(base_url: impl Into<String>) -> Self {
         Self {
             base_url: base_url.into(),
-            client: reqwest::Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .timeout(std::time::Duration::from_secs(30))
-                .build()
-                .expect("HTTP client configuration is valid"),
+            client: pooled_client(),
         }
     }
 
@@ -65,13 +81,14 @@ impl EnvironmentHttp {
                 ("requested_token_type", ACCESS_TOKEN_TYPE),
                 ("client_label", "Vitre"),
                 ("client_device_type", "desktop"),
+                ("include_websocket_ticket", "true"),
             ])
             .send()
             .await?;
         Ok(check(response).await?.json().await?)
     }
 
-    /// Issue a short-lived one-time ticket for the `/ws` handshake.
+    /// Issue a short-lived session-bound ticket for the `/ws` handshake.
     pub async fn websocket_ticket(&self, access_token: &str) -> Result<String, RpcError> {
         let response = self
             .client
@@ -81,6 +98,19 @@ impl EnvironmentHttp {
             .await?;
         let ticket: WebSocketTicket = check(response).await?.json().await?;
         Ok(ticket.ticket)
+    }
+
+    /// Consume a ticket from this preparation once; older servers use the
+    /// authenticated ticket endpoint. Reconnection prepares a fresh session.
+    pub(crate) async fn initial_websocket_ticket(
+        &self,
+        access_token: &str,
+        prepared_ticket: &mut Option<String>,
+    ) -> Result<String, RpcError> {
+        match prepared_ticket.take() {
+            Some(ticket) => Ok(ticket),
+            None => self.websocket_ticket(access_token).await,
+        }
     }
 
     /// `ws://…/ws?wsTicket=<ticket>` for [`crate::RpcSession::connect`].
@@ -106,4 +136,114 @@ pub(crate) async fn check(response: reqwest::Response) -> Result<reqwest::Respon
         status: status.as_u16(),
         body,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[tokio::test]
+    async fn bootstrap_ticket_skips_the_extra_request_and_older_servers_fall_back() {
+        for bundled in [true, false] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let origin = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut headers = Vec::new();
+                while !headers.ends_with(b"\r\n\r\n") {
+                    headers.push(stream.read_u8().await.unwrap());
+                }
+                let headers = String::from_utf8(headers).unwrap().to_ascii_lowercase();
+                assert!(headers.starts_with("post /oauth/token "));
+                let length: usize = headers
+                    .lines()
+                    .find_map(|line| line.strip_prefix("content-length: "))
+                    .unwrap()
+                    .parse()
+                    .unwrap();
+                let mut body = vec![0; length];
+                stream.read_exact(&mut body).await.unwrap();
+                assert!(
+                    String::from_utf8(body)
+                        .unwrap()
+                        .contains("include_websocket_ticket=true")
+                );
+                let mut response = serde_json::json!({
+                    "access_token": "same-session", "token_type": "Bearer", "expires_in": 3600, "scope": "orchestration:read"
+                });
+                let ticket =
+                    serde_json::json!({"ticket":"fresh-ticket","expiresAt":"2026-10-15T00:05:00Z"});
+                if bundled {
+                    response["websocket_ticket"] = ticket.clone();
+                }
+                let body = response.to_string();
+                stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+                if !bundled {
+                    let mut headers = Vec::new();
+                    while !headers.ends_with(b"\r\n\r\n") {
+                        headers.push(stream.read_u8().await.unwrap());
+                    }
+                    let headers = String::from_utf8(headers).unwrap().to_ascii_lowercase();
+                    assert!(headers.starts_with("post /api/auth/websocket-ticket "));
+                    assert!(headers.contains("authorization: bearer same-session\r\n"));
+                    let body = ticket.to_string();
+                    stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+                }
+            });
+            tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                let http = EnvironmentHttp::new(origin);
+                let access = http.exchange_bootstrap_token("bootstrap").await.unwrap();
+                let mut prepared = access.websocket_ticket.map(|ticket| ticket.ticket);
+                assert_eq!(
+                    http.initial_websocket_ticket(&access.access_token, &mut prepared)
+                        .await
+                        .unwrap(),
+                    "fresh-ticket"
+                );
+                assert!(prepared.is_none());
+                server.await.unwrap();
+            })
+            .await
+            .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn fresh_environment_handles_reuse_connection_with_request_local_auth() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            // Both requests must arrive on this single accepted connection.
+            let (mut stream, _) = listener.accept().await.unwrap();
+            for token in ["first-account", "second-account"] {
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    let byte = stream.read_u8().await.unwrap();
+                    request.push(byte);
+                }
+                let request = String::from_utf8(request).unwrap().to_ascii_lowercase();
+                assert!(request.contains(&format!("authorization: bearer {token}\r\n")));
+                let body = r#"{"ticket":"ticket","expiresAt":"2026-10-15T00:05:00Z"}"#;
+                stream.write_all(format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                ).as_bytes()).await.unwrap();
+            }
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            for token in ["first-account", "second-account"] {
+                assert_eq!(
+                    EnvironmentHttp::new(&origin)
+                        .websocket_ticket(token)
+                        .await
+                        .unwrap(),
+                    "ticket"
+                );
+            }
+            server.await.unwrap();
+        })
+        .await
+        .unwrap();
+    }
 }

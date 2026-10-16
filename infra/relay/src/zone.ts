@@ -21,6 +21,9 @@ function withLogicalId<Resource extends object>(resource: Resource, logicalId: s
 
 export const RelayDeploymentConfig = Effect.gen(function* () {
   const { stage } = yield* Alchemy.Stack;
+  const personalDeployment = yield* Config.boolean("RELAY_PERSONAL_DEPLOYMENT").pipe(
+    Config.withDefault(false),
+  );
   const relayApiZoneName = yield* Config.nonEmptyString("RELAY_API_ZONE_NAME");
   const managedEndpointZoneName = yield* Config.nonEmptyString("RELAY_TUNNEL_ZONE_NAME");
   const relayPublicDomainOverride = yield* Config.string("RELAY_DOMAIN").pipe(
@@ -38,6 +41,7 @@ export const RelayDeploymentConfig = Effect.gen(function* () {
 
   return {
     stage,
+    personalDeployment,
     relayPublicDomain,
     relayPublicOrigin: `https://${relayPublicDomain}`,
     relayApiZoneName,
@@ -46,8 +50,8 @@ export const RelayDeploymentConfig = Effect.gen(function* () {
 });
 
 export const ManagedEndpointZone = RelayDeploymentConfig.pipe(
-  Effect.flatMap(({ stage, managedEndpointZoneName }) =>
-    relayOwnsManagedEndpointZone(stage)
+  Effect.flatMap(({ stage, managedEndpointZoneName, personalDeployment }) =>
+    personalDeployment || relayOwnsManagedEndpointZone(stage)
       ? Cloudflare.Zone("ManagedEndpointZone", { name: managedEndpointZoneName }).pipe(adopt(true))
       : Cloudflare.Zone.ref("ManagedEndpointZone", {
           stage: MANAGED_ENDPOINT_ZONE_OWNER_STAGE,
@@ -60,10 +64,10 @@ export const ManagedEndpointZone = RelayDeploymentConfig.pipe(
 );
 
 export const RelayApiZone = RelayDeploymentConfig.pipe(
-  Effect.flatMap(({ stage, relayApiZoneName, managedEndpointZoneName }) =>
+  Effect.flatMap(({ stage, relayApiZoneName, managedEndpointZoneName, personalDeployment }) =>
     relayApiZoneName === managedEndpointZoneName
       ? ManagedEndpointZone
-      : relayOwnsManagedEndpointZone(stage)
+      : personalDeployment || relayOwnsManagedEndpointZone(stage)
         ? Cloudflare.Zone("RelayApiZone", { name: relayApiZoneName }).pipe(adopt(true))
         : Cloudflare.Zone.ref("RelayApiZone", {
             stage: MANAGED_ENDPOINT_ZONE_OWNER_STAGE,

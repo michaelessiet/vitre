@@ -35,8 +35,8 @@ use vitre_state::project_grouping::{
 };
 use vitre_state::sidebar::{
     MAX_THREAD_PREVIEW_COUNT, MIN_THREAD_PREVIEW_COUNT, ProjectSortOrder, ThreadSortOrder,
-    ThreadStatus, ThreadWindow, is_archived, resolve_project_status, resolve_thread_status,
-    sort_project_groups, sort_threads, thread_window,
+    ThreadStatus, ThreadWindow, is_archived, resolve_project_status, sort_project_groups,
+    sort_threads, thread_window,
 };
 use vitre_state::worktree_cleanup::{
     fallback_thread_id_after_delete, format_worktree_path_for_display,
@@ -45,6 +45,7 @@ use vitre_state::worktree_cleanup::{
 
 use crate::client_settings::ClientSettings;
 
+use super::cloud_thread::ThreadLocation;
 use super::project_actions::{ProjectMember, project_context_menu};
 use super::{ChatApp, QuickSearchMode, SyncPhase, fresh_id, now_iso, relative_time, tnes};
 
@@ -80,10 +81,17 @@ pub(super) struct SidebarProjectRow {
 /// One thread row's render-ready state.
 pub(super) struct SidebarThreadRow {
     id: ThreadId,
+    location: ThreadLocation,
+    cloud: Option<CloudRowMeta>,
     title: SharedString,
     status: Option<ThreadStatus>,
     /// Relative timestamp label, from the same candidate chain Electron uses.
     time: Option<SharedString>,
+}
+
+pub(super) struct CloudRowMeta {
+    provider: vitre_contracts::CloudProvider,
+    needs_attention: bool,
 }
 
 /// The two colours a status pill paints with: the label/glyph colour and the
@@ -92,15 +100,16 @@ pub(super) struct SidebarThreadRow {
 /// emerald), resolved out of the v4 oklch palette to sRGB. They are raw
 /// palette values there too, not design tokens, so there is nothing in the
 /// Vitre theme to reach for instead.
-struct StatusColors {
-    text: Hsla,
-    dot: Hsla,
+pub(crate) struct StatusColors {
+    pub(crate) dot: Hsla,
 }
 
-fn status_colors(status: ThreadStatus, dark: bool) -> StatusColors {
-    let (light_text, light_dot, dark_shade, dark_alpha) = match status {
+pub(crate) fn status_colors(status: ThreadStatus, dark: bool) -> StatusColors {
+    let (_light_text, light_dot, dark_shade, dark_alpha) = match status {
         // amber-600 / amber-500, dark amber-300 at 90%
-        ThreadStatus::PendingApproval => (0xe17100, 0xfe9a00, 0xffd230, 0.9),
+        ThreadStatus::NeedsAttention | ThreadStatus::PendingApproval => {
+            (0xe17100, 0xfe9a00, 0xffd230, 0.9)
+        }
         // indigo-600 / indigo-500, dark indigo-300 at 90%
         ThreadStatus::AwaitingInput => (0x4f39f6, 0x615fff, 0xa3b3ff, 0.9),
         // sky-600 / sky-500, dark sky-300 at 80%
@@ -112,13 +121,9 @@ fn status_colors(status: ThreadStatus, dark: bool) -> StatusColors {
     };
     if dark {
         let shade = Hsla::from(rgb(dark_shade)).opacity(dark_alpha);
-        StatusColors {
-            text: shade,
-            dot: shade,
-        }
+        StatusColors { dot: shade }
     } else {
         StatusColors {
-            text: Hsla::from(rgb(light_text)),
             dot: Hsla::from(rgb(light_dot)),
         }
     }
@@ -191,12 +196,36 @@ impl ChatApp {
     /// from `render`, which is the point: this groups every project and walks
     /// every thread.
     pub(super) fn rebuild_sidebar(&mut self) {
-        let Some(snapshot) = self.shell.snapshot.clone() else {
-            self.sidebar_rows = Vec::new();
-            self.sidebar_project_order = Vec::new();
-            return;
-        };
-        let projects = &snapshot.projects;
+        let mut projects = self
+            .shell
+            .snapshot
+            .as_ref()
+            .map(|s| s.projects.clone())
+            .unwrap_or_default();
+        for thread in &self.cloud_shells {
+            if projects.iter().any(|p| p.id == thread.project_id) {
+                continue;
+            }
+            let Some(task) = self
+                .thread_location(&thread.id)
+                .task_id()
+                .and_then(|id| self.cloud_tasks.get(id))
+            else {
+                continue;
+            };
+            projects.push(vitre_contracts::OrchestrationProjectShell {
+                id: thread.project_id.clone(),
+                title: tnes(crate::cloud::repo_label(task)),
+                workspace_root: tnes(thread.project_id.0.clone()),
+                created_at: task.created_at.clone(),
+                updated_at: task.updated_at.clone(),
+                default_model_selection: None,
+                repository_identity: None,
+                additional_roots: None,
+                resolved_additional_roots: None,
+                scripts: vec![],
+            });
+        }
 
         // Electron orders the raw project list by the persisted manual order
         // first (`orderItemsByPreferredIds`) and only then groups, so a manual
@@ -225,7 +254,19 @@ impl ChatApp {
         }
 
         let mut threads_by_row: HashMap<String, Vec<&OrchestrationThreadShell>> = HashMap::new();
-        for thread in &snapshot.threads {
+        for thread in self
+            .shell
+            .snapshot
+            .iter()
+            .flat_map(|s| s.threads.iter())
+            .filter(|thread| {
+                !self.cloud_shell_index.contains_key(&thread.id)
+                    && !self.cloud_bindings.get(&thread.id).is_some_and(|binding| {
+                        binding.target != vitre_contracts::CloudExecutionTarget::Local
+                    })
+            })
+            .chain(self.cloud_shells.iter())
+        {
             if is_archived(thread) {
                 continue;
             }
@@ -250,6 +291,7 @@ impl ChatApp {
             },
         );
 
+        groups.sort_by_key(|g| ordered[g.representative].id.0.starts_with("cloud:"));
         let open = self.thread.as_ref().map(|open| open.id.clone());
         self.sidebar_rows = groups
             .iter()
@@ -261,10 +303,8 @@ impl ChatApp {
                 let statuses: Vec<Option<ThreadStatus>> = threads
                     .iter()
                     .map(|thread| {
-                        resolve_thread_status(
-                            thread,
-                            self.sidebar.thread_last_visited(&thread.id.0),
-                        )
+                        let visited = self.sidebar.thread_last_visited(&thread.id.0);
+                        self.sidebar_conversation_status(thread, visited)
                     })
                     .collect();
                 let preference_keys = expansion_preference_keys(group, &ordered);
@@ -309,6 +349,15 @@ impl ChatApp {
                         .zip(statuses)
                         .map(|(thread, status)| SidebarThreadRow {
                             id: thread.id.clone(),
+                            location: self.thread_location(&thread.id),
+                            cloud: self
+                                .thread_location(&thread.id)
+                                .task_id()
+                                .and_then(|id| self.cloud_tasks.get(id))
+                                .map(|task| CloudRowMeta {
+                                    provider: task.provider.clone(),
+                                    needs_attention: crate::cloud::needs_attention(&task.state),
+                                }),
                             title: thread.title.0.clone().into(),
                             status,
                             // Electron labels a row with the same candidate
@@ -325,6 +374,26 @@ impl ChatApp {
                 }
             })
             .collect();
+    }
+
+    pub(super) fn sidebar_project_ids(&self) -> Vec<ProjectId> {
+        self.sidebar_rows
+            .iter()
+            .flat_map(|row| row.members.iter().map(|member| member.project_id.clone()))
+            .collect()
+    }
+
+    #[cfg(test)]
+    pub(super) fn cloud_sidebar_rows(&self) -> Vec<(ProjectId, Vec<ThreadId>)> {
+        self.sidebar_rows
+            .iter()
+            .map(|r| {
+                (
+                    r.project_id.clone(),
+                    r.threads.iter().map(|t| t.id.clone()).collect(),
+                )
+            })
+            .collect()
     }
 
     /// `ChatView`'s visit effect: while a thread is open, its last-visited
@@ -394,6 +463,12 @@ impl ChatApp {
     /// Archive a thread (`ThreadArchive`). The shell drops it from the row on
     /// the resulting event, so nothing is removed optimistically.
     pub(super) fn archive_thread(&mut self, id: ThreadId, cx: &mut Context<Self>) {
+        if let Some(task_id) = self.thread_location(&id).task_id().map(str::to_owned) {
+            self.cloud_store.update(cx, |store, cx| {
+                store.update_task(task_id, None, Some(true), cx)
+            });
+            return;
+        }
         let Some(client) = self.client.clone() else {
             return;
         };
@@ -665,19 +740,6 @@ impl ChatApp {
             .bg(status_colors(status, cx.theme().is_dark()).dot)
     }
 
-    /// `ThreadStatusLabel`: dot plus label, in the status colour.
-    fn status_label(&self, status: ThreadStatus, cx: &Context<Self>) -> impl IntoElement {
-        let colors = status_colors(status, cx.theme().is_dark());
-        h_flex()
-            .flex_shrink_0()
-            .gap_1()
-            .items_center()
-            .text_size(px(10.))
-            .text_color(colors.text)
-            .child(div().size(px(6.)).rounded_full().bg(colors.dot))
-            .child(status.label())
-    }
-
     fn render_thread_row(
         &self,
         thread: &SidebarThreadRow,
@@ -692,11 +754,6 @@ impl ChatApp {
         let menu_target = self.thread_menu_target(&thread.id);
         let context_owner = menu_owner.clone();
         let context_target = menu_target.clone();
-
-        let meta = div()
-            .text_xs()
-            .text_color(cx.theme().muted_foreground.opacity(0.72))
-            .children(thread.time.clone());
 
         let mut row = h_flex()
             .id(SharedString::from(format!("thread-{}", thread.id.0)))
@@ -725,12 +782,79 @@ impl ChatApp {
                     .bg(cx.theme().primary)
             }))
             .children(
-                thread
-                    .status
-                    .map(|status| self.status_label(status, cx).into_any_element()),
+                (if selected {
+                    self.conversation_status(cx)
+                        .sidebar()
+                        .or(thread.status.filter(|status| {
+                            matches!(status, ThreadStatus::Completed | ThreadStatus::PlanReady)
+                        }))
+                } else {
+                    thread.status
+                })
+                .map(|status| {
+                    div()
+                        .id(SharedString::from(format!("thread-status-{}", thread.id.0)))
+                        .flex_shrink_0()
+                        .child(self.status_dot(status, cx))
+                        .tooltip(move |window, cx| {
+                            gpui_component::tooltip::Tooltip::new(status.label()).build(window, cx)
+                        })
+                }),
             )
-            .child(self.render_thread_title(&thread.id, thread.title.clone(), cx))
-            .child(div().ml_auto().flex().flex_shrink_0().child(meta))
+            .child(
+                div()
+                    .id(SharedString::from(format!(
+                        "thread-title-meta-{}",
+                        thread.id.0
+                    )))
+                    .flex_1()
+                    .min_w_0()
+                    .tooltip({
+                        let title = thread.title.clone();
+                        let time = thread.time.clone();
+                        move |window, cx| {
+                            gpui_component::tooltip::Tooltip::new(match &time {
+                                Some(time) => format!("{title} · {time}"),
+                                None => title.to_string(),
+                            })
+                            .build(window, cx)
+                        }
+                    })
+                    .when(thread.status == Some(ThreadStatus::Completed), |title| {
+                        title.font_medium()
+                    })
+                    .child(self.render_thread_title(&thread.id, thread.title.clone(), cx)),
+            )
+            .when(thread.location.is_cloud(), |row| {
+                row.child(
+                    div()
+                        .id(SharedString::from(format!("cloud-meta-{}", thread.id.0)))
+                        .flex_shrink_0()
+                        .text_color(cx.theme().muted_foreground.opacity(0.65))
+                        .child(Icon::new(IconName::Globe).size_3())
+                        .tooltip({
+                            let label = thread
+                                .cloud
+                                .as_ref()
+                                .map(|meta| {
+                                    format!(
+                                        "Cloud · {}{}",
+                                        crate::cloud::provider_label(&meta.provider),
+                                        if meta.needs_attention {
+                                            " · Needs attention"
+                                        } else {
+                                            ""
+                                        }
+                                    )
+                                })
+                                .unwrap_or_else(|| "Cloud".into());
+                            move |window, cx| {
+                                gpui_component::tooltip::Tooltip::new(label.clone())
+                                    .build(window, cx)
+                            }
+                        }),
+                )
+            })
             .child(
                 Button::new(SharedString::from(format!("thread-menu-{}", thread.id.0)))
                     .ghost()
@@ -792,6 +916,7 @@ impl ChatApp {
         let row_key = row.key.clone();
         let project_id = row.project_id.clone();
         let expanded = row.expanded;
+        let cloud_group = row.project_id.0.starts_with("cloud:");
 
         // Collapsed rows carry their most urgent thread status as a dot that
         // crossfades to the chevron on hover; expanded rows just show the
@@ -859,7 +984,7 @@ impl ChatApp {
             // sortable context. A grouped row carries every member key, so
             // the whole repository moves as one block.
             .when(
-                self.sidebar.project_sort_order == ProjectSortOrder::Manual,
+                !cloud_group && self.sidebar.project_sort_order == ProjectSortOrder::Manual,
                 |this| {
                     let member_keys: Vec<String> = row
                         .members
@@ -941,7 +1066,22 @@ impl ChatApp {
                                 let project_id = project_id.clone();
                                 move |this, _, window, cx| {
                                     cx.stop_propagation();
-                                    this.new_thread(Some(project_id.clone()), window, cx);
+                                    if cloud_group {
+                                        this.new_cloud_thread(window, cx);
+                                        let repo = this
+                                            .cloud_tasks
+                                            .values()
+                                            .find(|t| {
+                                                super::cloud_thread::cloud_group_key(t)
+                                                    == project_id.0
+                                            })
+                                            .map(|t| t.repository.id.clone());
+                                        if let Some(id) = repo {
+                                            this.select_cloud_repository(id, window, cx);
+                                        }
+                                    } else {
+                                        this.new_thread(Some(project_id.clone()), window, cx);
+                                    }
                                 }
                             })),
                     ),
@@ -953,7 +1093,11 @@ impl ChatApp {
                 }
             }))
             .context_menu(move |menu, window, cx| {
-                project_context_menu(menu, &chat, &members, window, cx)
+                if cloud_group {
+                    menu
+                } else {
+                    project_context_menu(menu, &chat, &members, window, cx)
+                }
             });
 
         v_flex()
@@ -1265,7 +1409,7 @@ impl ChatApp {
                                         SyncPhase::Disconnected => cx.theme().muted_foreground,
                                     }),
                             )
-                            .child(format!("Local environment · {phase}"))
+                            .child(format!("Desktop service · {phase}"))
                             .tooltip({
                                 let status = self.sidecar_status.clone();
                                 move |window, cx| {
@@ -1285,6 +1429,9 @@ impl ChatApp {
         hours: Option<i64>,
         cx: &mut Context<Self>,
     ) {
+        if self.thread_location(&id).is_cloud() {
+            return;
+        }
         let Some(client) = self.client.clone() else {
             return;
         };

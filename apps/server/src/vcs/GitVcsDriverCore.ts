@@ -39,6 +39,7 @@ import {
   parseRemoteRefWithRemoteNames,
 } from "../git/remoteRefs.ts";
 import { ServerConfig } from "../config.ts";
+import { managedWorkspaceGitEnv } from "./managedWorkspaceGitEnv.ts";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 1_000_000;
@@ -749,7 +750,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const { worktreesDir } = yield* ServerConfig;
+  const { worktreesDir, stateDir } = yield* ServerConfig;
   const crypto = yield* Crypto.Crypto;
 
   const executeRaw: GitVcsDriver.GitVcsDriver["Service"]["execute"] = Effect.fnUntraced(
@@ -781,7 +782,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
               cwd: commandInput.cwd,
               env: {
                 ...process.env,
-                ...input.env,
+                ...managedWorkspaceGitEnv(input.cwd, stateDir, input.env),
                 ...trace2Monitor.env,
               },
             }),

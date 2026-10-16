@@ -130,7 +130,7 @@ impl ChatApp {
             return;
         }
         self.right_panel.save();
-        if let Some(client) = self.client.clone() {
+        if let Some(client) = self.workspace_client() {
             let payload = TerminalOpenInput {
                 cols: None,
                 rows: None,
@@ -181,7 +181,11 @@ impl ChatApp {
     /// dock there is no `:home` pseudo-thread — Electron's drawer only exists
     /// inside a thread view.
     pub(super) fn terminal_thread_key(&self) -> Option<String> {
-        let client = self.client.as_ref()?;
+        if self.is_cloud_thread() {
+            self.workspace_client()?;
+            return self.dock_thread_key();
+        }
+        let client = self.workspace_client()?;
         let session = client.sessions().borrow().clone()?;
         let environment = session.config.environment.environment_id.0.clone();
         let thread = self.thread.as_ref()?;
@@ -190,6 +194,17 @@ impl ChatApp {
 
     pub(super) fn thread_launch_defaults(&self) -> Option<ThreadLaunchDefaults> {
         let open = self.thread.as_ref()?;
+        if self.is_cloud_thread() {
+            let cwd = self
+                .selected_workspace_root()
+                .or_else(|| self.open_project_root())?;
+            return Some(ThreadLaunchDefaults {
+                thread_id: self.execution_thread_id()?.0,
+                cwd: cwd.clone(),
+                worktree: None,
+                env: BTreeMap::from([("T3CODE_PROJECT_ROOT".into(), cwd)]),
+            });
+        }
         let shell_thread = self.shell_thread(&open.id)?;
         let worktree = shell_thread
             .worktree_path
@@ -216,10 +231,17 @@ impl ChatApp {
     /// session-watch shape as the diff panel's vcs stream. Every event batch
     /// folds into `terminal_metadata` and re-runs the drawer reconcile.
     pub(super) fn spawn_terminal_metadata_loop(&mut self, cx: &mut Context<Self>) {
-        let Some(client) = self.client.clone() else {
+        let environment = self.workspace_cache_key("");
+        if environment == self.terminal_metadata_environment {
+            return;
+        }
+        self.terminal_metadata_environment = environment;
+        self.terminal_metadata_task = None;
+        self.terminal_metadata.clear();
+        let Some(client) = self.workspace_client() else {
             return;
         };
-        cx.spawn(async move |this, cx| {
+        self.terminal_metadata_task = Some(cx.spawn(async move |this, cx| {
             let payload: Value = serde_json::json!({});
             let mut sessions = client.sessions();
             loop {
@@ -284,8 +306,7 @@ impl ChatApp {
                         .await;
                 }
             }
-        })
-        .detach();
+        }));
     }
 
     /// Adopt the server's terminal set for the open thread (Electron's
@@ -298,9 +319,9 @@ impl ChatApp {
         let Some(key) = self.terminal_thread_key() else {
             return;
         };
-        let Some(open) = &self.thread else {
+        if self.thread.is_none() {
             return;
-        };
+        }
         let dock_owned: HashSet<&str> = self
             .right_panel
             .map
@@ -319,7 +340,9 @@ impl ChatApp {
         let mut server_ids: Vec<String> = self
             .terminal_metadata
             .iter()
-            .filter(|summary| summary.thread_id == open.id.0)
+            .filter(|summary| {
+                Some(&summary.thread_id) == self.execution_thread_id().as_ref().map(|id| &id.0)
+            })
             .map(|summary| summary.terminal_id.clone())
             .filter(|id| !dock_owned.contains(id.as_str()))
             .filter(|id| !suppressed.contains(id))
@@ -437,7 +460,7 @@ impl ChatApp {
             return;
         }
         self.terminal_ui.save();
-        if let Some(client) = self.client.clone() {
+        if let Some(client) = self.workspace_client() {
             let payload = TerminalOpenInput {
                 cols: None,
                 rows: None,
@@ -471,17 +494,19 @@ impl ChatApp {
         let Some(key) = self.terminal_thread_key() else {
             return;
         };
-        let Some(open) = &self.thread else {
+        if self.thread.is_none() {
+            return;
+        }
+        let Some(thread_id) = self.execution_thread_id().map(|id| id.0) else {
             return;
         };
-        let thread_id = open.id.0.clone();
         if self.terminal_ui.map.close_terminal(&key, terminal_id) {
             self.terminal_ui.save();
         }
         let map_key = (key, terminal_id.to_string());
         self.terminal_views.remove(&map_key);
         self.terminal_view_subs.remove(&map_key);
-        if let Some(client) = self.client.clone() {
+        if let Some(client) = self.workspace_client() {
             let terminal_id = terminal_id.to_string();
             cx.spawn(async move |_, _| {
                 let payload = TerminalCloseInput {
@@ -491,6 +516,7 @@ impl ChatApp {
                 };
                 if client.call::<TerminalClose>(&payload).await.is_err() {
                     let fallback = TerminalWriteInput {
+                        managed_command: None,
                         data: "exit\n".to_string(),
                         terminal_id: tnes(&terminal_id),
                         thread_id: tnes(&thread_id),
@@ -541,7 +567,7 @@ impl ChatApp {
         state: &ThreadTerminalUiState,
         cx: &mut Context<Self>,
     ) {
-        let Some(client) = self.client.clone() else {
+        let Some(client) = self.workspace_client() else {
             return;
         };
         let Some(defaults) = self.thread_launch_defaults() else {
@@ -589,10 +615,9 @@ impl ChatApp {
                 env: defaults.env.clone(),
             };
             let map_key = (key.to_string(), id.clone());
-            let stale = self
-                .terminal_views
-                .get(&map_key)
-                .is_some_and(|view| view.read(cx).launch() != &launch);
+            let stale = self.terminal_views.get(&map_key).is_some_and(|view| {
+                view.read(cx).launch() != &launch || !view.read(cx).uses_client(&client)
+            });
             if stale {
                 self.terminal_views.remove(&map_key);
                 self.terminal_view_subs.remove(&map_key);
@@ -609,7 +634,9 @@ impl ChatApp {
                         }
                     }
                     TerminalViewEvent::SessionExited => {
-                        this.terminal_close(&exited_id, cx);
+                        if this.dock_thread_key().as_deref() == Some(&origin_thread) {
+                            this.terminal_close(&exited_id, cx);
+                        }
                     }
                     TerminalViewEvent::AddToChat(selection) => {
                         this.add_terminal_context(selection, cx);
@@ -986,7 +1013,8 @@ impl ChatApp {
 
     /// Server label when the session reported one, `Terminal N` fallback.
     fn terminal_label(&self, _key: &str, terminal_id: &str) -> String {
-        let thread_id = self.thread.as_ref().map(|open| open.id.0.as_str());
+        let execution_id = self.execution_thread_id();
+        let thread_id = execution_id.as_ref().map(|id| id.0.as_str());
         self.terminal_metadata
             .iter()
             .find(|summary| {

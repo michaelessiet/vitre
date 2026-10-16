@@ -74,6 +74,32 @@ export class ApnsDeliveryQueue extends Context.Service<
   }
 >()("t3code-relay/agentActivity/ApnsDeliveryQueue") {}
 
+/** Personal desktop deployments do not provision mobile delivery resources. */
+export const layerDisabled = Layer.succeed(ApnsDeliveryQueue, {
+  enqueueLiveActivity: (input) =>
+    Effect.fail(
+      new ApnsDeliveryQueueSendError({
+        operation: "send",
+        jobId: null,
+        kind: input.kind,
+        userId: input.userId,
+        deviceId: input.deviceId,
+        cause: "Mobile notifications are disabled",
+      }),
+    ),
+  enqueuePushNotification: (input) =>
+    Effect.fail(
+      new ApnsDeliveryQueueSendError({
+        operation: "send",
+        jobId: null,
+        kind: "push_notification",
+        userId: input.userId,
+        deviceId: input.deviceId,
+        cause: "Mobile notifications are disabled",
+      }),
+    ),
+});
+
 export const make = Effect.gen(function* () {
   const sender = yield* ApnsDeliveryQueueSender;
   const crypto = yield* Crypto.Crypto;

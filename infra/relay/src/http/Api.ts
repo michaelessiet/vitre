@@ -1,5 +1,6 @@
 import { createClerkClient, verifyToken } from "@clerk/backend";
 import { sql as drizzleSql } from "drizzle-orm";
+import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -217,10 +218,13 @@ export const traceRelayHttpRequestWith = <E, R, LayerError, LayerRequirements>(
     HttpServerRequest.HttpServerRequest | R
   >,
   tracerLayer: Layer.Layer<never, LayerError, LayerRequirements>,
+  tracingEnabled = true,
 ) =>
-  traceRelayHttpRequest(httpEffect).pipe(
-    Effect.provide(Layer.merge(tracerLayer, httpHeaderRedactionLayer)),
-  );
+  tracingEnabled
+    ? traceRelayHttpRequest(httpEffect).pipe(
+        Effect.provide(Layer.merge(tracerLayer, httpHeaderRedactionLayer)),
+      )
+    : relayRequestDeadline(httpEffect).pipe(Effect.withTracerEnabled(false));
 
 export const withoutCapturedParentSpan = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
@@ -238,6 +242,7 @@ export const relayClientAuthLayer = Layer.effect(
     const config = yield* RelayConfiguration.RelayConfiguration;
     return {
       clientBearer: Effect.fn("relay.auth.client.bearer")(function* (httpEffect, { credential }) {
+        const authStartedAt = yield* Clock.currentTimeMillis;
         const token = readHttpAuthorizationCredential(credential);
         const verified = yield* verifyRelayClientBearerToken(config, token).pipe(
           Effect.tapError((error) =>
@@ -259,12 +264,30 @@ export const relayClientAuthLayer = Layer.effect(
           "relay.auth.subject": verified.sub,
         });
 
-        return yield* httpEffect.pipe(
+        const handlerStartedAt = yield* Clock.currentTimeMillis;
+        const response = yield* httpEffect.pipe(
           withSpanAttributes({ "user.id": verified.sub }),
           Effect.provideService(RelayClientPrincipal, {
             userId: verified.sub,
             token,
           }),
+        );
+        const finishedAt = yield* Clock.currentTimeMillis;
+        const authDuration = Math.max(0, handlerStartedAt - authStartedAt);
+        const handlerDuration = Math.max(0, finishedAt - handlerStartedAt);
+        yield* Effect.annotateCurrentSpan({
+          "relay.auth.duration_ms": authDuration,
+          "relay.handler.duration_ms": handlerDuration,
+        });
+        // Timings remain observable even when the deployment disables request
+        // tracing. No credentials, token claims, or endpoint details are exposed.
+        const timing = `relay_auth;dur=${authDuration}, relay_handler;dur=${handlerDuration}`;
+        return HttpServerResponse.setHeader(
+          response,
+          "server-timing",
+          response.headers["server-timing"]
+            ? `${response.headers["server-timing"]}, ${timing}`
+            : timing,
         );
       }),
     };
@@ -1139,7 +1162,7 @@ function verifyClerkOAuthBearerToken(
       return { sub: auth.userId };
     },
     catch: (cause) => new ClerkTokenVerificationFailed({ cause }),
-  });
+  }).pipe(Effect.withSpan("verify_clerk_oauth_bearer_token"));
 }
 
 export function verifyRelayClientBearerToken(

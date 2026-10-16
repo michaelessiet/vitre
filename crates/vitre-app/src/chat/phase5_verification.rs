@@ -64,7 +64,7 @@ impl ChatApp {
                 graph.update(cx,|g,cx|g.verify_path(cx));
                 loop {executor.timer(Duration::from_millis(100)).await;if let Some(result)=graph.read_with(cx,|g,_|g.verify_loaded()){if result?!=2{return Err("Graph path did not connect the two nodes".into());}break;}}
                 std::fs::write(Path::new(&cwd).join("copy-source.txt"),"Native copy fixture").map_err(|e|e.to_string())?;
-                this.update(cx,|a,cx|a.copy_workspace_entry(crate::files::FileContext{cwd:cwd.clone(),path:"copy-source.txt".into()},root2.clone(),cx)).map_err(|e|e.to_string())?;
+                this.update(cx,|a,cx|a.copy_workspace_entry(crate::files::FileContext{client:a.workspace_client().unwrap(),cwd:cwd.clone(),path:"copy-source.txt".into()},root2.clone(),cx)).map_err(|e|e.to_string())?;
                 loop {executor.timer(Duration::from_millis(100)).await;if let Ok(file)=client.call::<vitre_contracts::methods::ProjectsReadFile>(&vitre_contracts::ProjectReadFileInput{cwd:tnes(&root2),relative_path:tnes("copy-source.txt")}).await {if file.contents.0!="Native copy fixture" {return Err("Copy contents differed".into());}break;}}
                 let conflict=client.call::<vitre_contracts::methods::ProjectsCopyEntry>(&vitre_contracts::ProjectCopyEntryInput{from_cwd:tnes(&cwd),from_relative_path:tnes("README.md"),to_cwd:tnes(&root2),to_relative_path:tnes("copy-source.txt"),overwrite:Some(Some(false))}).await;
                 if conflict.is_ok(){return Err("Copy overwrote an existing destination".into());}

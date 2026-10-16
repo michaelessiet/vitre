@@ -33,7 +33,10 @@ pub struct RpcSession {
 
 impl RpcSession {
     pub async fn connect(ws_url: &str) -> Result<Self, RpcError> {
-        let (ws, _response) = tokio_tungstenite::connect_async(ws_url).await?;
+        // Interactive RPC frames should leave immediately instead of waiting
+        // for another small write or a TCP acknowledgement.
+        let (ws, _response) =
+            tokio_tungstenite::connect_async_with_config(ws_url, None, true).await?;
         let (mut sink, mut stream) = ws.split();
 
         let (out_tx, mut out_rx) = mpsc::unbounded_channel::<Message>();

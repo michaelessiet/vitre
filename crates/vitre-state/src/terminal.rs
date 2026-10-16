@@ -240,6 +240,7 @@ mod tests {
 
     fn snapshot(history: &str, status: TerminalSessionStatus) -> TerminalSessionSnapshot {
         TerminalSessionSnapshot {
+            managed_command: None,
             cwd: "/tmp".into(),
             exit_code: None,
             exit_signal: None,

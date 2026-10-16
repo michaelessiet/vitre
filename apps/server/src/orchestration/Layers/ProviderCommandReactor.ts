@@ -1,3 +1,5 @@
+import { isolatedWorkspaceRoots } from "../../cloud/executionOwnership.ts";
+import { importedConversationContext } from "../../cloud/conversationContext.ts";
 import {
   type ChatAttachment,
   CommandId,
@@ -549,10 +551,13 @@ const make = Effect.gen(function* () {
       }
     }
     const project = yield* resolveProject(thread.projectId);
-    const workspaceRoots = resolveThreadWorkspaceRoots({
-      thread,
-      projects: project ? [project] : [],
-    });
+    const workspaceRoots = yield* isolatedWorkspaceRoots(
+      thread.id,
+      resolveThreadWorkspaceRoots({
+        thread,
+        projects: project ? [project] : [],
+      }),
+    );
     const effectiveCwd = workspaceRoots.primary;
     const additionalDirectories = workspaceRoots.additional;
 
@@ -780,10 +785,13 @@ const make = Effect.gen(function* () {
         ).pipe(Effect.as(undefined)),
       ),
     );
-    const roots = resolveThreadWorkspaceRoots({
-      thread: input.thread,
-      projects: project ? [project] : [],
-    });
+    const roots = yield* isolatedWorkspaceRoots(
+      input.thread.id,
+      resolveThreadWorkspaceRoots({
+        thread: input.thread,
+        projects: project ? [project] : [],
+      }),
+    );
     if (roots.additional.length === 0) {
       return input.messageText;
     }
@@ -817,7 +825,9 @@ const make = Effect.gen(function* () {
     if (input.modelSelection !== undefined) {
       threadModelSelections.set(input.threadId, input.modelSelection);
     }
-    const normalizedInput = toNonEmptyProviderInput(input.messageText);
+    const normalizedInput = toNonEmptyProviderInput(
+      importedConversationContext(thread, input.messageText),
+    );
     const inputWithThreadReferences =
       normalizedInput === undefined
         ? undefined

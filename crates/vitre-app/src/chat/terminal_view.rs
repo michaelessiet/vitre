@@ -238,6 +238,10 @@ impl TerminalView {
         }
     }
 
+    pub(super) fn uses_client(&self, client: &Arc<EnvironmentClient>) -> bool {
+        Arc::ptr_eq(&self.client, client)
+    }
+
     pub(super) fn launch(&self) -> &TerminalLaunch {
         &self.launch
     }
@@ -486,6 +490,7 @@ impl TerminalView {
                     end -= 1;
                 }
                 let payload = TerminalWriteInput {
+                    managed_command: None,
                     data: rest[..end].to_string(),
                     terminal_id: tnes(&terminal_id),
                     thread_id: tnes(&thread_id),

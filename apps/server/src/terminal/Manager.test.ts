@@ -202,6 +202,7 @@ const multiTerminalHistoryLogPath = (
   );
 
 interface CreateManagerOptions {
+  stateDir?: string;
   shellResolver?: () => string;
   env?: NodeJS.ProcessEnv;
   subprocessInspector?: (terminalPid: number) => Effect.Effect<{
@@ -241,6 +242,7 @@ const createManager = (
 
       const manager = yield* TerminalManager.makeWithOptions({
         logsDir,
+        ...(options.stateDir !== undefined ? { stateDir: options.stateDir } : {}),
         historyLineLimit,
         ptyAdapter,
         ...(options.shellResolver !== undefined ? { shellResolver: options.shellResolver } : {}),
@@ -1310,6 +1312,56 @@ it.layer(
     }),
   );
 
+  it.effect("exports only active app-managed commands for handoff restart", () =>
+    Effect.gen(function* () {
+      const { manager, getEvents } = yield* createManager(5, {
+        subprocessInspector: () =>
+          Effect.succeed({
+            hasRunningSubprocess: true,
+            childCommand: "node",
+            processIds: [100, 101],
+          }),
+        subprocessPollIntervalMs: 20,
+      });
+      const input = openInput();
+      yield* manager.open(input);
+      yield* manager.write({
+        threadId: input.threadId,
+        terminalId: input.terminalId,
+        data: "pnpm dev\r",
+        managedCommand: true,
+      });
+      yield* waitFor(
+        Effect.map(getEvents, (events) =>
+          events.some((event) => event.type === "activity" && event.hasRunningSubprocess),
+        ),
+        "1200 millis",
+      );
+      expect((yield* manager.exportThread!(input.threadId))[0]?.managedCommand).toBe("pnpm dev\r");
+      yield* manager.write({
+        threadId: input.threadId,
+        terminalId: input.terminalId,
+        data: "\u0003",
+      });
+      expect((yield* manager.exportThread!(input.threadId))[0]?.managedCommand).toBeUndefined();
+    }),
+  );
+
+  it.effect(
+    "restores transferred terminal output into a new shell without replaying commands",
+    () =>
+      Effect.gen(function* () {
+        const { manager, ptyAdapter } = yield* createManager();
+        const input = openInput({ threadId: "returned-conversation" });
+        yield* manager.importHistory!(input, "previous cloud output\n");
+        const restored = yield* manager.exportThread!(input.threadId);
+        assert.equal(restored.length, 1);
+        assert.equal(restored[0]!.history, "previous cloud output\n");
+        assert.equal(restored[0]!.cwd, input.cwd);
+        assert.deepEqual(ptyAdapter.processes[0]!.writes, []);
+      }),
+  );
+
   it.effect("migrates legacy transcript filenames to terminal-scoped history path on open", () =>
     Effect.gen(function* () {
       const { manager, logsDir } = yield* createManager();
@@ -1493,6 +1545,35 @@ it.layer(
       expect(spawnInput.env.LANG).toBeUndefined();
       expect(spawnInput.env.LC_ALL).toBe("C");
     }).pipe(Effect.provide(withHostPlatform("darwin"))),
+  );
+
+  it.effect("keeps the managed Git ceiling after terminal runtime environment overrides", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "terminal-cloud-boundary-" });
+      const cwd = path.join(stateDir, "cloud-workspaces", "returned", "primary");
+      yield* fs.makeDirectory(cwd, { recursive: true });
+      const { manager, ptyAdapter } = yield* createManager(5, {
+        stateDir,
+        env: { GIT_CEILING_DIRECTORIES: "/inherited", TEST_KEEP: "kept" },
+      });
+      yield* manager.open(openInput({ cwd, env: { GIT_CEILING_DIRECTORIES: "/runtime" } }));
+      const env = ptyAdapter.spawnInputs[0]!.env;
+      expect(env.GIT_CEILING_DIRECTORIES).toBe(
+        `/runtime${path.sep === "\\" ? ";" : ":"}${path.join(stateDir, "cloud-workspaces")}`,
+      );
+      expect(env.TEST_KEEP).toBe("kept");
+      yield* manager.restart({
+        ...openInput({ cwd }),
+        terminalId: DEFAULT_TERMINAL_ID,
+        cols: 120,
+        rows: 30,
+      });
+      expect(ptyAdapter.spawnInputs.at(-1)!.env.GIT_CEILING_DIRECTORIES).toContain(
+        path.join(stateDir, "cloud-workspaces"),
+      );
+    }),
   );
 
   it.effect("lets runtime env overrides win over the locale fallback", () =>

@@ -13,7 +13,8 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
-import { decideOrchestrationCommand } from "./decider.ts";
+import { decideOrchestrationCommand, hasOpenBlockingRequest } from "./decider.ts";
+import { projectEvent } from "./projector.ts";
 
 const NOW = "2026-01-01T00:00:00.000Z";
 const SETTLED_AT = "2025-12-30T00:00:00.000Z";
@@ -517,6 +518,140 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
       });
       const routineEvents = Array.isArray(routineResult) ? routineResult : [routineResult];
       expect(routineEvents.map((event) => event.type)).toEqual(["thread.activity-appended"]);
+    }),
+  );
+});
+
+it.layer(NodeServices.layer)("execution transfer boundary", (it) => {
+  it.effect("retains historical fences beyond the command model activity limit", () =>
+    Effect.gen(function* () {
+      const activities: OrchestrationThread["activities"] = Array.from(
+        { length: 501 },
+        (_, index) => ({
+          id: EventId.make(`imported-${index}`),
+          kind: "approval.requested",
+          tone: "approval",
+          summary: "Historical request",
+          payload: { requestId: `request-${index}` },
+          turnId: null,
+          createdAt: NOW,
+          sequence: index + 1,
+        }),
+      );
+      const command = {
+        type: "thread.history.import" as const,
+        commandId: CommandId.make("large-import"),
+        threadId: ThreadId.make("thread-1"),
+        messages: [],
+        proposedPlans: [],
+        activities,
+        createdAt: NOW,
+      };
+      let model = makeReadModel(null);
+      const result = yield* decideOrchestrationCommand({ command, readModel: model });
+      const events = Array.isArray(result) ? result : [result];
+      for (const [index, event] of events.entries()) {
+        model = yield* projectEvent(model, { ...event, sequence: index + 1 });
+      }
+      expect(
+        model.threads[0]!.activities.some(
+          (activity) => activity.kind === "thread.history.imported",
+        ),
+      ).toBe(true);
+      expect(hasOpenBlockingRequest(model.threads[0]!)).toBe(false);
+      const repeated = yield* decideOrchestrationCommand({
+        command: { ...command, commandId: CommandId.make("large-import-again") },
+        readModel: model,
+      });
+      expect(Array.isArray(repeated) ? repeated : [repeated]).toHaveLength(502);
+    }),
+  );
+  it.effect("imports activities exactly once as history without reviving unresolved requests", () =>
+    Effect.gen(function* () {
+      const activity: OrchestrationThread["activities"][number] = {
+        id: EventId.make("old-approval"),
+        kind: "approval.requested",
+        tone: "approval",
+        summary: "Old read",
+        payload: { requestId: "reused-request" },
+        turnId: null,
+        createdAt: NOW,
+        sequence: 900,
+      };
+      const result = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.history.import",
+          commandId: CommandId.make("import-history"),
+          threadId: ThreadId.make("thread-1"),
+          messages: [],
+          proposedPlans: [],
+          activities: [activity, activity],
+          createdAt: NOW,
+        },
+        readModel: makeReadModel(null),
+      });
+      const events = Array.isArray(result) ? result : [result];
+      expect(events.map((event) => event.type)).toEqual([
+        "thread.activity-appended",
+        "thread.activity-appended",
+      ]);
+      const imported = events[1]!;
+      expect(imported.metadata.adapterKey).toBe("history-import");
+      if (imported.type !== "thread.activity-appended")
+        throw new Error("Missing imported activity");
+      expect(imported.payload.activity).toEqual(activity);
+      const marker = events[0]!;
+      if (marker.type !== "thread.activity-appended") throw new Error("Missing history marker");
+      expect(marker.payload.activity.payload).toEqual({
+        lastMessageId: null,
+        historicalActivityIds: [activity.id],
+      });
+      const streamed: OrchestrationThread["activities"][number][] = [];
+      for (const event of events) {
+        if (event.type === "thread.activity-appended") streamed.push(event.payload.activity);
+        expect(hasOpenBlockingRequest({ activities: streamed })).toBe(false);
+      }
+      expect(hasOpenBlockingRequest({ activities: [marker.payload.activity, activity] })).toBe(
+        false,
+      );
+      expect(
+        hasOpenBlockingRequest({
+          activities: [
+            marker.payload.activity,
+            activity,
+            { ...activity, id: EventId.make("new-approval") },
+          ],
+        }),
+      ).toBe(true);
+      const legacy = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.history.import",
+          commandId: CommandId.make("legacy-history"),
+          threadId: ThreadId.make("thread-1"),
+          messages: [],
+          proposedPlans: [],
+          createdAt: NOW,
+        },
+        readModel: makeReadModel(null),
+      });
+      expect(Array.isArray(legacy) ? legacy : [legacy]).toHaveLength(1);
+    }),
+  );
+  it.effect("rejects a freeze racing with an active turn using a stable code", () =>
+    Effect.gen(function* () {
+      const error = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.execution.set",
+          commandId: CommandId.make("freeze-busy"),
+          threadId: ThreadId.make("thread-1"),
+          expectedGeneration: 0,
+          execution: { status: "frozen", generation: 0, operationId: "move" },
+          createdAt: NOW,
+        },
+        readModel: makeReadModel(null, null, makeSession("running")),
+      }).pipe(Effect.flip);
+      expect(error._tag).toBe("OrchestrationCommandInvariantError");
+      expect(error).toMatchObject({ code: "execution_busy" });
     }),
   );
 });

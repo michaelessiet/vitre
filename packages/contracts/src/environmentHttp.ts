@@ -25,6 +25,7 @@ import {
   ServerAuthSessionMethod,
 } from "./auth.ts";
 import { AuthSessionId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { CloudTransferRequest, CloudTransferResult } from "./cloud.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import {
   ClientOrchestrationCommand,
@@ -53,6 +54,8 @@ const OptionalDpopProofHeaders = Schema.Struct({
 });
 
 export const EnvironmentRequestInvalidReason = Schema.Literals([
+  "execution_busy",
+  "command_rejected",
   "invalid_scope",
   "scope_not_granted",
   "invalid_command",
@@ -485,6 +488,14 @@ export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestr
       headers: OptionalBearerHeaders,
       payload: ClientOrchestrationCommand,
       success: DispatchResult,
+      error: EnvironmentOrchestrationDispatchErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("transfer", "/api/orchestration/transfer", {
+      headers: OptionalBearerHeaders,
+      payload: CloudTransferRequest,
+      success: CloudTransferResult,
       error: EnvironmentOrchestrationDispatchErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}

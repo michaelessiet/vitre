@@ -6,7 +6,14 @@
 //! the thread shell (the TS client's `mergeEnvironmentThread` split).
 
 mod branch_toolbar;
+pub(crate) mod cloud_thread;
+use cloud_thread::{CloudDraft, ThreadFeed, ThreadLocation, WorkLocation};
 mod changed_files;
+#[cfg(test)]
+mod cloud_thread_tests;
+#[cfg(debug_assertions)]
+mod cloud_thread_verification;
+mod conversation_status;
 mod diff_panel;
 mod drafts;
 mod feedback;
@@ -15,6 +22,7 @@ mod feedback_verification;
 mod file_links;
 mod git_actions;
 mod images;
+mod local_delivery;
 #[cfg(debug_assertions)]
 mod menu_verification;
 #[cfg(debug_assertions)]
@@ -29,6 +37,7 @@ mod preview;
 mod preview_automation;
 mod preview_capture;
 mod preview_recording;
+mod preview_tunnel;
 #[cfg(debug_assertions)]
 mod preview_verification;
 mod project_actions;
@@ -86,7 +95,7 @@ use gpui_component::{
 use gpui_tokio::Tokio;
 use tokio::sync::watch;
 use vitre_client::{EnvironmentClient, ShellState, SyncPhase, ThreadHandle, ThreadState};
-use vitre_contracts::ClientOrchestrationCommandThreadTurnStartMessageAttachments as TurnAttachment;
+use vitre_contracts::UploadChatAttachment as TurnAttachment;
 use vitre_contracts::methods::{AssetsCreateUrl, ProjectsSearchEntries, SubscribeServerConfig};
 use vitre_contracts::{
     ApprovalRequestId, AssetCreateUrlInput, AssetResource, ChatAttachment, ChatFileAttachment,
@@ -204,6 +213,7 @@ pub struct ChatApp {
     draft_project: Option<ProjectId>,
     draft_model: Option<ModelSelection>,
     draft_mode: Option<ProviderInteractionMode>,
+    draft_runtime_mode: RuntimeMode,
     ask_mode: bool,
     draft_creating: bool,
     draft_send_after_create: Option<ThreadId>,
@@ -217,6 +227,11 @@ pub struct ChatApp {
     project_icons: project_icons::ProjectIcons,
     welcome_orb: Entity<vitre_bezel_orbs::orbs::Orb>,
     activity_orb: Entity<vitre_bezel_orbs::orbs::Orb>,
+    status_motion: conversation_status::StatusMotion,
+    status_art_timer: Option<Task<()>>,
+    status_surface_visible: bool,
+    status_debug_key: Option<String>,
+    local_stops: HashMap<ThreadId, conversation_status::LocalStop>,
     pending_terminal_link: Option<terminal_links::TerminalLink>,
     dock_presentation_key: Option<String>,
     dock_reveal_epoch: usize,
@@ -239,6 +254,7 @@ pub struct ChatApp {
     thread: Option<OpenThread>,
     source_plan_thread: Option<SourcePlanThread>,
     composer: Entity<TextareaState>,
+    composer_max_rows: usize,
     last_error: Option<SharedString>,
     /// Immediate mode feedback while the shell-scoped event round-trips.
     pending_interaction_mode: Option<(ThreadId, ProviderInteractionMode)>,
@@ -261,6 +277,8 @@ pub struct ChatApp {
     /// The cleared composer state retained until the dispatch is acknowledged,
     /// so a transport failure can restore an untouched composer for retry.
     pending_send: Option<PendingSend>,
+    local_outbox: HashMap<ThreadId, local_delivery::LocalPendingSend>,
+    local_feed_generation: u64,
     /// Request ids with an approval / user-input response in flight.
     responding: HashSet<String>,
     /// Local draft state for the active pending user-input request.
@@ -414,6 +432,8 @@ pub struct ChatApp {
     /// `subscribeTerminalMetadata` fold: every session the environment knows,
     /// MRU-ordered (never used for tab order — see the drawer's reconcile).
     terminal_metadata: Vec<vitre_contracts::TerminalSummary>,
+    terminal_metadata_environment: Option<String>,
+    terminal_metadata_task: Option<Task<()>>,
     /// An in-flight drag on the drawer's resize handle.
     terminal_drag: Option<terminal_drawer::TerminalDrag>,
     /// Window height as of the last frame, for the drawer's height clamp
@@ -438,6 +458,28 @@ pub struct ChatApp {
     settings: Option<Entity<crate::settings::SettingsPanel>>,
     /// Live while `settings` is: closes the surface when it asks to leave.
     settings_subscription: Option<Subscription>,
+    cloud_store: Entity<crate::cloud::CloudStore>,
+    cloud_shells: Vec<OrchestrationThreadShell>,
+    cloud_shell_index: HashMap<ThreadId, usize>,
+    cloud_project_for_task: HashMap<String, ProjectId>,
+    cloud_tasks: HashMap<String, vitre_contracts::CloudTask>,
+    cloud_bindings: HashMap<ThreadId, vitre_contracts::CloudConversationBinding>,
+    cloud_switch: Option<vitre_contracts::CloudSwitchStatus>,
+    cloud_switch_task: Option<Task<()>>,
+    cloud_switch_saving: bool,
+    cloud_switch_selection: Option<WorkLocation>,
+    cloud_pending_send: Option<cloud_thread::CloudPendingSend>,
+    cloud_pending_sends: HashMap<String, cloud_thread::CloudPendingSend>,
+    cloud_stops: HashMap<String, cloud_thread::CloudStopState>,
+    cloud_transfer_generation: u64,
+    cloud_creating_project: Option<ProjectId>,
+    cloud_pending_starts: HashMap<String, cloud_thread::CloudPendingStart>,
+    cloud_diff_cache: Option<(String, Vec<vitre_state::diff_patch::PatchFile>)>,
+    draft_work_location: WorkLocation,
+    cloud_draft: CloudDraft,
+    cloud_sheet: Option<crate::cloud::Sheet>,
+    cloud_branch: Entity<gpui_component::input::InputState>,
+    cloud_issue: Entity<gpui_component::input::InputState>,
     /// The shell's own focus. Actions dispatch along the focus path, and with
     /// nothing focused gpui falls back to the window's root node — which is
     /// above this view, so the palette shortcuts would reach no handler.
@@ -494,6 +536,7 @@ struct PendingAttachment {
     is_image: bool,
 }
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct PendingSend {
     message_id: MessageId,
     raw_text: String,
@@ -555,7 +598,7 @@ enum ComposerTriggerKind {
 struct OpenThread {
     id: ThreadId,
     /// Keeps the sync task alive; dropped (aborted) on reselection.
-    _handle: ThreadHandle,
+    feed: ThreadFeed,
     state: ThreadState,
 }
 
@@ -1202,9 +1245,12 @@ pub(crate) fn now_iso() -> String {
 }
 
 pub(crate) fn fresh_id(prefix: &str) -> String {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     format!(
-        "{prefix}-{}",
-        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        "{prefix}-{}-{}-{}",
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default(),
+        std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
     )
 }
 
@@ -1337,9 +1383,25 @@ fn ask_mode_prompt(ask: bool, prompt: &str) -> String {
     )
 }
 
-fn displayed_user_prompt(prompt: &str) -> &str {
+pub(crate) fn displayed_user_prompt(prompt: &str) -> &str {
     let prefix = ask_mode_prompt(true, "");
-    prompt.strip_prefix(&prefix).unwrap_or(prompt)
+    let mut prompt = prompt;
+    // Older retry drafts could send the generated wrapper again. Normalize
+    // only our exact leading instructions; never rewrite persisted history.
+    for _ in 0..8 {
+        let Some(unwrapped) = prompt.strip_prefix(&prefix) else {
+            break;
+        };
+        prompt = unwrapped;
+    }
+    if prompt.ends_with("\n</vitre_cloud_context>") {
+        prompt
+            .split_once("\n\n<vitre_cloud_context>\n")
+            .map(|(text, _)| text)
+            .unwrap_or(prompt)
+    } else {
+        prompt
+    }
 }
 
 fn collapsed_plan_markdown(markdown: &str) -> String {
@@ -1788,6 +1850,7 @@ enum TimelineRow {
     WorkToggle(usize),
     /// Index into [`ChatApp::turn_folds`].
     TurnFold(usize),
+    #[allow(dead_code)] // Retained as a sentinel for plan-placement regression fixtures.
     Running,
 }
 
@@ -1959,6 +2022,7 @@ impl ChatApp {
         let composer = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .placeholder("Ask anything, @tag files/folders, $use skills, or / for commands")
+                .submit_on_enter(true)
                 .auto_grow(1, 8)
         });
         let input_answer = cx.new(|cx| {
@@ -2027,6 +2091,67 @@ impl ChatApp {
             },
         ));
 
+        let cloud_store = crate::cloud::CloudStore::global(cx);
+        subscriptions.push(cx.subscribe_in(
+            &cloud_store,
+            window,
+            |app, _, event: &crate::cloud::store::CloudEvent, window, cx| {
+                app.rebuild_cloud_shells(cx);
+                app.rebuild_sidebar();
+                app.sync_cloud_thread(cx);
+                app.sync_cloud_draft(window, cx);
+                app.reconcile_cloud_send(window, cx);
+                app.reconcile_cloud_start(window, cx);
+                match event {
+                    #[cfg(test)]
+                    crate::cloud::store::CloudEvent::TaskCreated(id) => {
+                        let origin = app.cloud_creating_project.take();
+                        let still_here =
+                            app.thread.is_none() && origin.is_some() && app.draft_project == origin;
+                        app.draft_creating = false;
+                        if let Some(project) = origin {
+                            if let Err(error) = app.drafts.copy_preferences(
+                                &format!("project:{}", project.0),
+                                &cloud_thread::cloud_thread_id(id).0,
+                            ) {
+                                app.runtime_notice = Some(
+                                    format!("Could not retain composer preferences: {error}")
+                                        .into(),
+                                );
+                            }
+                            if let Err(error) =
+                                app.drafts.clear_text(&format!("project:{}", project.0))
+                            {
+                                app.runtime_notice =
+                                    Some(format!("Could not clear cloud draft: {error}").into());
+                            }
+                        }
+                        if still_here {
+                            app.pending_attachments.clear();
+                            app.composer.update(cx, |s, cx| s.set_value("", window, cx));
+                            app.save_composer_draft(cx);
+                            app.select_thread(cloud_thread::cloud_thread_id(id), cx);
+                        }
+                    }
+                    crate::cloud::store::CloudEvent::Changed => {}
+                }
+                cx.notify();
+            },
+        ));
+        subscriptions.push(cx.observe(&cloud_store, |_, _, cx| cx.notify()));
+        let cloud_branch =
+            cx.new(|cx| gpui_component::input::InputState::new(window, cx).placeholder("branch"));
+        let cloud_issue =
+            cx.new(|cx| gpui_component::input::InputState::new(window, cx).placeholder("Issue #"));
+
+        for input in [&cloud_branch, &cloud_issue] {
+            subscriptions.push(cx.subscribe(input, |app, _, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Change) {
+                    app.schedule_draft_save(cx);
+                    cx.notify();
+                }
+            }));
+        }
         // Sidecar status line for the footer.
         cx.spawn({
             let mut status_rx = status_rx.clone();
@@ -2082,6 +2207,12 @@ impl ChatApp {
                             settings
                                 .update(cx, |panel, cx| panel.attach_client(client.clone(), cx));
                         }
+                        // The cloud store probes the saved session as soon as the
+                        // sidecar is up, so cloud conversations appear in the
+                        // shared sidebar before anyone opens them.
+                        let store = crate::cloud::CloudStore::global(cx);
+                        cx.observe(&store, |_, _, cx| cx.notify()).detach();
+                        store.update(cx, |store, cx| store.attach(client, cx));
                         app.spawn_terminal_metadata_loop(cx);
                         app.spawn_server_keymap_loop(cx);
                         cx.notify();
@@ -2095,6 +2226,7 @@ impl ChatApp {
                     if this
                         .update(cx, |app, cx| {
                             app.shell = state;
+                            app.rebuild_cloud_shells(cx);
                             if let Some((thread_id, pending)) = &app.pending_interaction_mode
                                 && app.shell_thread(thread_id).is_some_and(|thread| {
                                     thread
@@ -2145,6 +2277,12 @@ impl ChatApp {
                 .unwrap_or_else(|| this.focus_handle.clone());
             window.focus(&handle, cx);
         }));
+        subscriptions.push(
+            cx.observe_window_activation(window, |app: &mut Self, window, cx| {
+                app.sync_status_motion(window, cx);
+                cx.notify();
+            }),
+        );
         subscriptions.push(cx.observe_global::<ClientSettings>(|_: &mut Self, cx| cx.notify()));
         cx.on_app_quit(move |app, cx| {
             app.save_composer_draft(cx);
@@ -2159,6 +2297,7 @@ impl ChatApp {
             draft_project: None,
             draft_model: None,
             draft_mode: None,
+            draft_runtime_mode: RuntimeMode::FullAccess,
             ask_mode: false,
             draft_creating: false,
             draft_send_after_create: None,
@@ -2171,6 +2310,11 @@ impl ChatApp {
             search_panels: HashMap::new(),
             project_icons: project_icons::ProjectIcons::default(),
             activity_orb: polish::activity_orb(cx),
+            status_motion: conversation_status::StatusMotion::default(),
+            status_art_timer: None,
+            status_surface_visible: false,
+            status_debug_key: None,
+            local_stops: HashMap::new(),
             pending_terminal_link: None,
             dock_presentation_key: None,
             dock_reveal_epoch: 0,
@@ -2187,6 +2331,7 @@ impl ChatApp {
             thread: None,
             source_plan_thread: None,
             composer,
+            composer_max_rows: 8,
             last_error: None,
             pending_interaction_mode: None,
             local_dispatch: None,
@@ -2197,6 +2342,8 @@ impl ChatApp {
             plan_markdown: HashMap::new(),
             smoothing_tick: None,
             pending_send: None,
+            local_outbox: HashMap::new(),
+            local_feed_generation: 0,
             responding: HashSet::new(),
             input_draft: None,
             input_answer,
@@ -2262,6 +2409,8 @@ impl ChatApp {
             terminal_views: HashMap::new(),
             terminal_view_subs: HashMap::new(),
             terminal_metadata: Vec::new(),
+            terminal_metadata_environment: None,
+            terminal_metadata_task: None,
             terminal_drag: None,
             viewport_height: 720.,
             right_panel_maximized: false,
@@ -2272,6 +2421,28 @@ impl ChatApp {
             command_palette: None,
             settings: None,
             settings_subscription: None,
+            cloud_store,
+            cloud_pending_send: None,
+            cloud_pending_sends: HashMap::new(),
+            cloud_stops: HashMap::new(),
+            cloud_transfer_generation: 0,
+            cloud_creating_project: None,
+            cloud_pending_starts: HashMap::new(),
+            cloud_diff_cache: None,
+            cloud_shells: Vec::new(),
+            cloud_shell_index: HashMap::new(),
+            cloud_project_for_task: HashMap::new(),
+            cloud_tasks: HashMap::new(),
+            cloud_bindings: HashMap::new(),
+            cloud_switch: None,
+            cloud_switch_task: None,
+            cloud_switch_saving: false,
+            cloud_switch_selection: None,
+            draft_work_location: WorkLocation::Local,
+            cloud_draft: CloudDraft::default(),
+            cloud_sheet: None,
+            cloud_branch,
+            cloud_issue,
             focus_handle,
             _subscriptions: subscriptions,
         }
@@ -2462,7 +2633,7 @@ impl ChatApp {
         }
         let search = QuickSearch::open(
             mode,
-            self.client.clone(),
+            self.workspace_client(),
             self.search_root(),
             self.shell_threads(),
             self.shell
@@ -2677,7 +2848,8 @@ impl ChatApp {
                 );
                 if let Some(panel) = self
                     .search_root()
-                    .and_then(|r| self.graph_panels.get(&r).cloned())
+                    .and_then(|r| self.workspace_cache_key(&r))
+                    .and_then(|key| self.graph_panels.get(&key).cloned())
                 {
                     panel.update(cx, |panel, cx| panel.build(cx));
                 }
@@ -2708,18 +2880,30 @@ impl ChatApp {
     fn ensure_files_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         /// How many background roots to keep warm (each holds a watch loop).
         const FILES_CACHE_ROOTS: usize = 4;
-        let (Some(client), Some(cwd)) = (self.client.clone(), self.file_viewer_root()) else {
+        let Some(cwd) = self.file_viewer_root() else {
+            return;
+        };
+        let resolving = self
+            .cloud_switch
+            .as_ref()
+            .and_then(|status| status.conflict_roots.as_ref())
+            .is_some_and(|roots| roots.iter().any(|root| root.path == cwd));
+        let Some(client) = (if resolving {
+            self.client.clone()
+        } else {
+            self.workspace_client()
+        }) else {
             return;
         };
         if self
             .files
             .as_ref()
-            .is_some_and(|panel| panel.read(cx).cwd() == cwd)
+            .is_some_and(|panel| panel.read(cx).cwd() == cwd && panel.read(cx).uses_client(&client))
         {
             return;
         }
         if let Some(previous) = self.files.take() {
-            let previous_cwd = previous.read(cx).cwd().to_string();
+            let previous_cwd = previous.read(cx).cache_key();
             self.files_cache.retain(|(key, _)| key != &previous_cwd);
             self.files_cache.push((previous_cwd, previous));
             if self.files_cache.len() > FILES_CACHE_ROOTS {
@@ -2737,7 +2921,7 @@ impl ChatApp {
         let revived = self
             .files_cache
             .iter()
-            .position(|(key, _)| key == &cwd)
+            .position(|(key, _)| Some(key) == self.workspace_cache_key(&cwd).as_ref())
             .map(|index| self.files_cache.remove(index).1);
         let panel = match revived {
             Some(panel) => {
@@ -2746,6 +2930,15 @@ impl ChatApp {
             }
             None => cx.new(|cx| FilesPanel::new(client, cwd, window, cx)),
         };
+        panel.update(cx, |panel, cx| {
+            panel.set_remote(self.is_cloud_thread() && !resolving);
+            panel.set_asset_thread(if resolving {
+                None
+            } else {
+                self.execution_thread_id()
+            });
+            panel.set_transfer_locked(self.location_switch_blocks_turn() && !resolving, cx);
+        });
         self.files_review_subscription = Some(cx.subscribe_in(
             &panel,
             window,
@@ -2777,7 +2970,7 @@ impl ChatApp {
     /// Runs per frame while the diff surface is active, so both steps are
     /// change-guarded.
     fn ensure_diff_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (Some(client), Some(key)) = (self.client.clone(), self.dock_thread_key()) else {
+        let (Some(client), Some(key)) = (self.workspace_client(), self.dock_thread_key()) else {
             return;
         };
         let Some(cwd) = self.search_root() else {
@@ -2785,7 +2978,7 @@ impl ChatApp {
         };
         let stale = self.diff.as_ref().is_none_or(|panel| {
             let panel = panel.read(cx);
-            panel.thread_key() != key || panel.cwd() != cwd
+            panel.thread_key() != key || panel.cwd() != cwd || !panel.uses_client(&client)
         });
         if stale {
             let thread_id = self.thread.as_ref().map(|open| open.id.clone());
@@ -2887,22 +3080,39 @@ impl ChatApp {
             interaction_mode: self.draft_mode.clone().map(Some),
             model_selection,
             project_id: project_id.clone(),
-            runtime_mode: RuntimeMode::FullAccess,
+            runtime_mode: self.draft_runtime_mode.clone(),
             thread_id: thread_id.clone(),
             title: tnes("New thread"),
             r#type: Default::default(),
             worktree_path: None,
         };
         self.last_error = None;
+        // The first turn's input must survive even if creation succeeds but its
+        // response is lost. Keep the origin until the target draft is durable.
+        let origin_saved = self.drafts.save_confirmed(&draft_key, &draft);
+        let target_saved = self.drafts.save_confirmed(&thread_id.0, &draft);
         cx.spawn_in(window, async move |this, cx| {
+            let saved = async {
+                origin_saved.await.map_err(|error| error.to_string())??;
+                target_saved.await.map_err(|error| error.to_string())??;
+                Ok::<(), String>(())
+            }
+            .await;
+            if let Err(error) = saved {
+                let _ = this.update_in(cx, |app, window, cx| {
+                    app.draft_creating = false;
+                    window.push_notification(
+                        Notification::error(format!("Could not save draft: {error}")),
+                        cx,
+                    );
+                    cx.notify();
+                });
+                return;
+            }
             match client.dispatch(&command).await {
                 Ok(_) => {
                     let _ = this.update(cx, |app, cx| {
                         app.draft_creating = false;
-                        if let Err(error) = app.drafts.save(&thread_id.0, &draft) {
-                            app.runtime_notice =
-                                Some(format!("Could not save draft: {error}").into());
-                        }
                         // A thread selection made during creation must not be
                         // stolen by this async completion or start a surprise turn.
                         if app.thread.is_some() || app.draft_project.as_ref() != Some(&project_id) {
@@ -2938,7 +3148,7 @@ impl ChatApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let (Some(client), Some(open)) = (self.client.clone(), self.thread.as_ref()) else {
+        let (Some(_client), Some(open)) = (self.client.clone(), self.thread.as_ref()) else {
             return;
         };
         let Some(shell) = self.shell_thread(&open.id).cloned() else {
@@ -2989,56 +3199,29 @@ impl ChatApp {
                 )),
             },
             model_selection: None,
-            runtime_mode,
+            runtime_mode: runtime_mode.clone(),
             source_proposed_plan: Some(Some(
                 vitre_contracts::ClientOrchestrationCommandThreadTurnStartSourceProposedPlan {
                     plan_id: tnes(plan.id),
-                    thread_id: source_thread_id,
+                    thread_id: source_thread_id.clone(),
                 },
             )),
             thread_id: thread_id.clone(),
             title_seed: None,
             r#type: Default::default(),
         };
-        cx.spawn_in(window, async move |this, cx| {
-            let mut created = false;
-            let result = async {
-                client.dispatch(&create).await?;
-                created = true;
-                client.dispatch(&turn).await
-            }
-            .await;
-            let _ = this.update(cx, |app, cx| { app.responding.remove(&operation); cx.notify(); });
-            match result {
-                Ok(_) => {
-                    let _ = this.update_in(cx, |app, window, cx| {
-                        app.select_thread(thread_id, cx);
-                        app.open_workspace_surface(
-                            vitre_state::right_panel::SurfaceKind::Plan,
-                            window,
-                            cx,
-                        );
-                    });
-                }
-                Err(error) => {
-                    let _ = this.update_in(cx, |app, window, cx| {
-                        let owner = cx.entity().downgrade();
-                        let target = thread_id.clone();
-                        window.push_notification(
-                            Notification::error(format!(
-                                "{}: {}",
-                                if created { "The new thread was created, but starting the plan was not confirmed. Click to inspect it before retrying" } else { "Could not create a thread for this plan" }, error.user_message()
-                            )).on_click(move |_, _, cx| {
-                                if created { let _ = owner.update(cx, |app, cx| app.select_thread(target.clone(), cx)); }
-                            }),
-                            cx,
-                        );
-                        app.responding.remove(&operation);
-                    });
-                }
-            }
-        })
-        .detach();
+        let pending = local_delivery::LocalPendingSend::for_plan(create, turn);
+        let draft = drafts::ComposerDraft::for_local_plan(
+            pending.clone(),
+            shell.model_selection,
+            runtime_mode,
+        );
+        self.queue_local_delivery(pending, draft, window, cx);
+        self.responding.remove(&operation);
+        // Selection is the immediate user action. No delayed response may navigate later.
+        self.select_thread(thread_id, cx);
+        self.open_workspace_surface(vitre_state::right_panel::SurfaceKind::Plan, window, cx);
+        cx.notify();
     }
 
     /// Consume the `VITRE_OPEN_THREAD` hook once its thread shows up in the
@@ -3065,15 +3248,29 @@ impl ChatApp {
     }
 
     fn select_thread(&mut self, id: ThreadId, cx: &mut Context<Self>) {
-        if self.thread.as_ref().is_some_and(|open| open.id == id) {
+        let id = self
+            .cloud_bindings
+            .get(&id)
+            .map(|binding| ThreadId(binding.local_thread_id.clone()))
+            .unwrap_or(id);
+        let location = self.thread_location(&id);
+        if self.thread.as_ref().is_some_and(|open| open.id == id)
+            && self.open_location() == location
+        {
             return;
         }
-        let Some(client) = self.client.clone() else {
+        let cloud = location.is_cloud();
+        if !cloud && self.client.is_none() {
             return;
-        };
-        let handle = client.open_thread(id.clone());
-        let mut state_rx = handle.state();
+        }
+        if self.is_cloud_thread() {
+            self.cloud_store
+                .update(cx, |store, cx| store.watch(None, cx));
+        }
         self.save_composer_draft(cx);
+        self.cloud_switch = None;
+        self.cloud_switch_selection = None;
+        self.watch_location_switch(id.clone(), cx);
         self.draft_project = None;
         self.draft_restore = Some(self.drafts.load(&id.0));
         self.input_draft = None;
@@ -3090,6 +3287,7 @@ impl ChatApp {
         self.smoothed_assistant_text.clear();
         self.smoothing_tick = None;
         self.pending_send = None;
+        self.cloud_pending_send = None;
         self.pending_revert = None;
         self.pending_interaction_mode = None;
         self.pending_timeline_anchor = None;
@@ -3109,9 +3307,22 @@ impl ChatApp {
         self.terminal_views.clear();
         self.terminal_view_subs.clear();
         self.terminal_drag = None;
+        if cloud {
+            self.open_cloud_thread(id, cx);
+            self.sync_thread_visit();
+            self.rebuild_sidebar();
+            self.sync_git_status(cx);
+            self.sync_branch_toolbar(cx);
+            cx.notify();
+            return;
+        }
+        self.local_feed_generation = self.local_feed_generation.wrapping_add(1);
+        let feed_generation = self.local_feed_generation;
+        let handle = self.client.as_ref().unwrap().open_thread(id.clone());
+        let mut state_rx = handle.state();
         self.thread = Some(OpenThread {
             id: id.clone(),
-            _handle: handle,
+            feed: ThreadFeed::Local { _handle: handle },
             state: ThreadState::default(),
         });
         // Opening a thread clears its unread completion and re-pins it in its
@@ -3129,7 +3340,11 @@ impl ChatApp {
                 let state = state_rx.borrow_and_update().clone();
                 let stop = this
                     .update(cx, |app, cx| {
-                        if app.thread.as_ref().is_none_or(|open| open.id != id) {
+                        if app.local_feed_generation != feed_generation
+                            || app.thread.as_ref().is_none_or(|open| {
+                                open.id != id || !matches!(open.feed, ThreadFeed::Local { .. })
+                            })
+                        {
                             return true;
                         }
                         if let Some(open) = &mut app.thread {
@@ -3153,10 +3368,10 @@ impl ChatApp {
         cx.notify();
     }
 
-    /// Drop the open thread and return to the home view — Electron's
-    /// navigate-to-`/` after deleting the last thread of a project. The same
-    /// per-thread teardown as `select_thread`, with nothing opened after.
     fn sync_source_plan_thread(&mut self, cx: &mut Context<Self>) {
+        if self.is_cloud_thread() {
+            return;
+        }
         let source = self
             .thread
             .as_ref()
@@ -3268,6 +3483,14 @@ impl ChatApp {
     /// navigate-to-`/` after deleting the last thread of a project. The same
     /// per-thread teardown as `select_thread`, with nothing opened after.
     fn close_open_thread(&mut self, cx: &mut Context<Self>) {
+        self.cloud_switch_task = None;
+        self.cloud_switch = None;
+        self.cloud_switch_selection = None;
+        self.cloud_switch_saving = false;
+        if self.is_cloud_thread() {
+            self.cloud_store
+                .update(cx, |store, cx| store.watch(None, cx));
+        }
         if self.thread.is_none() {
             return;
         }
@@ -3287,6 +3510,7 @@ impl ChatApp {
         self.smoothed_assistant_text.clear();
         self.smoothing_tick = None;
         self.pending_send = None;
+        self.cloud_pending_send = None;
         self.pending_revert = None;
         self.pending_timeline_anchor = None;
         self.expanded_user_messages.clear();
@@ -3307,6 +3531,19 @@ impl ChatApp {
     }
 
     fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.location_switch_blocks_turn() {
+            self.last_error = Some("This conversation is moving. Your draft is saved.".into());
+            cx.notify();
+            return;
+        }
+        if self.is_cloud_thread() {
+            self.send_cloud(window, cx);
+            return;
+        }
+        if self.thread.is_none() && self.draft_work_location.is_cloud() {
+            self.create_cloud_task(window, cx);
+            return;
+        }
         if self.thread.is_none() {
             if !self.composer.read(cx).value().trim().is_empty()
                 || !self.pending_attachments.is_empty()
@@ -3315,15 +3552,15 @@ impl ChatApp {
             }
             return;
         }
+        if !self.conversation_status(cx).can_send {
+            return;
+        }
         // Electron disables the primary action while a local dispatch awaits
         // projection acknowledgment. This also prevents two optimistic rows
         // from competing for the single retry snapshot.
         if self.local_dispatch.is_some() {
             return;
         }
-        let Some(client) = self.client.clone() else {
-            return;
-        };
         let Some(open) = &self.thread else {
             return;
         };
@@ -3334,8 +3571,9 @@ impl ChatApp {
         // While an approval or user-input request is pending, the composer's
         // primary action belongs to that request — don't start a new turn.
         // (Custom free-text answers are a post-parity iteration.)
-        if !derive_pending_approvals(&view.activities).is_empty()
-            || !derive_pending_user_inputs(&view.activities).is_empty()
+        let request_activities = conversation_status::current_request_activities(&view);
+        if !derive_pending_approvals(&request_activities).is_empty()
+            || !derive_pending_user_inputs(&request_activities).is_empty()
         {
             return;
         }
@@ -3510,7 +3748,6 @@ impl ChatApp {
         self.pending_timeline_anchor = Some(message_id.clone());
         self.rebuild_timeline(cx);
 
-        let implementing_plan = source_proposed_plan.is_some();
         let command = ClientOrchestrationCommand::ThreadTurnStart {
             bootstrap: None,
             command_id: CommandId(fresh_id("vitre-cmd")),
@@ -3525,127 +3762,85 @@ impl ChatApp {
             model_selection: None,
             runtime_mode: view.runtime_mode.clone(),
             source_proposed_plan,
-            thread_id,
+            thread_id: thread_id.clone(),
             title_seed: None,
             r#type: Default::default(),
         };
-        cx.spawn_in(window, async move |this, cx| {
-            match client.dispatch(&command).await {
-                Ok(_) if implementing_plan => {
-                    let _ = this.update_in(cx, |app, window, cx| {
-                        app.open_workspace_surface(
-                            vitre_state::right_panel::SurfaceKind::Plan,
-                            window,
-                            cx,
-                        );
-                    });
-                }
-                Ok(_) => {}
-                Err(error) => {
-                    let _ = this.update_in(cx, |app, window, cx| {
-                        app.rollback_send(&message_id, window, cx);
-                        app.last_error =
-                            Some(format!("send failed: {}", error.user_message()).into());
-                        cx.notify();
-                    });
-                }
-            }
-        })
-        .detach();
+        self.begin_local_delivery(thread_id, command, window, cx);
         cx.notify();
     }
 
-    /// Remove server-acknowledged optimistic rows and release the local busy
-    /// state. Called on every detail-projection update before timeline derive.
-    fn reconcile_local_dispatch(&mut self) {
-        let Some(view) = self
-            .thread
-            .as_ref()
-            .and_then(|open| open.state.view.as_ref())
-            .cloned()
-        else {
-            return;
-        };
-        let server_ids: HashSet<MessageId> = view
-            .messages
-            .iter()
-            .map(|message| message.id.clone())
-            .collect();
-        self.optimistic_user_messages
-            .retain(|message| !server_ids.contains(&message.id));
-
-        let acknowledged = self.local_dispatch.as_ref().is_some_and(|snapshot| {
-            snapshot.is_acknowledged(
-                &view,
-                !derive_pending_approvals(&view.activities).is_empty(),
-                !derive_pending_user_inputs(&view.activities).is_empty(),
-                view.session
-                    .as_ref()
-                    .and_then(|session| session.last_error.as_ref())
-                    .is_some(),
-            )
-        });
-        if acknowledged {
-            self.local_dispatch = None;
-            self.pending_send = None;
-        }
-    }
-
-    fn rollback_send(
-        &mut self,
-        message_id: &MessageId,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.local_dispatch = None;
-        self.optimistic_user_messages
-            .retain(|message| &message.id != message_id);
-        let Some(pending) = self
-            .pending_send
-            .take()
-            .filter(|pending| &pending.message_id == message_id)
-        else {
-            self.rebuild_timeline(cx);
-            return;
-        };
-        // Match Electron's retry guard: never overwrite anything the user
-        // already typed or attached while the request was in flight.
-        if self.composer.read(cx).value().is_empty()
-            && self.pending_attachments.is_empty()
-            && self.pending_review_comments.is_empty()
-            && self.pending_terminal_contexts.is_empty()
-        {
-            self.composer.update(cx, |input, cx| {
-                input.set_value(pending.raw_text, window, cx)
-            });
-            self.pending_attachments = pending.attachments;
-            self.pending_review_comments = pending.review_comments;
-            self.pending_terminal_contexts = pending.terminal_contexts;
-        }
-        self.rebuild_timeline(cx);
-    }
-
     fn stop_turn(&mut self, cx: &mut Context<Self>) {
-        let Some(client) = self.client.clone() else {
+        if self.is_cloud_thread() {
+            self.cancel_cloud_task(cx);
+            return;
+        }
+        let Some(client) = self.workspace_client() else {
             return;
         };
         let Some(open) = &self.thread else {
             return;
         };
+        let Some(turn) = open
+            .state
+            .view
+            .as_ref()
+            .and_then(|view| view.latest_turn.as_ref())
+            .filter(|turn| turn.state == OrchestrationLatestTurnState::Running)
+            .map(|turn| turn.turn_id.clone())
+        else {
+            return;
+        };
+        let thread_id = open.id.clone();
+        if self
+            .local_stops
+            .get(&thread_id)
+            .is_some_and(|stop| stop.turn_id == turn)
+        {
+            return;
+        }
+        let command_id = CommandId(fresh_id("vitre-stop"));
+        self.local_stops.insert(
+            thread_id.clone(),
+            conversation_status::LocalStop {
+                turn_id: turn.clone(),
+                command_id: command_id.clone(),
+                acknowledged: false,
+                error: None,
+            },
+        );
         let command = ClientOrchestrationCommand::ThreadTurnInterrupt {
-            command_id: CommandId(fresh_id("vitre-cmd")),
+            command_id: command_id.clone(),
             created_at: tnes(now_iso()),
-            thread_id: open.id.clone(),
-            turn_id: None,
+            thread_id: thread_id.clone(),
+            turn_id: Some(Some(turn.clone())),
             r#type: Default::default(),
         };
+        cx.notify();
         cx.spawn(async move |this, cx| {
-            if let Err(error) = client.dispatch(&command).await {
-                let _ = this.update(cx, |app, cx| {
-                    app.last_error = Some(format!("stop failed: {error:?}").into());
+            let result = client.dispatch(&command).await;
+            let _ = this.update(cx, |app, cx| {
+                let rejected = result
+                    .as_ref()
+                    .err()
+                    .is_some_and(local_delivery::rejected_error);
+                if let Some(stop) = app.local_stops.get_mut(&thread_id)
+                    && stop.command_id == command_id
+                    && stop.turn_id == turn
+                {
+                    match result {
+                        Ok(_) => stop.acknowledged = true,
+                        Err(error) => stop.error = Some(error.user_message()),
+                    }
+                    if rejected {
+                        if app.thread.as_ref().is_some_and(|open| open.id == thread_id) {
+                            app.last_error = stop.error.clone().map(Into::into);
+                        }
+                        app.local_stops.remove(&thread_id);
+                    }
                     cx.notify();
-                });
-            }
+                }
+            });
         })
         .detach();
     }
@@ -3658,18 +3853,24 @@ impl ChatApp {
         command: ClientOrchestrationCommand,
         cx: &mut Context<Self>,
     ) {
+        if !self.conversation_status(cx).can_respond {
+            return;
+        }
         let Some(client) = self.client.clone() else {
             return;
         };
         if !self.responding.insert(request_id.clone()) {
             return;
         }
+        let originating_thread = self.thread.as_ref().map(|open| open.id.clone());
         self.last_error = None;
         cx.spawn(async move |this, cx| {
             let result = client.dispatch(&command).await;
             let _ = this.update(cx, |app, cx| {
                 app.responding.remove(&request_id);
-                if let Err(error) = result {
+                if let Err(error) = result
+                    && app.thread.as_ref().map(|open| &open.id) == originating_thread.as_ref()
+                {
                     app.last_error = Some(format!("response failed: {error:?}").into());
                 }
                 cx.notify();
@@ -3688,6 +3889,15 @@ impl ChatApp {
         let Some(open) = &self.thread else {
             return;
         };
+        if !self.conversation_status(cx).can_respond {
+            return;
+        }
+        if let Some(task_id) = self.open_cloud_task_id() {
+            self.cloud_store.update(cx, |store, cx| {
+                store.respond_approval(task_id, request_id, decision, cx)
+            });
+            return;
+        }
         let command = ClientOrchestrationCommand::ThreadApprovalRespond {
             command_id: CommandId(fresh_id("vitre-cmd")),
             created_at: tnes(now_iso()),
@@ -3702,7 +3912,7 @@ impl ChatApp {
     /// The front pending user-input request (the one the panel shows).
     fn active_pending_user_input(&self) -> Option<PendingUserInput> {
         let view = self.thread.as_ref()?.state.view.as_ref()?;
-        derive_pending_user_inputs(&view.activities)
+        derive_pending_user_inputs(&conversation_status::current_request_activities(view))
             .into_iter()
             .next()
     }
@@ -3811,6 +4021,15 @@ impl ChatApp {
             };
             answers.insert(question.id.clone(), value);
         }
+        if !self.conversation_status(cx).can_respond {
+            return;
+        }
+        if let Some(task_id) = self.open_cloud_task_id() {
+            self.cloud_store.update(cx, |store, cx| {
+                store.respond_user_input(task_id, pending.request_id, answers, cx)
+            });
+            return;
+        }
         let command = ClientOrchestrationCommand::ThreadUserInputRespond {
             answers,
             command_id: CommandId(fresh_id("vitre-cmd")),
@@ -3850,6 +4069,9 @@ impl ChatApp {
         turn_count: i64,
         cx: &mut Context<Self>,
     ) {
+        if self.location_switch_pending() {
+            return;
+        }
         if self.reverting {
             return;
         }
@@ -3859,7 +4081,7 @@ impl ChatApp {
             return;
         }
         self.pending_revert = None;
-        let Some(client) = self.client.clone() else {
+        let Some(client) = self.workspace_client() else {
             return;
         };
         let Some(open) = &self.thread else {
@@ -3880,7 +4102,9 @@ impl ChatApp {
         let command = ClientOrchestrationCommand::ThreadCheckpointRevert {
             command_id: CommandId(fresh_id("vitre-cmd")),
             created_at: tnes(now_iso()),
-            thread_id: open.id.clone(),
+            thread_id: self
+                .execution_thread_id()
+                .unwrap_or_else(|| open.id.clone()),
             turn_count: NonNegativeInt(turn_count),
             r#type: Default::default(),
         };
@@ -3907,6 +4131,13 @@ impl ChatApp {
             .iter()
             .flat_map(|snapshot| snapshot.threads.iter())
             .filter(|thread| {
+                !self.cloud_shell_index.contains_key(&thread.id)
+                    && !self.cloud_bindings.get(&thread.id).is_some_and(|binding| {
+                        binding.target != vitre_contracts::CloudExecutionTarget::Local
+                    })
+            })
+            .chain(self.cloud_shells.iter())
+            .filter(|thread| {
                 // archived_at: triple Option — only Some(Some(Some(_))) is set.
                 !matches!(&thread.archived_at, Some(Some(Some(_))))
             })
@@ -3919,10 +4150,22 @@ impl ChatApp {
     /// The SHELL's copy of a thread — canonical for title/meta (meta events
     /// are shell-scoped, so the detail projection never sees them).
     fn shell_thread(&self, id: &ThreadId) -> Option<&OrchestrationThreadShell> {
+        if let Some(shell) = self
+            .cloud_shell_index
+            .get(id)
+            .and_then(|i| self.cloud_shells.get(*i))
+        {
+            return Some(shell);
+        }
         self.shell
             .snapshot
             .as_ref()
             .and_then(|snapshot| snapshot.threads.iter().find(|thread| thread.id == *id))
+            .or_else(|| {
+                self.cloud_shell_index
+                    .get(id)
+                    .and_then(|i| self.cloud_shells.get(*i))
+            })
     }
 
     /// Canonical title comes from the SHELL (meta events are shell-scoped).
@@ -3936,13 +4179,16 @@ impl ChatApp {
     /// lazily on next turn start; persisting immediately is equivalent for the
     /// thread's stored selection and keeps the picker stateless.
     fn set_model(&mut self, selection: ModelSelection, cx: &mut Context<Self>) {
+        if self.location_switch_blocks_turn() {
+            return;
+        }
         if self.thread.is_none() {
             self.draft_model = Some(selection);
             self.schedule_draft_save(cx);
             cx.notify();
             return;
         }
-        let Some(client) = self.client.clone() else {
+        let Some(client) = self.workspace_client() else {
             return;
         };
         let Some(open) = &self.thread else {
@@ -3987,13 +4233,25 @@ impl ChatApp {
             cx.notify();
             return;
         }
+        if self.is_cloud_thread()
+            && current
+                .and_then(model_selection_identity)
+                .map(|value| value.0)
+                != model_selection_identity(&selection).map(|value| value.0)
+        {
+            self.last_error = Some("Changing provider requires a new conversation.".into());
+            cx.notify();
+            return;
+        }
         let command = ClientOrchestrationCommand::ThreadMetaUpdate {
             additional_roots: None,
             branch: None,
             command_id: CommandId(fresh_id("vitre-cmd")),
             expected_branch: None,
             model_selection: Some(Some(selection)),
-            thread_id: open.id.clone(),
+            thread_id: self
+                .execution_thread_id()
+                .unwrap_or_else(|| open.id.clone()),
             title: None,
             r#type: Default::default(),
             worktree_path: None,
@@ -4016,6 +4274,9 @@ impl ChatApp {
         value: serde_json::Value,
         cx: &mut Context<Self>,
     ) {
+        if self.location_switch_blocks_turn() {
+            return;
+        }
         let selection = if let Some(open) = &self.thread {
             self.shell_thread(&open.id)
                 .map(|thread| thread.model_selection.clone())
@@ -4067,6 +4328,9 @@ impl ChatApp {
     }
 
     fn open_model_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.location_switch_blocks_turn() {
+            return;
+        }
         if self.model_picker.take().is_some() {
             self.composer.focus_handle(cx).focus(window, cx);
             cx.notify();
@@ -4160,13 +4424,19 @@ impl ChatApp {
         interaction_mode: ProviderInteractionMode,
         cx: &mut Context<Self>,
     ) {
+        if self.location_switch_blocks_turn() {
+            return;
+        }
+        self.ask_mode = false;
+        self.schedule_draft_save(cx);
+        cx.notify();
         if self.thread.is_none() {
             self.draft_mode = Some(interaction_mode);
             self.schedule_draft_save(cx);
             cx.notify();
             return;
         }
-        let (Some(client), Some(open)) = (self.client.clone(), self.thread.as_ref()) else {
+        let (Some(client), Some(open)) = (self.workspace_client(), self.thread.as_ref()) else {
             return;
         };
         // Serialize mode writes until the shell acknowledges the last click.
@@ -4180,7 +4450,9 @@ impl ChatApp {
             command_id: CommandId(fresh_id("vitre-cmd")),
             created_at: tnes(now_iso()),
             interaction_mode: interaction_mode.clone(),
-            thread_id: open.id.clone(),
+            thread_id: self
+                .execution_thread_id()
+                .unwrap_or_else(|| open.id.clone()),
             r#type: Default::default(),
         };
         self.pending_interaction_mode = Some((open.id.clone(), interaction_mode.clone()));
@@ -4206,6 +4478,9 @@ impl ChatApp {
     }
 
     fn set_ask_mode(&mut self, cx: &mut Context<Self>) {
+        if self.location_switch_blocks_turn() {
+            return;
+        }
         self.set_interaction_mode(ProviderInteractionMode::Default, cx);
         self.ask_mode = true;
         self.schedule_draft_save(cx);
@@ -4213,20 +4488,39 @@ impl ChatApp {
     }
 
     fn set_runtime_mode(&mut self, runtime_mode: RuntimeMode, cx: &mut Context<Self>) {
-        let (Some(client), Some(open)) = (self.client.clone(), self.thread.as_ref()) else {
+        if self.thread.is_none() {
+            self.draft_runtime_mode = runtime_mode;
+            self.schedule_draft_save(cx);
+            cx.notify();
+            return;
+        }
+        if self.location_switch_blocks_turn() {
+            return;
+        }
+        let (Some(client), Some(open)) = (self.workspace_client(), self.thread.as_ref()) else {
             return;
         };
+        let selected_thread = open.id.clone();
         let command = ClientOrchestrationCommand::ThreadRuntimeModeSet {
             command_id: CommandId(fresh_id("vitre-cmd")),
             created_at: tnes(now_iso()),
             runtime_mode,
-            thread_id: open.id.clone(),
+            thread_id: self
+                .execution_thread_id()
+                .unwrap_or_else(|| open.id.clone()),
             r#type: Default::default(),
         };
         self.last_error = None;
         cx.spawn(async move |this, cx| {
             if let Err(error) = client.dispatch(&command).await {
                 let _ = this.update(cx, |app, cx| {
+                    if app
+                        .thread
+                        .as_ref()
+                        .is_none_or(|open| open.id != selected_thread)
+                    {
+                        return;
+                    }
                     app.last_error = Some(
                         format!("runtime mode change failed: {}", error.user_message()).into(),
                     );
@@ -4241,6 +4535,9 @@ impl ChatApp {
     /// project's workspace root. This is the thread-scoped cwd: the composer's
     /// `@`-mention search runs here, as Electron's does.
     fn open_project_root(&self) -> Option<String> {
+        if self.is_cloud_thread() {
+            return self.remote_workspace_roots().into_iter().next();
+        }
         let open = self.thread.as_ref()?;
         let thread = self.shell_thread(&open.id)?;
         // A worktree thread searches its checkout, not the project's main
@@ -4270,6 +4567,11 @@ impl ChatApp {
     /// files from the home view, where no thread is selected. Without the
     /// last step the file corpus is silently empty there.
     fn search_root(&self) -> Option<String> {
+        if self.is_cloud_thread() {
+            return self
+                .selected_workspace_root()
+                .or_else(|| self.open_project_root());
+        }
         self.selected_workspace_root()
             .or_else(|| self.open_project_root())
             .or_else(|| {
@@ -4327,7 +4629,7 @@ impl ChatApp {
         if query.is_empty() {
             return;
         }
-        let (Some(client), Some(cwd)) = (self.client.clone(), self.search_root()) else {
+        let (Some(client), Some(cwd)) = (self.workspace_client(), self.search_root()) else {
             return;
         };
         let payload = ProjectSearchEntriesInput {
@@ -4356,6 +4658,10 @@ impl ChatApp {
     }
 
     fn sync_composer_menu(&mut self, cx: &mut Context<Self>) {
+        if self.is_cloud_thread() || self.thread.is_none() && self.draft_work_location.is_cloud() {
+            self.composer_menu = None;
+            return;
+        }
         let (value, cursor) = {
             let state = self.composer.read(cx);
             (state.value(), state.cursor())
@@ -4740,6 +5046,9 @@ impl ChatApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.is_cloud_thread() || self.thread.is_none() && self.draft_work_location.is_cloud() {
+            return false;
+        }
         if matches!(
             clipboard.entries().first(),
             Some(ClipboardEntry::String(_)) | None
@@ -4831,7 +5140,7 @@ impl ChatApp {
     }
 
     fn sync_attachment_urls(&mut self, message_index: usize, cx: &mut Context<Self>) {
-        let Some(client) = self.client.clone() else {
+        let Some(client) = self.workspace_client() else {
             return;
         };
         let Some(session) = client.sessions().borrow().clone() else {
@@ -4988,28 +5297,32 @@ impl ChatApp {
             ApprovalRequestKind::FileRead => ("File-read approval requested", "File to read"),
             ApprovalRequestKind::FileChange => ("File-change approval requested", "File change"),
         };
-        let mut panel = v_flex().px_4().py_3p5().child(
-            h_flex()
-                .flex_wrap()
-                .items_center()
-                .gap_2()
-                .child(
-                    div()
-                        .text_xs()
-                        .font_semibold()
-                        .text_color(cx.theme().muted_foreground)
-                        .child("PENDING APPROVAL"),
-                )
-                .child(div().text_sm().font_medium().child(summary))
-                .when(pending_count > 1, |this| {
-                    this.child(
+        let mut panel = v_flex()
+            .debug_selector(|| "approval-panel".into())
+            .px_4()
+            .py_3p5()
+            .child(
+                h_flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_2()
+                    .child(
                         div()
                             .text_xs()
+                            .font_semibold()
                             .text_color(cx.theme().muted_foreground)
-                            .child(SharedString::from(format!("1/{pending_count}"))),
+                            .child("PENDING APPROVAL"),
                     )
-                }),
-        );
+                    .child(div().text_sm().font_medium().child(summary))
+                    .when(pending_count > 1, |this| {
+                        this.child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(SharedString::from(format!("1/{pending_count}"))),
+                        )
+                    }),
+            );
         if let Some(detail) = &approval.detail {
             panel = panel.child(
                 v_flex()
@@ -5051,7 +5364,8 @@ impl ChatApp {
         approval: &PendingApproval,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
-        let responding = self.responding.contains(&approval.request_id);
+        let responding = self.responding.contains(&approval.request_id)
+            || !self.conversation_status(cx).can_respond;
         let respond = |decision: ProviderApprovalDecision| {
             let request_id = approval.request_id.clone();
             cx.listener(move |this: &mut Self, _, _, cx| {
@@ -5059,6 +5373,9 @@ impl ChatApp {
             })
         };
         h_flex()
+            .w_full()
+            .min_w_0()
+            .flex_wrap()
             .px_3()
             .pb_3()
             .gap_2()
@@ -5066,6 +5383,7 @@ impl ChatApp {
             .justify_end()
             .child(
                 Button::new("approval-cancel")
+                    .debug_selector(|| "approval-cancel".into())
                     .label("Cancel turn")
                     .ghost()
                     .small()
@@ -5074,6 +5392,7 @@ impl ChatApp {
             )
             .child(
                 Button::new("approval-decline")
+                    .debug_selector(|| "approval-decline".into())
                     .label("Decline")
                     .danger()
                     .outline()
@@ -5083,6 +5402,7 @@ impl ChatApp {
             )
             .child(
                 Button::new("approval-accept-session")
+                    .debug_selector(|| "approval-accept-session".into())
                     .label("Always allow this session")
                     .outline()
                     .small()
@@ -5091,6 +5411,7 @@ impl ChatApp {
             )
             .child(
                 Button::new("approval-accept")
+                    .debug_selector(|| "approval-accept".into())
                     .label("Approve once")
                     .primary()
                     .small()
@@ -5297,6 +5618,7 @@ impl ChatApp {
                             .small()
                             .disabled(
                                 responding
+                                    || (is_last && !self.conversation_status(cx).can_respond)
                                     || self.input_draft.as_ref().is_none_or(|draft| {
                                         user_input_answer(question, draft).is_none()
                                     }),
@@ -5589,7 +5911,10 @@ impl ChatApp {
 
         // The Electron derive pipeline: activities → filtered/merged work-log
         // entries → rows with turn folds and "+N previous" overflow groups.
-        self.work_entries = work_log::derive_work_log_entries(&view.activities);
+        self.work_entries = work_log::derive_work_log_entries(&view.activities)
+            .into_iter()
+            .filter(|entry| !conversation_status::infrastructure_activity(&entry.kind))
+            .collect();
         let running_turn_id: Option<String> = view
             .session
             .as_ref()
@@ -5642,7 +5967,8 @@ impl ChatApp {
                         expanded,
                     });
                 }
-                DerivedTimelineRow::Working => rows.push(TimelineRow::Running),
+                // The single status line owns current-turn progress.
+                DerivedTimelineRow::Working => {}
             }
         }
         if let Some(plans) = view
@@ -5661,43 +5987,7 @@ impl ChatApp {
         self.work_toggles = work_toggles;
         self.turn_folds = turn_folds;
 
-        // The "Working for Ns" timer repaints once a second while a turn
-        // runs; the row's height never changes, so a bare notify suffices
-        // (list heights are cached by content hash, and Running hashes
-        // constant).
-        if is_working {
-            if self.working_tick.is_none() {
-                self.working_tick = Some(cx.spawn(async move |this, cx| {
-                    loop {
-                        cx.background_executor()
-                            .timer(std::time::Duration::from_secs(1))
-                            .await;
-                        let keep = this
-                            .update(cx, |this, cx| {
-                                let running = this.local_dispatch.is_some()
-                                    || this
-                                        .thread
-                                        .as_ref()
-                                        .and_then(|open| open.state.view.as_ref())
-                                        .and_then(|view| view.session.as_ref())
-                                        .is_some_and(|session| {
-                                            session.status == OrchestrationSessionStatus::Running
-                                        });
-                                if running {
-                                    cx.notify();
-                                }
-                                running
-                            })
-                            .unwrap_or(false);
-                        if !keep {
-                            break;
-                        }
-                    }
-                }));
-            }
-        } else {
-            self.working_tick = None;
-        }
+        // The visible status controller owns elapsed-time repaints.
 
         // Revert targets: a user message reverts to the checkpoint BEFORE the
         // next assistant turn's checkpoint (`checkpointTurnCount - 1`) —
@@ -5729,7 +6019,11 @@ impl ChatApp {
                 }
             }
         }
-        self.revert_turn_counts = counts;
+        self.revert_turn_counts = if self.is_cloud_thread() && self.workspace_client().is_none() {
+            HashMap::new()
+        } else {
+            counts
+        };
 
         // The changed-files card's auto-expand decision is made once per turn,
         // at the web component's mount ≙ the checkpoint's first appearance.
@@ -6791,11 +7085,17 @@ impl ChatApp {
         header_inset: gpui::Pixels,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let cloud = self.is_cloud_thread();
+        let cloud_task = self.cloud_task(cx);
         // Header controls (Electron: `ProjectScriptsControl` then
         // `GitActionsControl` at the far right of the chat header, before the
         // panel toggle).
         let script_controls = self.render_project_scripts(cx);
-        let git_controls = self.render_git_actions(cx);
+        let git_controls = if cloud && self.workspace_client().is_none() {
+            self.render_cloud_publish_actions(cx)
+        } else {
+            self.render_git_actions(cx)
+        };
         let workspace_controls = self.render_workspace_roots(cx);
         h_flex()
             .h(px(crate::ui::CHROME_HEIGHT))
@@ -6810,23 +7110,6 @@ impl ChatApp {
                     .flex_1()
                     .min_w_0()
                     .gap_2()
-                    .children(project.map(|(name, cwd)| {
-                        h_flex()
-                            .min_w_0()
-                            .max_w(px(200.))
-                            .gap_2()
-                            .items_center()
-                            .text_sm()
-                            .font_medium()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(self.project_icon(&name, &cwd, cx))
-                            .child(div().min_w_0().truncate().child(name))
-                            .child(
-                                div()
-                                    .text_color(cx.theme().muted_foreground.opacity(0.4))
-                                    .child("/"),
-                            )
-                    }))
                     .child(
                         div()
                             .id("chat-thread-title")
@@ -6843,10 +7126,34 @@ impl ChatApp {
                                 }
                             })
                             .child(title),
-                    ),
+                    )
+                    .children(cloud_task.as_ref().map(|task| {
+                        div()
+                            .max_w(px(200.))
+                            .min_w_0()
+                            .truncate()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(crate::cloud::repo_label(task))
+                    }))
+                    .children(project.filter(|_| !cloud).map(|(name, _)| {
+                        div()
+                            .max_w(px(160.))
+                            .min_w_0()
+                            .truncate()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(name)
+                    })),
             )
             .children(script_controls)
-            .child(workspace_controls)
+            .when(!cloud, |row| {
+                row.child(
+                    div()
+                        .debug_selector(|| "local-workspace-controls".into())
+                        .child(workspace_controls),
+                )
+            })
             .children(git_controls)
             .child(
                 Button::new("toggle-right-panel")
@@ -6871,6 +7178,18 @@ impl ChatApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let composer_max_rows = if self.thread.is_none() && window.viewport_size().height < px(640.)
+        {
+            3
+        } else {
+            8
+        };
+        if self.composer_max_rows != composer_max_rows {
+            self.composer_max_rows = composer_max_rows;
+            self.composer.update(cx, |input, cx| {
+                input.set_auto_grow(1, composer_max_rows, cx)
+            });
+        }
         self.sync_text_question_form(window, cx);
         let pending_request = self
             .active_pending_user_input()
@@ -6906,18 +7225,17 @@ impl ChatApp {
             })
             .map(|project| (project.title.0.clone(), project.workspace_root.0.clone()));
         let view = open.state.view.as_ref();
+        let cloud = self.is_cloud_thread();
+        let presentation = self.conversation_status(cx);
         let running = view.is_some_and(|view| {
             view.session
                 .as_ref()
                 .is_some_and(|session| session.status == OrchestrationSessionStatus::Running)
         });
-        let dispatching = self.local_dispatch.is_some();
-        let session_error: Option<SharedString> = view.and_then(|view| {
-            view.session
-                .as_ref()
-                .and_then(|session| session.last_error.as_ref())
-                .map(|error| error.0.clone().into())
-        });
+        let dispatching = matches!(
+            presentation.facts.delivery,
+            conversation_status::Delivery::Submitting
+        );
         // Model picker: current selection comes from the SHELL copy (meta
         // events are shell-scoped); options come from the server config.
         let current_selection: Option<ModelSelection> = self
@@ -6981,11 +7299,16 @@ impl ChatApp {
         // Pending approvals / user-input requests are derived from the
         // activity log (the reducer deliberately skips their events); the
         // approval panel takes precedence, like the Electron composer.
-        let pending_approvals = view
-            .map(|view| derive_pending_approvals(&view.activities))
+        let request_view = view.filter(|_| presentation.show_requests);
+        let pending_approvals = request_view
+            .map(|view| {
+                derive_pending_approvals(&conversation_status::current_request_activities(view))
+            })
             .unwrap_or_default();
-        let pending_inputs = view
-            .map(|view| derive_pending_user_inputs(&view.activities))
+        let pending_inputs = request_view
+            .map(|view| {
+                derive_pending_user_inputs(&conversation_status::current_request_activities(view))
+            })
             .unwrap_or_default();
         let active_approval = pending_approvals.first().cloned();
         let active_input = if active_approval.is_none() {
@@ -6993,7 +7316,9 @@ impl ChatApp {
         } else {
             None
         };
-        let can_send = active_approval.is_none()
+        let can_send = presentation.can_send
+            && (!cloud || self.cloud_send_blocker(cx).is_none())
+            && active_approval.is_none()
             && active_input.is_none()
             && (!self.composer.read(cx).value().trim().is_empty()
                 || !self.pending_attachments.is_empty()
@@ -7021,78 +7346,85 @@ impl ChatApp {
         };
 
         // Composer: rounded-22 shell, textarea, footer (model label + send).
-        let send_button: gpui::AnyElement = if running {
-            div()
-                .id("stop")
-                .debug_selector(|| "stop".into())
-                .size_8()
-                .rounded_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .cursor_pointer()
-                .bg(cx.theme().danger.opacity(0.9))
-                .hover(|style| style.bg(cx.theme().danger))
-                .child(
-                    div()
-                        .size(px(10.))
-                        .rounded(px(2.))
-                        .bg(cx.theme().danger_foreground),
-                )
-                .on_click(cx.listener(|this, _, _, cx| this.stop_turn(cx)))
-                .into_any_element()
-        } else if dispatching {
-            div()
-                .id("send-pending")
-                .size_8()
-                .rounded_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .bg(cx.theme().primary.opacity(0.5))
-                .child(
-                    ProgressCircle::new("send-spinner")
-                        .loading(true)
-                        .small()
-                        .color(cx.theme().primary_foreground.opacity(0.7)),
-                )
-                .into_any_element()
-        } else if !can_send {
-            div()
-                .id("send-disabled")
-                .debug_selector(|| "send-disabled".into())
-                .size_8()
-                .rounded_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .bg(cx.theme().primary.opacity(0.32))
-                .child(
-                    Icon::new(IconName::ArrowUp)
-                        .size_4()
-                        .text_color(cx.theme().primary_foreground.opacity(0.45)),
-                )
-                .into_any_element()
-        } else {
-            div()
-                .id("send")
-                .debug_selector(|| "send".into())
-                .size_8()
-                .rounded_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .cursor_pointer()
-                .bg(cx.theme().primary.opacity(0.9))
-                .hover(|style| style.bg(cx.theme().primary))
-                .child(
-                    Icon::new(IconName::ArrowUp)
-                        .size_4()
-                        .text_color(cx.theme().primary_foreground),
-                )
-                .on_click(cx.listener(|this, _, window, cx| this.send(window, cx)))
-                .into_any_element()
-        };
+        let send_button: gpui::AnyElement =
+            if presentation.facts.turn == conversation_status::Turn::Stopping {
+                Button::new("stop-pending")
+                    .ghost()
+                    .small()
+                    .icon(IconName::CircleX)
+                    .disabled(true)
+                    .into_any_element()
+            } else if presentation.can_stop {
+                div()
+                    .id("stop")
+                    .debug_selector(|| "stop".into())
+                    .size_8()
+                    .rounded_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .bg(cx.theme().danger.opacity(0.9))
+                    .hover(|style| style.bg(cx.theme().danger))
+                    .child(
+                        div()
+                            .size(px(10.))
+                            .rounded(px(2.))
+                            .bg(cx.theme().danger_foreground),
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.stop_turn(cx)))
+                    .into_any_element()
+            } else if dispatching {
+                div()
+                    .id("send-pending")
+                    .size_8()
+                    .rounded_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .bg(cx.theme().primary.opacity(0.5))
+                    .child(
+                        Icon::new(IconName::ArrowUp)
+                            .size_4()
+                            .text_color(cx.theme().primary_foreground.opacity(0.7)),
+                    )
+                    .into_any_element()
+            } else if !can_send {
+                div()
+                    .id("send-disabled")
+                    .debug_selector(|| "send-disabled".into())
+                    .size_8()
+                    .rounded_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .bg(cx.theme().muted)
+                    .child(
+                        Icon::new(IconName::ArrowUp)
+                            .size_4()
+                            .text_color(cx.theme().muted_foreground.opacity(0.45)),
+                    )
+                    .into_any_element()
+            } else {
+                div()
+                    .id("send")
+                    .debug_selector(|| "send".into())
+                    .size_8()
+                    .rounded_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .bg(cx.theme().primary.opacity(0.9))
+                    .hover(|style| style.bg(cx.theme().primary))
+                    .child(
+                        Icon::new(IconName::ArrowUp)
+                            .size_4()
+                            .text_color(cx.theme().primary_foreground),
+                    )
+                    .on_click(cx.listener(|this, _, window, cx| this.send(window, cx)))
+                    .into_any_element()
+            };
         // The picker rail shows every enabled provider; only probe-ready
         // providers contribute models. Picking one dispatches
         // `ThreadMetaUpdate` (see `set_model`).
@@ -7127,47 +7459,13 @@ impl ChatApp {
             })
             .content(move |_, _, _| div().children(picker.clone()))
             .into_any_element();
-        let runtime_picker: gpui::AnyElement = {
-            let current = runtime_mode.clone();
-            let (label, icon) = match current {
-                RuntimeMode::ApprovalRequired => ("Supervised", IconName::Settings),
-                RuntimeMode::AutoAcceptEdits => ("Auto-accept edits", IconName::SquarePen),
-                RuntimeMode::Auto => ("Auto", IconName::CircleCheck),
-                RuntimeMode::FullAccess => ("Full access", IconName::Globe),
-                RuntimeMode::Unknown(_) => ("Runtime", IconName::Settings),
-            };
-            let chat = cx.entity().downgrade();
-            Button::new("runtime-mode")
-                .label(label)
-                .icon(Icon::new(icon))
-                .ghost()
-                .small()
-                .dropdown_menu(move |mut menu, _, _| {
-                    let entries = [
-                        (RuntimeMode::ApprovalRequired, "Supervised"),
-                        (RuntimeMode::AutoAcceptEdits, "Auto-accept edits"),
-                        (RuntimeMode::Auto, "Auto"),
-                        (RuntimeMode::FullAccess, "Full access"),
-                    ];
-                    for (mode, label) in entries {
-                        let selected = mode == current;
-                        let chat = chat.clone();
-                        menu = menu.item(PopupMenuItem::new(label).checked(selected).on_click(
-                            move |_, _, cx| {
-                                let mode = mode.clone();
-                                let _ = chat.update(cx, |this, cx| this.set_runtime_mode(mode, cx));
-                            },
-                        ));
-                    }
-                    menu
-                })
-                .into_any_element()
-        };
-        let interaction_toggle = Some(self.render_mode_switch(
+        let runtime_picker =
+            self.render_runtime_picker(runtime_mode, window.viewport_size().width < px(1100.), cx);
+        let interaction_toggle = self.render_mode_switch(
             interaction_mode == ProviderInteractionMode::Plan,
             window,
             cx,
-        ));
+        );
         let traits_picker =
             self.render_reasoning_picker(option_descriptors, selected_model_options, cx);
         // Context meter (ContextWindowMeter port): usage ring beside the send
@@ -7204,56 +7502,38 @@ impl ChatApp {
                 if usage.compacts_automatically {
                     tip.push_str(" · compacts automatically");
                 }
-                Button::new("context-meter")
-                    .ghost()
-                    .small()
-                    .icon(
-                        ProgressCircle::new("context-ring")
-                            .value(percentage as f32)
-                            .color(color)
-                            .large(),
+                // This control disappears while approval actions occupy the
+                // footer. Native tooltips are scoped to the painted element,
+                // so removing it cannot leave a managed tooltip over approval.
+                div()
+                    .id("context-meter-tooltip")
+                    .child(
+                        Button::new("context-meter").ghost().small().icon(
+                            ProgressCircle::new("context-ring")
+                                .value(percentage as f32)
+                                .color(color)
+                                .large(),
+                        ),
                     )
-                    .tooltip(SharedString::from(tip))
+                    .tooltip(move |window, cx| {
+                        gpui_component::tooltip::Tooltip::new(tip.clone()).build(window, cx)
+                    })
                     .into_any_element()
             });
-        let footer: gpui::AnyElement = if let Some(approval) = &active_approval {
-            // The bottom toolbar is replaced by the approval actions while an
-            // approval is pending (Electron's ChatComposer does the same).
+        let footer = if let Some(approval) = &active_approval {
             self.render_approval_actions(approval, cx)
         } else {
-            h_flex()
-                .px_3()
-                .pb_3()
-                .pt_1()
-                .justify_between()
-                .items_center()
-                .child(
-                    h_flex()
-                        .gap_1()
-                        .items_center()
-                        .child(
-                            Button::new("attach")
-                                .ghost()
-                                .small()
-                                .icon(Icon::new(IconName::Plus))
-                                .tooltip("Add attachments and context")
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.attach_files(window, cx);
-                                })),
-                        )
-                        .child(model_picker)
-                        .children(traits_picker)
-                        .child(runtime_picker)
-                        .children(interaction_toggle),
-                )
-                .child(
-                    h_flex()
-                        .gap_1()
-                        .items_center()
-                        .children(context_meter)
-                        .child(send_button),
-                )
-                .into_any_element()
+            let location = self.render_location_switch(cx);
+            self.render_composer_controls(
+                model_picker,
+                traits_picker,
+                location,
+                interaction_toggle,
+                runtime_picker,
+                context_meter,
+                send_button,
+                cx,
+            )
         };
         let (mention_list, command_list) = self.render_composer_suggestions(cx);
         // Staged attachment chips (name + size + remove), Electron's chip row
@@ -7381,85 +7661,12 @@ impl ChatApp {
                 })
                 .into_any_element()
         });
-        let provider_status = selected_provider.and_then(|provider| {
-            let unhealthy = provider.auth.status
-                == vitre_contracts::ServerProviderAuthStatus::Unauthenticated
-                || provider.status != vitre_contracts::ServerProviderState::Ready
-                || provider.availability
-                    == Some(Some(
-                        vitre_contracts::ServerProviderAvailability::Unavailable,
-                    ));
-            unhealthy.then(|| {
-                provider
-                    .message
-                    .clone()
-                    .flatten()
-                    .or_else(|| provider.unavailable_reason.clone().flatten())
-                    .map(|message| message.0)
-                    .unwrap_or_else(|| {
-                        if provider.auth.status
-                            == vitre_contracts::ServerProviderAuthStatus::Unauthenticated
-                        {
-                            "Sign in via the CLI to authenticate again.".into()
-                        } else {
-                            "The selected provider is currently unavailable.".into()
-                        }
-                    })
-            })
-        });
-        let status_copy = if self.shell.phase == SyncPhase::Disconnected {
-            Some("Environment unavailable — reconnecting…".to_string())
-        } else {
-            provider_status
-        };
-        let status_banner: Option<AnyElement> = status_copy.map(|copy| {
-            h_flex()
-                .w_full()
-                .max_w(px(768.))
-                .mx_auto()
-                .px_3()
-                .py_2()
-                .gap_2()
-                .rounded(px(10.))
-                .border_1()
-                .border_color(cx.theme().warning.opacity(0.35))
-                .bg(cx.theme().warning.opacity(0.08))
-                .text_xs()
-                .text_color(cx.theme().warning)
-                .child(Icon::new(IconName::TriangleAlert).size_3p5())
-                .child(div().flex_1().min_w_0().child(chat_text(copy)))
-                .into_any_element()
-        });
         let composer = v_flex()
             .px_5()
             .pb_4()
             .gap_2()
-            .children(status_banner)
-            .children(self.lifecycle_banner(cx))
-            .when(running, |column| {
-                column.child(
-                    h_flex()
-                        .mx_auto()
-                        .w_full()
-                        .max_w(px(768.))
-                        .px_3()
-                        .gap_2()
-                        .h(px(28.))
-                        .child(self.activity_orb.clone())
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(
-                                    if !pending_approvals.is_empty() || !pending_inputs.is_empty() {
-                                        "Waiting for your input"
-                                    } else {
-                                        "Working on your request"
-                                    },
-                                ),
-                        ),
-                )
-            })
+            .when(!cloud, |column| column.children(self.lifecycle_banner(cx)))
+            .child(self.render_conversation_status(window, cx))
             .child(
                 v_flex()
                     .w_full()
@@ -7481,6 +7688,9 @@ impl ChatApp {
                             this.insert_file_context(context, window, cx)
                         },
                     ))
+                    // Submit-on-enter emits PressEnter then propagates the
+                    // action; consume it before macOS inserts a fallback newline.
+                    .on_action(|_: &gpui_component::input::Enter, _, cx| cx.stop_propagation())
                     .capture_key_down(cx.listener(
                         |this, event: &gpui::KeyDownEvent, window, cx| {
                             let modifiers = event.keystroke.modifiers;
@@ -7658,7 +7868,7 @@ impl ChatApp {
                     .into_any_element()
             });
 
-        let mut main = v_flex()
+        let main = v_flex()
             .flex_1()
             .h_full()
             .min_w_0()
@@ -7685,52 +7895,6 @@ impl ChatApp {
                 }
             }))
             .child(self.render_thread_header(title, project, header_inset, cx));
-        let dismissible_error = self.last_error.is_some();
-        let banner: Option<SharedString> = self.last_error.clone().or(session_error);
-        if let Some(error) = banner {
-            main = main.child(
-                div()
-                    .debug_selector(|| "thread-error-banner".into())
-                    .px_5()
-                    .pt_1()
-                    .child(
-                        h_flex()
-                            .mx_auto()
-                            .w_auto()
-                            .max_w(px(768.))
-                            .rounded(px(12.))
-                            .border_1()
-                            .border_color(cx.theme().danger.opacity(0.32))
-                            .bg(cx.theme().danger.opacity(0.04))
-                            .px_3p5()
-                            .py_3()
-                            .gap_2()
-                            .text_sm()
-                            .text_color(cx.theme().danger)
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .max_h(px(96.))
-                                    .overflow_hidden()
-                                    .child(error),
-                            )
-                            .when(dismissible_error, |banner| {
-                                banner.child(
-                                    Button::new("dismiss-thread-error")
-                                        .ghost()
-                                        .xsmall()
-                                        .icon(Icon::new(IconName::Close))
-                                        .tooltip("Dismiss")
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.last_error = None;
-                                            cx.notify();
-                                        })),
-                                )
-                            }),
-                    ),
-            );
-        }
         main.child(
             // The timeline is virtualized: only rows near the viewport are
             // built, so a long thread costs the same per frame as a short one.
@@ -7758,7 +7922,9 @@ impl ChatApp {
         )
         .children(self.render_branch_toolbar(cx))
         .child(composer)
-        .children(self.render_terminal_drawer(window, cx))
+        .when(!cloud, |column| {
+            column.children(self.render_terminal_drawer(window, cx))
+        })
         .into_any_element()
     }
 }
@@ -7779,7 +7945,8 @@ impl Render for ChatApp {
         self.ensure_draft_project(cx);
         self.restore_composer_draft(window, cx);
         if let Some(error) = self.drafts.take_error() {
-            self.runtime_notice = Some(format!("Could not save your draft: {error}").into());
+            self.runtime_notice =
+                Some(format!("Draft persistence needs attention: {error}").into());
         }
         if self.draft_send_after_create.as_ref().is_some_and(|id| {
             self.thread
@@ -7789,10 +7956,13 @@ impl Render for ChatApp {
             self.draft_send_after_create = None;
             self.send(window, cx);
         }
-        self.sync_activity_orb(cx);
+        self.spawn_terminal_metadata_loop(cx);
+        self.sync_status_motion(window, cx);
         self.sync_project_icons(cx);
         #[cfg(debug_assertions)]
         self.verify_polish_if_requested(window, cx);
+        #[cfg(debug_assertions)]
+        self.verify_cloud_threads_if_requested(window, cx);
         #[cfg(debug_assertions)]
         self.verify_icons_if_requested(window, cx);
         if let Some(message) = self.runtime_notice.take() {
@@ -7846,7 +8016,11 @@ impl Render for ChatApp {
                     cx.background_executor()
                         .timer(std::time::Duration::from_secs(1))
                         .await;
-                    let requests = client.slow_requests(std::time::Duration::from_secs(5));
+                    let requests: Vec<_> = client
+                        .slow_requests(std::time::Duration::from_secs(5))
+                        .into_iter()
+                        .filter(|method| method != "cloud.startConversation")
+                        .collect();
                     let message = (!requests.is_empty()).then(|| {
                         SharedString::from(format!(
                             "Still waiting for {}. The request is continuing.",
@@ -7962,6 +8136,12 @@ impl Render for ChatApp {
             .bg(crate::glass::root(cx))
             .text_color(cx.theme().foreground)
             .track_focus(&self.focus_handle)
+            .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                if event.keystroke.key == "escape" && this.cloud_sheet.take().is_some() {
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            }))
             .on_action(cx.listener(|this, _: &QuickSearchOpen, window, cx| {
                 this.toggle_quick_search(QuickSearchMode::Open, window, cx);
             }))
@@ -7975,7 +8155,8 @@ impl Render for ChatApp {
                 this.open_workspace_surface(vitre_state::right_panel::SurfaceKind::Graph, w, cx);
                 if let Some(panel) = this
                     .search_root()
-                    .and_then(|r| this.graph_panels.get(&r).cloned())
+                    .and_then(|r| this.workspace_cache_key(&r))
+                    .and_then(|key| this.graph_panels.get(&key).cloned())
                 {
                     panel.update(cx, |p, cx| p.build(cx));
                 }
@@ -8043,6 +8224,12 @@ impl Render for ChatApp {
             .on_action(
                 cx.listener(|this, _: &crate::settings::SettingsOpen, window, cx| {
                     this.toggle_settings(window, cx);
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &crate::cloud::NewCloudThread, window, cx| {
+                    this.close_settings(window, cx);
+                    this.new_cloud_thread(window, cx);
                 }),
             )
             .on_action(cx.listener(|this, _: &NewThread, window, cx| {
@@ -8221,6 +8408,7 @@ impl Render for ChatApp {
                 }
             })
             .children(self.render_preview_mini(window, cx))
+            .children(self.render_cloud_sheet(cx))
             .children(sheet_layer)
             .children(dialog_layer)
             .children(notification_layer)
@@ -8229,6 +8417,27 @@ impl Render for ChatApp {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn concurrent_request_ids_are_unique_even_with_shared_clock_ticks() {
+        let threads: Vec<_> = (0..8)
+            .map(|_| {
+                std::thread::spawn(|| {
+                    (0..2000)
+                        .map(|_| super::fresh_id("request"))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        let ids: Vec<_> = threads
+            .into_iter()
+            .flat_map(|thread| thread.join().unwrap())
+            .collect();
+        assert_eq!(
+            ids.iter().collect::<std::collections::HashSet<_>>().len(),
+            ids.len()
+        );
+    }
+
     #[test]
     fn question_answers_accept_free_text_without_submitting_blanks() {
         use super::*;

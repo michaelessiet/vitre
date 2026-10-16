@@ -2,7 +2,15 @@ import * as NodeAssert from "node:assert/strict";
 
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
+import * as Ref from "effect/Ref";
+import * as Scope from "effect/Scope";
+import * as Sink from "effect/Sink";
+import * as Stream from "effect/Stream";
 import * as Schema from "effect/Schema";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import { ChildProcessSpawner } from "effect/unstable/process";
 import { describe } from "vite-plus/test";
 import { DEFAULT_MODEL, ThreadId } from "@t3tools/contracts";
 import * as CodexErrors from "effect-codex-app-server/errors";
@@ -18,9 +26,67 @@ import {
   buildTurnStartParams,
   hasConfiguredMcpServer,
   isRecoverableThreadResumeError,
+  makeCodexSessionRuntime,
   openCodexThread,
 } from "./CodexSessionRuntime.ts";
 const isCodexAppServerRequestError = Schema.is(CodexErrors.CodexAppServerRequestError);
+
+it.effect("publishes session closed only after process finalization and drains the event", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const cleanupStarted = yield* Deferred.make<void>();
+      const finishCleanup = yield* Deferred.make<void>();
+      const seen = yield* Ref.make<Array<string>>([]);
+      const scope = yield* Scope.make();
+      const spawner = ChildProcessSpawner.make(() =>
+        Effect.acquireRelease(
+          Effect.succeed(
+            ChildProcessSpawner.makeHandle({
+              pid: ChildProcessSpawner.ProcessId(1),
+              exitCode: Effect.never,
+              isRunning: Effect.succeed(true),
+              kill: () => Effect.void,
+              unref: Effect.succeed(Effect.void),
+              stdin: Sink.drain,
+              stdout: Stream.never,
+              stderr: Stream.never,
+              all: Stream.never,
+              getInputFd: () => Sink.drain,
+              getOutputFd: () => Stream.never,
+            }),
+          ),
+          () =>
+            Deferred.succeed(cleanupStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(finishCleanup)),
+            ),
+        ),
+      );
+      const runtime = yield* makeCodexSessionRuntime({
+        threadId: ThreadId.make("process-close-fence"),
+        binaryPath: "codex",
+        cwd: "/tmp",
+        runtimeMode: "full-access",
+      }).pipe(
+        Effect.provideService(Scope.Scope, scope),
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Effect.provide(NodeCrypto.layer),
+      );
+      const consumer = yield* runtime.events.pipe(
+        Stream.runForEach((event) => Ref.update(seen, (events) => [...events, event.method])),
+        Effect.forkChild,
+      );
+      const closing = yield* Effect.forkChild(runtime.close);
+      yield* Deferred.await(cleanupStarted);
+      NodeAssert.notEqual((yield* runtime.getSession).status, "closed");
+      NodeAssert.deepStrictEqual(yield* Ref.get(seen), []);
+      yield* Deferred.succeed(finishCleanup, undefined);
+      yield* Fiber.join(closing);
+      yield* Fiber.join(consumer);
+      NodeAssert.equal((yield* runtime.getSession).status, "closed");
+      NodeAssert.deepStrictEqual(yield* Ref.get(seen), ["session/closed"]);
+    }),
+  ),
+);
 
 describe("CodexSessionRuntimeIdentifierGenerationError", () => {
   it("retains identifier purpose and the random source failure", () => {

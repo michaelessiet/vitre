@@ -12,6 +12,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import { historicalActivityIds } from "@t3tools/shared/historyActivities";
 
 import { toPersistenceSqlError, type ProjectionRepositoryError } from "../../persistence/Errors.ts";
 import { OrchestrationEventStore } from "../../persistence/Services/OrchestrationEventStore.ts";
@@ -148,6 +149,7 @@ interface ShellSummaryActivityInput {
  * refresh only hydrates rows of these kinds.
  */
 const PENDING_USER_INPUT_ACTIVITY_KINDS = [
+  "thread.history.imported",
   "user-input.requested",
   "user-input.resolved",
   "provider.user-input.respond.failed",
@@ -157,6 +159,7 @@ function derivePendingUserInputCountFromActivities(
   activities: ReadonlyArray<ShellSummaryActivityInput>,
 ): number {
   const openRequestIds = new Set<string>();
+  const historicalIds = historicalActivityIds(activities);
   const ordered = [...activities].toSorted(
     (left, right) =>
       left.createdAt.localeCompare(right.createdAt) ||
@@ -164,6 +167,7 @@ function derivePendingUserInputCountFromActivities(
   );
 
   for (const activity of ordered) {
+    if (historicalIds.has(activity.activityId)) continue;
     const requestId = extractActivityRequestId(activity.payload);
     if (requestId === null) {
       continue;
@@ -907,7 +911,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           }
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
-            latestTurnId: event.payload.session.activeTurnId,
+            // Session idle clears the active turn, not the last completed turn.
+            // Non-Git workspaces have no checkpoint event to restore this pointer.
+            latestTurnId: event.payload.session.activeTurnId ?? existingRow.value.latestTurnId,
             updatedAt: event.occurredAt,
           });
           yield* refreshThreadShellSummary(event.payload.threadId);
@@ -1515,6 +1521,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     )(function* (event, _attachmentSideEffects) {
       switch (event.type) {
         case "thread.activity-appended": {
+          if (event.metadata.adapterKey === "history-import") return;
           const requestId =
             extractActivityRequestId(event.payload.activity.payload) ??
             event.metadata.requestId ??

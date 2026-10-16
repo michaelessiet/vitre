@@ -17,6 +17,7 @@ import {
   AuthOrchestrationReadScope,
   AuthReviewWriteScope,
   AuthRelayWriteScope,
+  AuthRelayReadScope,
   AuthTerminalOperateScope,
   AuthAccessReadScope,
   AuthAccessStreamError,
@@ -89,8 +90,13 @@ import {
   projectThreadDetailSnapshot,
 } from "./orchestration/ActivityPayloadProjection.ts";
 import { normalizeDispatchCommand } from "./orchestration/Normalizer.ts";
+import {
+  toDispatchCommandError,
+  toEngineDispatchCommandError,
+} from "./orchestration/DispatchError.ts";
 import { AssistantStreamBus } from "./orchestration/AssistantStreamBus.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
+import { CloudHandoffService } from "./cloud/HandoffService.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
   observeRpcEffect as instrumentRpcEffect,
@@ -103,6 +109,12 @@ import { ClaudeManagedBinary } from "./provider/Drivers/ClaudeManagedBinary.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
+import { cloudStarts } from "./cloud/startProgress.ts";
+import {
+  startCloudConversationEffect,
+  continueCloudConversationEffect,
+} from "./cloud/StartCloudConversation.ts";
+import { desktopCloudSession } from "./cloud/DesktopCloudSession.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServerSettings from "./serverSettings.ts";
@@ -379,6 +391,13 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.serverGetProcessResourceHistory, AuthOrchestrationReadScope],
   [WS_METHODS.serverSignalProcess, AuthOrchestrationOperateScope],
   [WS_METHODS.cloudGetRelayClientStatus, AuthRelayWriteScope],
+  [WS_METHODS.cloudGetDesktopSession, AuthRelayWriteScope],
+  [WS_METHODS.cloudStartConversation, AuthRelayWriteScope],
+  [WS_METHODS.cloudContinueConversation, AuthRelayWriteScope],
+  [WS_METHODS.cloudSwitchConversation, AuthRelayWriteScope],
+  [WS_METHODS.cloudSwitchStatus, AuthRelayReadScope],
+  [WS_METHODS.cloudCancelSwitch, AuthRelayWriteScope],
+  [WS_METHODS.cloudResolveSwitch, AuthRelayWriteScope],
   [WS_METHODS.cloudInstallRelayClient, AuthRelayWriteScope],
   [WS_METHODS.claudeGetBinaryStatus, AuthOrchestrationReadScope],
   [WS_METHODS.claudeInstallBinary, AuthOrchestrationOperateScope],
@@ -512,6 +531,7 @@ const makeWsRpcLayer = (
       const crypto = yield* Crypto.Crypto;
       const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
       const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
+      const cloudHandoff = yield* CloudHandoffService;
       const assistantStreamBus = yield* AssistantStreamBus;
       const checkpointDiffQuery = yield* CheckpointDiffQuery.CheckpointDiffQuery;
       const keybindings = yield* Keybindings.Keybindings;
@@ -619,13 +639,6 @@ const makeWsRpcLayer = (
           authorizeEffect(requiredScopeForMethod(method), effect),
           traceAttributes,
         );
-      const toDispatchCommandError = (cause: unknown, fallbackMessage: string) =>
-        isOrchestrationDispatchCommandError(cause)
-          ? cause
-          : new OrchestrationDispatchCommandError({
-              message: cause instanceof Error ? cause.message : fallbackMessage,
-              cause,
-            });
       const randomUUID = crypto.randomUUIDv4.pipe(
         Effect.mapError((cause) =>
           toDispatchCommandError(cause, "Failed to generate orchestration command identifier."),
@@ -1143,7 +1156,13 @@ const makeWsRpcLayer = (
 
             yield* runSetupProgram();
 
-            return yield* orchestrationEngine.dispatch(finalTurnStartCommand);
+            return yield* orchestrationEngine
+              .dispatch(finalTurnStartCommand)
+              .pipe(
+                Effect.mapError((cause) =>
+                  toEngineDispatchCommandError(cause, finalTurnStartCommand),
+                ),
+              );
           });
 
           return yield* bootstrapProgram.pipe(
@@ -1167,7 +1186,7 @@ const makeWsRpcLayer = (
                 .dispatch(normalizedCommand)
                 .pipe(
                   Effect.mapError((cause) =>
-                    toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
+                    toEngineDispatchCommandError(cause, normalizedCommand),
                   ),
                 );
 
@@ -1734,6 +1753,22 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.cloudGetRelayClientStatus, relayClient.resolve, {
             "rpc.aggregate": "cloud",
           }),
+        [WS_METHODS.cloudContinueConversation]: (input) => continueCloudConversationEffect(input),
+        [WS_METHODS.cloudStartConversation]: (input) => startCloudConversationEffect(input),
+        [WS_METHODS.cloudStartProgress]: (input) =>
+          Effect.sync(() => cloudStarts.status(input.idempotencyKey, input.cancel)),
+        [WS_METHODS.cloudSwitchConversation]: (input) => cloudHandoff.request(input),
+        [WS_METHODS.cloudSwitchStatus]: (input) => cloudHandoff.status(input.conversationId),
+        [WS_METHODS.cloudResolveSwitch]: (input) => cloudHandoff.resolve(input),
+        [WS_METHODS.cloudCancelSwitch]: (input) => cloudHandoff.cancel(input.operationId),
+        [WS_METHODS.cloudGetDesktopSession]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.cloudGetDesktopSession,
+            desktopCloudSession(input.authorize, input.cancel),
+            {
+              "rpc.aggregate": "cloud",
+            },
+          ),
         [WS_METHODS.cloudInstallRelayClient]: (_input) =>
           observeRpcStream(
             WS_METHODS.cloudInstallRelayClient,

@@ -302,7 +302,12 @@ export const authHttpApiLayer = HttpApiBuilder.group(
                   ...(args.payload.client_os ? { os: args.payload.client_os } : {}),
                 },
               }),
-              proofKeyThumbprint ? { proofKeyThumbprint } : undefined,
+              {
+                ...(proofKeyThumbprint ? { proofKeyThumbprint } : {}),
+                ...(args.payload.include_websocket_ticket === "true"
+                  ? { includeWebSocketTicket: true }
+                  : {}),
+              },
             );
           },
           traceRelayRequest,

@@ -89,10 +89,42 @@ file from the relay directory. Runtime secrets include Clerk and APNs credential
 the configured API and tunnel DNS zones as retained Cloudflare resources. Personal stages reference
 the production-owned zones.
 
-The `prod` Alchemy stage owns the retained PlanetScale database and is the shared hosted relay for
-stable and nightly clients. Every other stage references that database and provisions an isolated
-PlanetScale branch and runtime role for local development, so deploy `prod` before creating
-developer stages:
+Personal deployments disable detailed Axiom HTTP span export by default to reduce
+per-request CPU work. Cloudflare invocation logs and metrics remain available.
+Set `RELAY_HTTP_TRACING_ENABLED=true` when detailed HTTP diagnostics are needed;
+production deployments keep tracing enabled by default. API documentation is
+compiled once per Worker isolate, and each HTTP request initializes only its API's routes.
+
+The relay uses a user-owned PostgreSQL database through Cloudflare Hyperdrive.
+Set `RELAY_DATABASE_ADMIN_URL` to the database owner's **direct, unpooled** connection URL,
+including `sslmode=require`. Set `RELAY_DATABASE_URL` to the same endpoint and database,
+with username `vitre_relay` and a separate strong, URL-encoded password. Deployment creates
+that restricted SQL role, applies the migrations in `migrations/postgres` transactionally,
+and grants access to the application tables. The owner credential stays in deployment tooling;
+Hyperdrive receives only the runtime credential. Let deployment create the runtime role with
+restricted SQL permissions; provider consoles may grant additional role memberships. Migration TLS
+verifies the server certificate and hostname using system trust by default.
+
+For a database with a private CA, set both `RELAY_DATABASE_CA_CERT` to its complete, quoted,
+multiline PEM certificate and `RELAY_DATABASE_CA_CERTIFICATE_ID` to the ID returned when uploading
+that same certificate to Cloudflare. Both settings are required together. Obtain the CA through
+authenticated service access and keep these settings in the deployment environment. Use a CA
+dedicated to this database: custom trust validates the certificate chain and expiry, while allowing
+the public TCP proxy hostname to differ from the server certificate. Hyperdrive uses `verify-ca`;
+the migration client keeps `rejectUnauthorized: true` with the same CA. Leave both variables unset
+for a database with a publicly trusted certificate. See [Cloudflare's CA upload instructions](https://developers.cloudflare.com/hyperdrive/configuration/tls-ssl-certificates-for-hyperdrive/).
+
+Railway's `postgres-ssl` template stores its CA at
+`/var/lib/postgresql/data/certs/root.crt`. Through an authenticated SSH session, extract PEM-only
+contents with `openssl x509 -in /var/lib/postgresql/data/certs/root.crt -outform PEM` and upload
+that certificate. The template can regenerate its CA when certificates are missing, incomplete,
+or nearing expiry. Coordinate rotation: retrieve the replacement CA, upload it to Cloudflare,
+update both settings together, redeploy, and verify the relay connection. A stale CA fails closed
+and interrupts new database connections until trust is updated. Monitor certificate expiry before
+the template's renewal window; see the [template's certificate lifecycle](https://github.com/railwayapp-templates/postgres-ssl/blob/main/init-ssl.sh).
+
+Create a separate database for each stage and supply its URLs explicitly.
+Stages do not create databases automatically or require a prior `prod` deployment:
 
 ```sh
 vp run --filter t3code-relay deploy -- --stage prod
@@ -123,14 +155,11 @@ deploy personal non-production stages locally with any stage name other than `pr
 The repository must define these Actions variables shared by relay deployments:
 
 - `CLOUDFLARE_ACCOUNT_ID`
-- `PLANETSCALE_ORGANIZATION`
 - `AXIOM_ORG_ID`
 
 The repository must define these Actions secrets shared by relay deployments:
 
 - `CLOUDFLARE_API_TOKEN`
-- `PLANETSCALE_API_TOKEN_ID`
-- `PLANETSCALE_API_TOKEN`
 - `AXIOM_TOKEN`
 
 The `production` GitHub environment must define these Actions variables:
@@ -148,8 +177,15 @@ The `production` GitHub environment must define these Actions variables:
 
 The `production` GitHub environment must define these Actions secrets:
 
+- `RELAY_DATABASE_ADMIN_URL`
+- `RELAY_DATABASE_URL`
 - `CLERK_SECRET_KEY`
 - `APNS_PRIVATE_KEY`
+
+For a database using a private CA, also define the paired `RELAY_DATABASE_CA_CERT` and
+`RELAY_DATABASE_CA_CERTIFICATE_ID` Actions secrets in `production`. Omit both for system trust;
+providing only one fails configuration validation. The workflow passes these database secrets
+only to the deployment step, which runs migrations before applying the infrastructure plan.
 
 The account-scoped repository credentials are consumed by Alchemy while provisioning relay stages; they
 are not bound into the relay Worker. The production deployment uses an Axiom personal access token,

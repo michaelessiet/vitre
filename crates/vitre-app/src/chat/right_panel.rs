@@ -180,6 +180,12 @@ impl ChatApp {
         let Some(key) = self.dock_thread_key() else {
             return;
         };
+        if self.is_cloud_thread()
+            && self.workspace_client().is_none()
+            && !matches!(kind, SurfaceKind::Diff | SurfaceKind::Tests)
+        {
+            return;
+        }
         self.right_panel.map.open(&key, kind);
         self.after_dock_change(true, window, cx);
     }
@@ -187,6 +193,9 @@ impl ChatApp {
     /// until the environment session exists. The home view (no open thread)
     /// uses a `:home` pseudo-thread — a Vitre extension, see module docs.
     pub(super) fn dock_thread_key(&self) -> Option<String> {
+        if let Some(id) = self.open_cloud_task_id() {
+            return Some(format!("cloud:{id}"));
+        }
         let client = self.client.as_ref()?;
         let session = client.sessions().borrow().clone()?;
         let environment = session.config.environment.environment_id.0.clone();
@@ -288,15 +297,23 @@ impl ChatApp {
             if !self.reserve_preview_guest(&cache_key, cx) {
                 return;
             }
-            let Some(client) = self.client.clone() else {
+            let Some(client) = self.workspace_client() else {
                 return;
             };
-            let Some(thread_id) = self.thread.as_ref().map(|thread| thread.id.clone()) else {
+            let Some(thread_id) = self.execution_thread_id() else {
                 return;
             };
             let tab_id = resource_id.map(vitre_contracts::PreviewTabId);
             let panel = cx.new(|cx| {
-                super::preview::PreviewPanel::new(client, thread_id, tab_id, None, window, cx)
+                super::preview::PreviewPanel::new(
+                    client,
+                    thread_id,
+                    tab_id,
+                    None,
+                    self.is_cloud_thread(),
+                    window,
+                    cx,
+                )
             });
             let event_key = cache_key.clone();
             let event_thread_key = thread_key.clone();
@@ -595,7 +612,7 @@ impl ChatApp {
     }
 
     pub(super) fn diff_toggle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.search_root().is_none() {
+        if !self.is_cloud_thread() && self.search_root().is_none() {
             return;
         }
         let Some(key) = self.dock_thread_key() else {
@@ -689,6 +706,12 @@ impl ChatApp {
     }
 
     fn dock_add_surface(&mut self, kind: SurfaceKind, window: &mut Window, cx: &mut Context<Self>) {
+        if self.is_cloud_thread()
+            && self.workspace_client().is_none()
+            && !matches!(kind, SurfaceKind::Diff | SurfaceKind::Tests)
+        {
+            return;
+        }
         // Only kinds the landed slices can host; the menu disables the rest,
         // so an unknown kind arriving here is a bug, not user input.
         match kind {
@@ -780,7 +803,7 @@ impl ChatApp {
             panel.update(cx, |panel, cx| panel.hide(cx));
         }
         let (Some(client), Some(thread_id), Some(tab_id)) = (
-            self.client.clone(),
+            self.workspace_client(),
             self.thread.as_ref().map(|thread| thread.id.clone()),
             resource_id,
         ) else {
@@ -976,8 +999,9 @@ impl ChatApp {
         self.last_dock_active_surface = Some(surface_marker);
         match surface {
             RightPanelSurface::Graph { .. } => {
-                if let (Some(client), Some(cwd)) = (self.client.clone(), self.search_root())
-                    && !self.graph_panels.contains_key(&cwd)
+                if let (Some(client), Some(cwd)) = (self.workspace_client(), self.search_root())
+                    && let Some(cache_key) = self.workspace_cache_key(&cwd)
+                    && !self.graph_panels.contains_key(&cache_key)
                 {
                     let panel =
                         cx.new(|cx| crate::graph::GraphPanel::new(client, cwd.clone(), window, cx));
@@ -990,12 +1014,15 @@ impl ChatApp {
                             }
                         },
                     ));
-                    self.graph_panels.insert(cwd, panel);
+                    self.graph_panels.insert(cache_key, panel);
                 }
             }
             RightPanelSurface::Search { .. } => {
-                if let (Some(client), Some(cwd)) = (self.client.clone(), self.search_root()) {
-                    if !self.search_panels.contains_key(&cwd) {
+                if let (Some(client), Some(cwd)) = (self.workspace_client(), self.search_root()) {
+                    let Some(cache_key) = self.workspace_cache_key(&cwd) else {
+                        return;
+                    };
+                    if !self.search_panels.contains_key(&cache_key) {
                         let panel = cx.new(|cx| {
                             crate::search::SearchPanel::new(client, cwd.clone(), window, cx)
                         });
@@ -1008,10 +1035,11 @@ impl ChatApp {
                                 }
                             },
                         ));
-                        self.search_panels.insert(cwd.clone(), panel);
+                        self.search_panels.insert(cache_key.clone(), panel);
                     }
                     if focus {
-                        self.search_panels[&cwd].update(cx, |panel, cx| panel.focus(window, cx));
+                        self.search_panels[&cache_key]
+                            .update(cx, |panel, cx| panel.focus(window, cx));
                     }
                 }
             }
@@ -1021,7 +1049,11 @@ impl ChatApp {
                     files.update(cx, |files, cx| files.revalidate_if_stale(cx));
                 }
             }
-            RightPanelSurface::Diff { .. } => self.ensure_diff_panel(window, cx),
+            RightPanelSurface::Diff { .. }
+                if !self.is_cloud_thread() || self.workspace_client().is_some() =>
+            {
+                self.ensure_diff_panel(window, cx)
+            }
             RightPanelSurface::File {
                 id,
                 relative_path,
@@ -1093,7 +1125,34 @@ impl ChatApp {
         }
     }
 
+    /// What the add-menu and the empty state offer, in Electron's order.
+    /// Graph is *hidden* (not disabled): Vitre does not surface the
+    /// knowledge-graph setting, and Electron hides the entry when it is off.
+    #[cfg(test)]
+    pub(super) fn offered_surface_kinds(&self) -> Vec<SurfaceKind> {
+        self.dock_surface_offers().iter().map(|s| s.kind).collect()
+    }
+
     fn dock_surface_offers(&self) -> Vec<SurfaceOffer> {
+        if self.is_cloud_thread() && self.workspace_client().is_none() {
+            return vec![
+                SurfaceOffer {
+                    kind: SurfaceKind::Diff,
+                    label: "Diff",
+                    description: "Review the saved changes.",
+                    icon: || Icon::new(VitreIcon::FileDiff),
+                    disabled: None,
+                },
+                SurfaceOffer {
+                    kind: SurfaceKind::Tests,
+                    label: "Tests",
+                    description: "Review the worker test results.",
+                    icon: || Icon::new(IconName::SquareTerminal),
+                    disabled: None,
+                },
+            ];
+        }
+
         let project_open = self.search_root().is_some();
         let plan_available = self.sidebar_proposed_plan().is_some()
             || self
@@ -1167,6 +1226,15 @@ impl ChatApp {
         offers.retain(|offer| {
             offer.kind != SurfaceKind::Preview || crate::platform_capabilities::BROWSER
         });
+        if self.is_cloud_thread() {
+            offers.push(SurfaceOffer {
+                kind: SurfaceKind::Tests,
+                label: "Tests",
+                description: "Review the worker test results.",
+                icon: || Icon::new(IconName::SquareTerminal),
+                disabled: None,
+            });
+        }
         offers
     }
 
@@ -1426,11 +1494,38 @@ impl ChatApp {
         let Some(surface) = active else {
             return self.render_dock_empty_state(cx);
         };
+        if self.is_cloud_thread()
+            && self.workspace_client().is_none()
+            && !matches!(surface.kind(), SurfaceKind::Diff | SurfaceKind::Tests)
+        {
+            return dock_placeholder("The cloud workspace is not connected.", cx);
+        }
         match surface.kind() {
             SurfaceKind::Files | SurfaceKind::File => match self.files.clone() {
                 Some(panel) => div().size_full().child(panel).into_any_element(),
                 None => dock_placeholder("Files are only available when a project is open.", cx),
             },
+            SurfaceKind::Tests => {
+                if let Some(task) = self.cloud_task(cx) {
+                    crate::cloud::diff::render_tests(
+                        &task,
+                        self.cloud_detail(cx)
+                            .as_ref()
+                            .and_then(|d| d.result.as_ref()),
+                        cx,
+                    )
+                } else {
+                    dock_placeholder("Tests are available for cloud conversations.", cx)
+                }
+            }
+            SurfaceKind::Diff if self.is_cloud_thread() && self.workspace_client().is_none() => {
+                let files = self
+                    .cloud_diff_cache
+                    .as_ref()
+                    .map(|(_, files)| files.as_slice())
+                    .unwrap_or_default();
+                crate::cloud::diff::render_diff(files, cx)
+            }
             SurfaceKind::Diff => match self.diff.clone() {
                 Some(panel) => div().size_full().child(panel).into_any_element(),
                 None => dock_placeholder(
@@ -1451,7 +1546,8 @@ impl ChatApp {
             SurfaceKind::Search => {
                 match self
                     .search_root()
-                    .and_then(|cwd| self.search_panels.get(&cwd).cloned())
+                    .and_then(|cwd| self.workspace_cache_key(&cwd))
+                    .and_then(|key| self.search_panels.get(&key).cloned())
                 {
                     Some(panel) => div().size_full().child(panel).into_any_element(),
                     None => dock_placeholder("Open a project to search its files.", cx),
@@ -1470,7 +1566,8 @@ impl ChatApp {
             },
             SurfaceKind::Graph => match self
                 .search_root()
-                .and_then(|cwd| self.graph_panels.get(&cwd).cloned())
+                .and_then(|cwd| self.workspace_cache_key(&cwd))
+                .and_then(|key| self.graph_panels.get(&key).cloned())
             {
                 Some(panel) => div().size_full().child(panel).into_any_element(),
                 None => dock_placeholder("Open a project to explore its graph.", cx),
@@ -1650,6 +1747,7 @@ fn dock_tab_context_menu(
 fn surface_title(surface: &RightPanelSurface) -> SharedString {
     match surface {
         RightPanelSurface::Diff { .. } => "Diff".into(),
+        RightPanelSurface::Tests { .. } => "Tests".into(),
         RightPanelSurface::Files { .. } => "Files".into(),
         RightPanelSurface::Search { .. } => "Search".into(),
         RightPanelSurface::Plan { .. } => "Plan".into(),
@@ -1669,6 +1767,7 @@ fn surface_title(surface: &RightPanelSurface) -> SharedString {
 
 fn surface_icon(surface: &RightPanelSurface) -> Icon {
     match surface.kind() {
+        SurfaceKind::Tests => Icon::new(IconName::SquareTerminal),
         SurfaceKind::Diff => Icon::new(VitreIcon::FileDiff),
         SurfaceKind::Files => Icon::new(VitreIcon::Files),
         SurfaceKind::Search => Icon::new(VitreIcon::TextSearch),

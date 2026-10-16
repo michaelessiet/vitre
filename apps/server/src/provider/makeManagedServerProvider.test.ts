@@ -7,6 +7,7 @@ import * as Fiber from "effect/Fiber";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
+import { TestClock } from "effect/testing";
 
 import { makeManagedServerProvider } from "./makeManagedServerProvider.ts";
 
@@ -101,6 +102,93 @@ const enrichedSnapshotSecond: ServerProvider = {
 };
 
 describe("makeManagedServerProvider", () => {
+  it.effect(
+    "retains a healthy resident probe after cleanup across concurrent and periodic refreshes",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const checks = yield* Ref.make(0);
+          const active = yield* Ref.make(0);
+          const releaseProbe = yield* Deferred.make<void>();
+          const cleanupStarted = yield* Deferred.make<void>();
+          const releaseCleanup = yield* Deferred.make<void>();
+          const settings = yield* Ref.make<TestSettings>({ enabled: true });
+          const settingsChanges = yield* PubSub.unbounded<TestSettings>();
+          const provider = yield* makeManagedServerProvider<TestSettings>({
+            maintenanceCapabilities,
+            getSettings: Ref.get(settings),
+            streamSettings: Stream.fromPubSub(settingsChanges),
+            haveSettingsChanged: (previous, next) => previous.enabled !== next.enabled,
+            initialSnapshot: () => Effect.succeed(initialSnapshot),
+            checkProvider: Effect.scoped(
+              Effect.gen(function* () {
+                yield* Ref.update(checks, (value) => value + 1);
+                yield* Ref.update(active, (value) => value + 1);
+                yield* Effect.addFinalizer(() =>
+                  Deferred.succeed(cleanupStarted, undefined).pipe(
+                    Effect.andThen(Deferred.await(releaseCleanup)),
+                    Effect.andThen(Ref.update(active, (value) => value - 1)),
+                  ),
+                );
+                yield* Deferred.await(releaseProbe);
+                return refreshedSnapshot;
+              }),
+            ),
+            retainSuccessfulCheck: (snapshot) => snapshot.auth.status === "authenticated",
+            refreshInterval: "5 minutes",
+          });
+          const firstRefresh = yield* Effect.forkChild(provider.refresh);
+          const secondRefresh = yield* Effect.forkChild(provider.refresh);
+          yield* Effect.yieldNow;
+          assert.strictEqual(yield* Ref.get(checks), 1);
+          yield* Deferred.succeed(releaseProbe, undefined);
+          yield* Deferred.await(cleanupStarted);
+          assert.strictEqual(yield* Ref.get(active), 1);
+          assert.deepStrictEqual(yield* provider.getSnapshot, initialSnapshot);
+          yield* Deferred.succeed(releaseCleanup, undefined);
+          assert.deepStrictEqual(yield* Fiber.join(firstRefresh), refreshedSnapshot);
+          assert.deepStrictEqual(yield* Fiber.join(secondRefresh), refreshedSnapshot);
+          assert.strictEqual(yield* Ref.get(active), 0);
+
+          yield* TestClock.adjust("10 minutes");
+          yield* Ref.set(settings, { enabled: false });
+          yield* PubSub.publish(settingsChanges, { enabled: false });
+          assert.deepStrictEqual(yield* provider.refresh, refreshedSnapshot);
+          assert.strictEqual(yield* Ref.get(checks), 1);
+        }),
+      ),
+  );
+
+  it.effect(
+    "retries an unsuccessful resident probe before retaining the first healthy result",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const checks = yield* Ref.make(0);
+          const firstPublished = yield* Deferred.make<void>();
+          const provider = yield* makeManagedServerProvider<TestSettings>({
+            maintenanceCapabilities,
+            getSettings: Effect.succeed({ enabled: true }),
+            streamSettings: Stream.empty,
+            haveSettingsChanged: () => false,
+            initialSnapshot: () => Effect.succeed(initialSnapshot),
+            checkProvider: Ref.updateAndGet(checks, (count) => count + 1).pipe(
+              Effect.map((count) => (count === 1 ? initialSnapshot : refreshedSnapshot)),
+            ),
+            enrichSnapshot: () => Deferred.succeed(firstPublished, undefined).pipe(Effect.asVoid),
+            retainSuccessfulCheck: (snapshot) => snapshot.auth.status === "authenticated",
+            refreshInterval: "5 minutes",
+          });
+          yield* Deferred.await(firstPublished);
+          assert.strictEqual(yield* Ref.get(checks), 1);
+          assert.deepStrictEqual(yield* provider.refresh, refreshedSnapshot);
+          yield* TestClock.adjust("10 minutes");
+          assert.deepStrictEqual(yield* provider.refresh, refreshedSnapshot);
+          assert.strictEqual(yield* Ref.get(checks), 2);
+        }),
+      ),
+  );
+
   it.effect(
     "runs the initial provider check in the background and streams the refreshed snapshot",
     () =>

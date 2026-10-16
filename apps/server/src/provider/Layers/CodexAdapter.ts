@@ -1699,7 +1699,9 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     sessions.delete(session.threadId);
     yield* session.runtime.close.pipe(Effect.ignore);
     yield* Effect.ignore(Scope.close(session.scope, Exit.void));
-    yield* Fiber.interrupt(session.eventFiber).pipe(Effect.ignore);
+    // Runtime close gracefully ends its stream after the process-exit fence.
+    // Drain that lifecycle event before returning to stopSession's caller.
+    yield* Fiber.await(session.eventFiber);
   });
 
   const stopSession: CodexAdapterShape["stopSession"] = (threadId) =>

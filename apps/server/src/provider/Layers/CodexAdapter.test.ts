@@ -23,6 +23,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it, vi } from "@effect/vitest";
 
 import * as Context from "effect/Context";
+import type * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -59,7 +60,7 @@ const asEventId = (value: string): EventId => EventId.make(value);
 const asItemId = (value: string): ProviderItemId => ProviderItemId.make(value);
 
 class FakeCodexRuntime implements CodexSessionRuntimeShape {
-  private readonly eventQueue = Effect.runSync(Queue.unbounded<ProviderEvent>());
+  private readonly eventQueue = Effect.runSync(Queue.unbounded<ProviderEvent, Cause.Done>());
   private readonly now = "2026-01-01T00:00:00.000Z";
 
   public readonly startImpl = vi.fn(() =>
@@ -153,7 +154,10 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
     return Stream.fromQueue(this.eventQueue);
   }
 
-  close = Effect.promise(() => this.closeImpl());
+  close = Effect.promise(() => this.closeImpl()).pipe(
+    Effect.andThen(Queue.end(this.eventQueue)),
+    Effect.asVoid,
+  );
 
   emit(event: ProviderEvent) {
     return Queue.offer(this.eventQueue, event).pipe(Effect.asVoid);

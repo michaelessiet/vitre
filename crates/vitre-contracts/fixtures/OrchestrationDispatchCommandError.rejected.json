@@ -1,0 +1,9 @@
+{
+  "encoded": {
+    "_tag": "OrchestrationDispatchCommandError",
+    "code": "execution_busy",
+    "message": "Turn already running",
+    "requestDisposition": "rejected"
+  },
+  "schema": "OrchestrationDispatchCommandError"
+}

@@ -44,6 +44,7 @@ export function HomeHeader(props: {
   readonly onProjectSortOrderChange: (sortOrder: HomeProjectSortOrder) => void;
   readonly onThreadSortOrderChange: (sortOrder: SidebarThreadSortOrder) => void;
   readonly onOpenSettings: () => void;
+  readonly onOpenCloud: () => void;
   readonly onStartNewTask: () => void;
 }) {
   if (Platform.OS === "android") {
@@ -243,6 +244,14 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
                 />
               </Pressable>
             </ControlPillMenu>
+            <Pressable
+              accessibilityLabel="Vitre Cloud projects"
+              accessibilityRole="button"
+              onPress={props.onOpenCloud}
+              className="size-11 items-center justify-center rounded-full bg-subtle"
+            >
+              <SymbolView name="cloud" size={18} tintColor={iconColor} type="monochrome" />
+            </Pressable>
             {/* Built identically to the filter button so the two circles
                 match exactly (ControlPill sizes via Tailwind classes and
                 resolves to a different box). */}
@@ -317,6 +326,14 @@ function IosHomeHeader(props: HomeHeaderProps) {
             Platform.OS === "ios"
               ? () => [
                   withNativeGlassHeaderItem({
+                    accessibilityLabel: "Vitre Cloud projects",
+                    icon: { name: "cloud", type: "sfSymbol" } as const,
+                    identifier: "home-cloud-projects",
+                    label: "Cloud",
+                    onPress: props.onOpenCloud,
+                    type: "button",
+                  }),
+                  withNativeGlassHeaderItem({
                     accessibilityLabel: "Open settings",
                     icon: { name: "ellipsis", type: "sfSymbol" } as const,
                     identifier: "home-settings",
@@ -364,6 +381,11 @@ function IosHomeHeader(props: HomeHeaderProps) {
 
       {Platform.OS === "ios" ? null : (
         <NativeHeaderToolbar placement="right">
+          <NativeHeaderToolbar.Button
+            accessibilityLabel="Vitre Cloud projects"
+            icon="cloud"
+            onPress={props.onOpenCloud}
+          />
           <NativeHeaderToolbar.Button
             accessibilityLabel="Open settings"
             icon="gearshape"

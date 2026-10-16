@@ -6,6 +6,7 @@
 //! their request events — so both apps derive them from the activity log.
 
 use serde_json::Value;
+use std::collections::HashSet;
 use vitre_contracts::{OrchestrationThreadActivity, TurnId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -166,12 +167,26 @@ fn ordered(activities: &[OrchestrationThreadActivity]) -> Vec<&OrchestrationThre
     ordered
 }
 
+fn historical_activity_ids(activities: &[OrchestrationThreadActivity]) -> HashSet<&str> {
+    activities
+        .iter()
+        .filter(|activity| activity.kind.0 == "thread.history.imported")
+        .filter_map(|activity| activity.payload.get("historicalActivityIds")?.as_array())
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect()
+}
+
 pub fn derive_pending_approvals(
     activities: &[OrchestrationThreadActivity],
 ) -> Vec<PendingApproval> {
     // Insertion-ordered map semantics like the TS Map.
     let mut open: Vec<PendingApproval> = Vec::new();
+    let historical = historical_activity_ids(activities);
     for activity in ordered(activities) {
+        if historical.contains(activity.id.0.as_str()) {
+            continue;
+        }
         let Some(payload) = payload_object(activity) else {
             continue;
         };
@@ -246,7 +261,11 @@ pub fn derive_pending_user_inputs(
     activities: &[OrchestrationThreadActivity],
 ) -> Vec<PendingUserInput> {
     let mut open: Vec<PendingUserInput> = Vec::new();
+    let historical = historical_activity_ids(activities);
     for activity in ordered(activities) {
+        if historical.contains(activity.id.0.as_str()) {
+            continue;
+        }
         let Some(payload) = payload_object(activity) else {
             continue;
         };
@@ -441,6 +460,85 @@ mod tests {
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].request_kind, ApprovalRequestKind::FileChange);
         assert_eq!(pending[0].request_id, "r1");
+    }
+
+    #[test]
+    fn imported_approvals_and_questions_stay_readable_without_becoming_pending() {
+        let mut activities = vec![
+            activity(
+                "old-approval",
+                "approval.requested",
+                "2026-01-01T00:00:00Z",
+                json!({"requestId":"old-approval", "requestKind":"command"}),
+            ),
+            activity(
+                "old-input",
+                "user-input.requested",
+                "2026-01-01T00:00:01Z",
+                json!({"requestId":"old-input", "questions":[{"id":"question", "header":"Choose", "question":"Which?", "options":[]}]}),
+            ),
+            activity(
+                "import-one",
+                "thread.history.imported",
+                "2026-01-01T00:00:02Z",
+                json!({"historicalActivityIds":["old-approval", 42, null]}),
+            ),
+            activity(
+                "import-two",
+                "thread.history.imported",
+                "2026-01-01T00:00:03Z",
+                json!({"historicalActivityIds":["old-input"]}),
+            ),
+        ];
+        let before = activities.clone();
+        assert!(derive_pending_approvals(&activities).is_empty());
+        assert!(derive_pending_user_inputs(&activities).is_empty());
+        assert_eq!(activities, before);
+        // A new event remains actionable even if the provider reuses a request ID.
+        activities.push(activity(
+            "new-approval",
+            "approval.requested",
+            "2026-01-01T00:00:04Z",
+            json!({"requestId":"old-approval", "requestKind":"command"}),
+        ));
+        activities.push(activity("new-input", "user-input.requested", "2026-01-01T00:00:05Z", json!({"requestId":"old-input", "questions":[{"id":"question", "header":"Choose", "question":"Which?", "options":[]}]})));
+        assert_eq!(derive_pending_approvals(&activities).len(), 1);
+        assert_eq!(derive_pending_user_inputs(&activities).len(), 1);
+        assert_eq!(activities[..before.len()], before);
+    }
+
+    #[test]
+    fn imported_resolutions_cannot_dismiss_a_new_request_with_a_reused_id() {
+        let activities = vec![
+            activity(
+                "new-approval",
+                "approval.requested",
+                "2026-01-01T00:00:00Z",
+                json!({"requestId":"reused", "requestKind":"command"}),
+            ),
+            activity(
+                "historical-resolution",
+                "approval.resolved",
+                "2026-01-01T00:00:01Z",
+                json!({"requestId":"reused"}),
+            ),
+            activity(
+                "import",
+                "thread.history.imported",
+                "2026-01-01T00:00:02Z",
+                json!({"historicalActivityIds":["historical-resolution"]}),
+            ),
+            activity(
+                "legacy-import",
+                "thread.history.imported",
+                "2026-01-01T00:00:03Z",
+                json!({"lastMessageId":"last"}),
+            ),
+        ];
+        assert_eq!(
+            derive_pending_approvals(&activities)[0].request_id,
+            "reused"
+        );
     }
 
     #[test]

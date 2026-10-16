@@ -49,6 +49,69 @@ function makeActivity(overrides: {
 }
 
 describe("derivePendingApprovals", () => {
+  it("keeps imported approval history readable without reviving its requests", () => {
+    const request = makeActivity({
+      id: "historical-approval",
+      kind: "approval.requested",
+      summary: "Historical command approval",
+      payload: { requestId: "old-request", requestKind: "command" },
+    });
+    const activities = [
+      request,
+      makeActivity({
+        kind: "thread.history.imported",
+        payload: { historicalActivityIds: [request.id] },
+      }),
+    ];
+
+    expect(derivePendingApprovals(activities)).toEqual([]);
+    expect(deriveWorkLogEntries(activities)).toContainEqual(
+      expect.objectContaining({ id: request.id, label: request.summary }),
+    );
+  });
+
+  it("allows a fresh approval with a reused provider ID despite later-dated imported resolution", () => {
+    const fresh = makeActivity({
+      id: "fresh-approval",
+      kind: "approval.requested",
+      createdAt: "2026-02-22T00:00:00.000Z",
+      sequence: 1,
+      payload: { requestId: "reused-request", requestKind: "command", detail: "fresh command" },
+    });
+    const activities = [
+      makeActivity({
+        id: "historical-approval",
+        kind: "approval.requested",
+        sequence: 900,
+        payload: { requestId: "reused-request", requestKind: "file-change" },
+      }),
+      makeActivity({
+        kind: "thread.history.imported",
+        payload: { historicalActivityIds: ["historical-approval"] },
+      }),
+      fresh,
+      makeActivity({
+        id: "historical-resolution",
+        kind: "approval.resolved",
+        sequence: 901,
+        payload: { requestId: "reused-request" },
+      }),
+      makeActivity({
+        kind: "thread.history.imported",
+        payload: { historicalActivityIds: ["historical-resolution"] },
+      }),
+    ];
+
+    expect(derivePendingApprovals(activities)).toEqual([
+      {
+        requestId: "reused-request",
+        requestKind: "command",
+        createdAt: fresh.createdAt,
+        detail: "fresh command",
+      },
+    ]);
+  });
+
   it("tracks open approvals and removes resolved ones", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -178,6 +241,78 @@ describe("derivePendingApprovals", () => {
 });
 
 describe("derivePendingUserInputs", () => {
+  const historicalQuestions = [
+    {
+      id: "choice",
+      header: "Choice",
+      question: "Which option?",
+      options: [{ label: "Continue", description: "Continue the task" }],
+      multiSelect: false,
+    },
+  ];
+
+  it("keeps imported questions readable without showing an answer form", () => {
+    const request = makeActivity({
+      id: "historical-input",
+      kind: "user-input.requested",
+      summary: "Historical question",
+      payload: { requestId: "old-input", questions: historicalQuestions },
+    });
+    const activities = [
+      request,
+      makeActivity({
+        kind: "thread.history.imported",
+        payload: { historicalActivityIds: [request.id] },
+      }),
+    ];
+
+    expect(derivePendingUserInputs(activities)).toEqual([]);
+    expect(deriveWorkLogEntries(activities)).toContainEqual(
+      expect.objectContaining({ id: request.id, label: request.summary }),
+    );
+  });
+
+  it("allows a fresh question with a reused provider ID despite later-dated imported resolution", () => {
+    const fresh = makeActivity({
+      id: "fresh-input",
+      kind: "user-input.requested",
+      createdAt: "2026-02-22T00:00:00.000Z",
+      sequence: 1,
+      payload: { requestId: "reused-input", questions: historicalQuestions },
+    });
+    const activities = [
+      makeActivity({
+        id: "historical-input",
+        kind: "user-input.requested",
+        sequence: 900,
+        payload: { requestId: "reused-input", questions: historicalQuestions },
+      }),
+      makeActivity({
+        kind: "thread.history.imported",
+        payload: { historicalActivityIds: ["historical-input"] },
+      }),
+      fresh,
+      makeActivity({
+        id: "historical-input-resolution",
+        kind: "user-input.resolved",
+        sequence: 901,
+        payload: { requestId: "reused-input" },
+      }),
+      makeActivity({
+        kind: "thread.history.imported",
+        payload: { historicalActivityIds: ["historical-input-resolution"] },
+      }),
+    ];
+
+    expect(derivePendingUserInputs(activities)).toEqual([
+      {
+        requestId: "reused-input",
+        createdAt: fresh.createdAt,
+        questions: historicalQuestions,
+      },
+    ]);
+  });
+
   it("tracks open structured prompts and removes resolved ones", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

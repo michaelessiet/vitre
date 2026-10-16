@@ -10,6 +10,7 @@ export interface PendingUserInputCardProps {
   readonly drafts: Record<string, PendingUserInputDraftAnswer>;
   readonly answers: Record<string, string> | null;
   readonly respondingUserInputId: ApprovalRequestId | null;
+  readonly submitDisabled?: boolean;
   readonly onSelectOption: (
     requestId: ApprovalRequestId,
     questionId: string,
@@ -90,11 +91,13 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
       })}
       <Pressable
         className={cn(
-          "items-center justify-center rounded-2xl px-4 py-3.5",
+          "items-center justify-center rounded-2xl px-4 py-3.5 disabled:opacity-50",
           props.answers ? "bg-blue-500" : "bg-neutral-200 dark:bg-neutral-700/60",
         )}
         disabled={
-          props.answers === null || props.respondingUserInputId === props.pendingUserInput.requestId
+          props.submitDisabled ||
+          props.answers === null ||
+          props.respondingUserInputId === props.pendingUserInput.requestId
         }
         onPress={() => void props.onSubmit()}
       >

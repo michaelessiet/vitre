@@ -1,0 +1,10 @@
+{
+  "encoded": {
+    "_tag": "CloudDesktopAuthError",
+    "code": "connection_lost",
+    "message": "Delivery could not be confirmed",
+    "requestDisposition": "unknown",
+    "retryable": true
+  },
+  "schema": "CloudDesktopAuthError"
+}

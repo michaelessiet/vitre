@@ -60,6 +60,7 @@ import {
 import * as ProcessRunner from "../processRunner.ts";
 import * as PortScanner from "../preview/PortScanner.ts";
 import * as PtyAdapter from "./PtyAdapter.ts";
+import { withManagedWorkspaceGitCeiling } from "../vcs/managedWorkspaceGitEnv.ts";
 
 export {
   TerminalCwdError,
@@ -123,6 +124,13 @@ export class TerminalManager extends Context.Service<
      * Reuses an existing session for the same thread/terminal id and restores
      * persisted history on first open.
      */
+    readonly exportThread?: (
+      threadId: string,
+    ) => Effect.Effect<ReadonlyArray<TerminalSessionSnapshot>>;
+    readonly importHistory?: (
+      input: TerminalOpenInput,
+      history: string,
+    ) => Effect.Effect<void, TerminalError>;
     readonly open: (
       input: TerminalOpenInput,
     ) => Effect.Effect<TerminalSessionSnapshot, TerminalError>;
@@ -230,6 +238,7 @@ export interface TerminalStartInput extends TerminalOpenInput {
 }
 
 export interface TerminalSessionState {
+  managedCommand?: string;
   threadId: string;
   terminalId: string;
   cwd: string;
@@ -325,6 +334,9 @@ function terminalWireLabel(session: TerminalSessionState): string {
 
 function snapshot(session: TerminalSessionState): TerminalSessionSnapshot {
   return {
+    ...(session.hasRunningSubprocess && session.managedCommand
+      ? { managedCommand: session.managedCommand }
+      : {}),
     threadId: session.threadId,
     terminalId: session.terminalId,
     cwd: session.cwd,
@@ -1272,6 +1284,7 @@ function normalizedRuntimeEnv(
 
 interface TerminalManagerOptions {
   logsDir: string;
+  stateDir?: string;
   historyLineLimit?: number;
   ptyAdapter: PtyAdapter.PtyAdapter["Service"];
   shellResolver?: () => string;
@@ -1292,11 +1305,12 @@ interface TerminalManagerOptions {
 }
 
 export const make = Effect.fn("TerminalManager.make")(function* () {
-  const { terminalLogsDir } = yield* ServerConfig.ServerConfig;
+  const { terminalLogsDir, stateDir } = yield* ServerConfig.ServerConfig;
   const ptyAdapter = yield* PtyAdapter.PtyAdapter;
   const portDiscovery = yield* PortScanner.PortDiscovery;
   return yield* makeWithOptions({
     logsDir: terminalLogsDir,
+    stateDir,
     ptyAdapter,
     registerTerminalProcesses: portDiscovery.registerTerminalProcesses,
     unregisterTerminal: portDiscovery.unregisterTerminal,
@@ -2016,7 +2030,10 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         Effect.andThen(
           Effect.gen(function* () {
             const shellCandidates = resolveShellCandidates(shellResolver, platform, baseEnv);
-            const terminalEnv = createTerminalSpawnEnv(baseEnv, session.runtimeEnv, platform);
+            const inheritedEnv = createTerminalSpawnEnv(baseEnv, session.runtimeEnv, platform);
+            const terminalEnv = options.stateDir
+              ? withManagedWorkspaceGitCeiling(options.stateDir, inheritedEnv)
+              : inheritedEnv;
             const spawnResult = yield* trySpawn(shellCandidates, terminalEnv, session);
             ptyProcess = spawnResult.process;
             startedShell = spawnResult.shellLabel;
@@ -2641,6 +2658,9 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         terminalId,
       });
     }
+    // Only explicit app actions are eligible for handoff restart. Any manual input clears it.
+    if (input.managedCommand) session.managedCommand = input.data;
+    else delete session.managedCommand;
     yield* Effect.try({
       try: () => process.write(input.data),
       catch: (cause) =>
@@ -2797,6 +2817,18 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     );
 
   return TerminalManager.of({
+    exportThread: (threadId) =>
+      sessionsForThread(threadId).pipe(Effect.map((sessions) => sessions.map(snapshot))),
+    importHistory: (input, history) =>
+      Effect.gen(function* () {
+        yield* close({ threadId: input.threadId, terminalId: input.terminalId });
+        yield* persistHistory(
+          input.threadId,
+          input.terminalId,
+          capHistory(history, historyLineLimit),
+        );
+        yield* open(input);
+      }),
     open,
     attachStream,
     write,

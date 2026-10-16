@@ -58,6 +58,7 @@ export const TerminalAttachInput = Schema.Struct({
 export type TerminalAttachInput = Schema.Codec.Encoded<typeof TerminalAttachInput>;
 
 export const TerminalWriteInput = Schema.Struct({
+  managedCommand: Schema.optionalKey(Schema.Boolean),
   ...TerminalSessionInput.fields,
   data: Schema.String.check(Schema.isNonEmpty()).check(Schema.isMaxLength(65_536)),
 });
@@ -94,6 +95,7 @@ export const TerminalSessionStatus = Schema.Literals(["starting", "running", "ex
 export type TerminalSessionStatus = typeof TerminalSessionStatus.Type;
 
 export const TerminalSessionSnapshot = Schema.Struct({
+  managedCommand: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(65_536))),
   threadId: Schema.String.check(Schema.isNonEmpty()),
   terminalId: Schema.String.check(Schema.isNonEmpty()),
   cwd: Schema.String.check(Schema.isNonEmpty()),

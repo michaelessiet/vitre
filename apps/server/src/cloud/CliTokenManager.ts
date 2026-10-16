@@ -2,6 +2,7 @@
 import * as NodeHttp from "node:http";
 
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
+import * as Config from "effect/Config";
 import * as Clock from "effect/Clock";
 import * as Cause from "effect/Cause";
 import * as Console from "effect/Console";
@@ -38,6 +39,7 @@ import {
   hostedAppUrlConfig,
   type CloudCliOAuthConfig,
 } from "./publicConfig.ts";
+import { withSharedCloudAuthLock } from "./sharedAuthLock.ts";
 import { renderLoopbackAuthorizationCompleteHtml } from "./cliAuthHtml.ts";
 
 const CLOUD_CLI_OAUTH_TOKEN_SECRET = "cloud-cli-oauth-token";
@@ -47,7 +49,7 @@ const boldTerminalText = (value: string): string => `\u001b[1m${value}\u001b[22m
 
 export function formatLoopbackAuthorizationPrompt(authorizationUrl: string): string {
   return [
-    "Open this URL to authorize T3 Connect:",
+    "Open this URL to authorize Vitre Connect:",
     `  ${authorizationUrl}`,
     "",
     `Press ${boldTerminalText("Enter")} to open it in your browser.`,
@@ -169,7 +171,7 @@ export class CloudCliCredentialRemovalError extends Schema.TaggedErrorClass<Clou
   { cause: Schema.Defect() },
 ) {
   override get message(): string {
-    return "Could not remove the stored T3 Connect CLI credential.";
+    return "Could not remove the stored Vitre Connect CLI credential.";
   }
 }
 
@@ -178,7 +180,7 @@ export class CloudCliCredentialRefreshError extends Schema.TaggedErrorClass<Clou
   { cause: Schema.Defect() },
 ) {
   override get message(): string {
-    return "Could not refresh the T3 Connect CLI credential.";
+    return "Could not refresh the Vitre Connect CLI credential.";
   }
 }
 
@@ -187,7 +189,7 @@ export class CloudCliCredentialReadError extends Schema.TaggedErrorClass<CloudCl
   { cause: Schema.Defect() },
 ) {
   override get message(): string {
-    return "Could not read the stored T3 Connect CLI credential.";
+    return "Could not read the stored Vitre Connect CLI credential.";
   }
 }
 
@@ -196,7 +198,7 @@ export class CloudCliAuthorizationError extends Schema.TaggedErrorClass<CloudCli
   { cause: Schema.Defect() },
 ) {
   override get message(): string {
-    return "Could not authorize the T3 Connect CLI.";
+    return "Could not authorize the Vitre Connect CLI.";
   }
 }
 
@@ -205,7 +207,7 @@ export class CloudCliAuthorizationTimeoutError extends Schema.TaggedErrorClass<C
   { cause: Schema.Defect() },
 ) {
   override get message(): string {
-    return "Timed out waiting for T3 Connect authorization.";
+    return "Timed out waiting for Vitre Connect authorization.";
   }
 }
 
@@ -218,14 +220,19 @@ export const CloudCliTokenManagerError = Schema.Union([
 ]);
 export type CloudCliTokenManagerError = typeof CloudCliTokenManagerError.Type;
 
+type CliAuthorization =
+  | { readonly _tag: "Authorized"; readonly token: PersistedToken }
+  | { readonly _tag: "HeadlessRequested" };
+
 export class CloudCliTokenManager extends Context.Service<
   CloudCliTokenManager,
   {
-    readonly get: Effect.Effect<
-      | { readonly _tag: "Authorized"; readonly token: PersistedToken }
-      | { readonly _tag: "HeadlessRequested" },
+    readonly get: Effect.Effect<CliAuthorization, CloudCliTokenManagerError | Terminal.QuitError>;
+    readonly getInBrowser?: Effect.Effect<
+      CliAuthorization,
       CloudCliTokenManagerError | Terminal.QuitError
     >;
+    readonly cancelLogin?: Effect.Effect<void>;
     readonly getExisting: Effect.Effect<Option.Option<PersistedToken>, CloudCliTokenManagerError>;
     readonly hasCredential: Effect.Effect<boolean, CloudCliTokenManagerError>;
     readonly store: (token: PersistedToken) => Effect.Effect<void, CloudCliTokenManagerError>;
@@ -337,14 +344,21 @@ export const make = Effect.gen(function* () {
   const terminal = yield* Terminal.Terminal;
   const externalLauncher = yield* ExternalLauncher.ExternalLauncher;
   const semaphore = yield* Semaphore.make(1);
+  const sharedAuth = yield* Config.string("VITRE_CLOUD_SHARED_AUTH_DIR").pipe(
+    Config.option,
+    Effect.orDie,
+  );
+  const sharedAuthDir = Option.getOrUndefined(sharedAuth);
   const persist = Effect.fn("cloud.cli_token.persist")(function* (token: PersistedToken) {
     const encoded = yield* encodePersistedToken(token);
     yield* secrets.set(CLOUD_CLI_OAUTH_TOKEN_SECRET, stringToBytes(encoded));
     return token;
   });
 
-  const clear = secrets
-    .remove(CLOUD_CLI_OAUTH_TOKEN_SECRET)
+  const clear = semaphore
+    .withPermits(1)(
+      withSharedCloudAuthLock(sharedAuthDir, secrets.remove(CLOUD_CLI_OAUTH_TOKEN_SECRET)),
+    )
     .pipe(Effect.mapError((cause) => new CloudCliCredentialRemovalError({ cause })));
 
   const read = Effect.fn("cloud.cli_token.read")(function* () {
@@ -365,7 +379,7 @@ export const make = Effect.gen(function* () {
       : refreshed;
   });
 
-  const login = Effect.fn("cloud.cli_token.login")(function* () {
+  const login = Effect.fn("cloud.cli_token.login")(function* (openBrowser = false) {
     const metadata = yield* cloudCliOAuthConfig;
     const { verifier, challenge, state } = yield* makePkceRequest;
     const callback = yield* Deferred.make<string>();
@@ -377,7 +391,7 @@ export const make = Effect.gen(function* () {
         const url = new URL(request.originalUrl, metadata.redirectUri);
         const code = url.searchParams.get("code");
         if (url.searchParams.get("state") !== state || !code) {
-          return HttpServerResponse.text("Invalid T3 Connect authorization callback.", {
+          return HttpServerResponse.text("Invalid Vitre Connect authorization callback.", {
             status: 400,
           });
         }
@@ -396,6 +410,9 @@ export const make = Effect.gen(function* () {
           disablePreemptiveShutdown: true,
         }),
       ),
+      // Each attempt owns a new router; the server's shared layer memo map
+      // must not reuse a /callback route registered by a cancelled attempt.
+      Layer.fresh,
       Layer.build,
     );
     const authorizationUrl = buildConnectClerkAuthorizeUrl({
@@ -406,18 +423,27 @@ export const make = Effect.gen(function* () {
       state,
       challenge,
     });
-    yield* Console.log(formatLoopbackAuthorizationPrompt(authorizationUrl));
-    const authorization = yield* waitForLoopbackAuthorization({
-      authorizationUrl,
-      callback: Deferred.await(callback).pipe(
-        Effect.timeout(CLOUD_CLI_OAUTH_CALLBACK_TIMEOUT),
-        Effect.catchTag("TimeoutError", (cause) =>
-          Effect.fail(new CloudCliAuthorizationTimeoutError({ cause })),
-        ),
+    const waitForCode = Deferred.await(callback).pipe(
+      Effect.timeout(CLOUD_CLI_OAUTH_CALLBACK_TIMEOUT),
+      Effect.catchTag("TimeoutError", (cause) =>
+        Effect.fail(new CloudCliAuthorizationTimeoutError({ cause })),
       ),
-      terminal,
-      launchBrowser: externalLauncher.launchBrowser,
-    });
+    );
+    const authorization = openBrowser
+      ? yield* externalLauncher.launchBrowser(authorizationUrl).pipe(
+          Effect.andThen(waitForCode),
+          Effect.map((code) => ({ _tag: "AuthorizationCode" as const, code })),
+        )
+      : yield* Console.log(formatLoopbackAuthorizationPrompt(authorizationUrl)).pipe(
+          Effect.andThen(
+            waitForLoopbackAuthorization({
+              authorizationUrl,
+              callback: waitForCode,
+              terminal,
+              launchBrowser: externalLauncher.launchBrowser,
+            }),
+          ),
+        );
     if (authorization._tag === "HeadlessRequested") {
       return authorization;
     }
@@ -442,7 +468,7 @@ export const make = Effect.gen(function* () {
   });
 
   const getExisting = semaphore.withPermits(1)(
-    getExistingNoLock().pipe(
+    withSharedCloudAuthLock(sharedAuthDir, getExistingNoLock()).pipe(
       Effect.mapError((cause) => new CloudCliCredentialRefreshError({ cause })),
       Effect.provide(services),
     ),
@@ -453,39 +479,85 @@ export const make = Effect.gen(function* () {
       Effect.mapError((cause) => new CloudCliCredentialReadError({ cause })),
     ),
   );
-  const get = semaphore.withPermits(1)(
-    Effect.gen(function* () {
-      // A stored credential that can't be read or refreshed (corrupt, revoked,
-      // expired grant) must fall through to a fresh login rather than dead-end
-      // the command — authorizeCli applies the same fallback to out-of-band
-      // authorization.
-      const token = yield* getExistingNoLock().pipe(
-        Effect.orElseSucceed(() => Option.none<PersistedToken>()),
-      );
-      if (Option.isSome(token)) {
-        return { _tag: "Authorized", token: token.value } as const;
-      }
-      const authorization = yield* Effect.scoped(login());
-      return authorization._tag === "Authorized"
-        ? ({ _tag: "Authorized", token: yield* persist(authorization.token) } as const)
-        : authorization;
-    }).pipe(
-      Effect.mapError((cause) =>
-        Terminal.isQuitError(cause) ? cause : new CloudCliAuthorizationError({ cause }),
+  const getWithLogin = (openBrowser: boolean) =>
+    semaphore.withPermits(1)(
+      withSharedCloudAuthLock(
+        sharedAuthDir,
+        Effect.gen(function* () {
+          // A stored credential that can't be read or refreshed (corrupt, revoked,
+          // expired grant) must fall through to a fresh login rather than dead-end
+          // the command — authorizeCli applies the same fallback to out-of-band
+          // authorization.
+          const token = yield* getExistingNoLock().pipe(
+            Effect.orElseSucceed(() => Option.none<PersistedToken>()),
+          );
+          if (Option.isSome(token)) {
+            return { _tag: "Authorized", token: token.value } as const;
+          }
+          const authorization = yield* Effect.scoped(login(openBrowser));
+          return authorization._tag === "Authorized"
+            ? ({ _tag: "Authorized", token: yield* persist(authorization.token) } as const)
+            : authorization;
+        }),
+      ).pipe(
+        Effect.mapError((cause) =>
+          Terminal.isQuitError(cause) ? cause : new CloudCliAuthorizationError({ cause }),
+        ),
+        Effect.provide(services),
       ),
-      Effect.provide(services),
-    ),
-  );
+    );
+  const get = getWithLogin(false);
+  let pendingBrowserLogin:
+    | {
+        cancelled: Deferred.Deferred<never, CloudCliAuthorizationError>;
+        finished: Deferred.Deferred<void>;
+      }
+    | undefined;
+  const getInBrowser = Effect.gen(function* () {
+    if (pendingBrowserLogin)
+      return yield* new CloudCliAuthorizationError({ cause: "Sign-in already in progress" });
+    const cancelled = yield* Deferred.make<never, CloudCliAuthorizationError>();
+    const finished = yield* Deferred.make<void>();
+    const attempt = { cancelled, finished };
+    pendingBrowserLogin = attempt;
+    return yield* Effect.raceFirst(getWithLogin(true), Deferred.await(cancelled)).pipe(
+      Effect.ensuring(
+        Effect.gen(function* () {
+          if (pendingBrowserLogin === attempt) pendingBrowserLogin = undefined;
+          yield* Deferred.succeed(finished, undefined);
+        }),
+      ),
+    );
+  });
+  const cancelLogin = Effect.gen(function* () {
+    const attempt = pendingBrowserLogin;
+    if (attempt) {
+      yield* Deferred.fail(
+        attempt.cancelled,
+        new CloudCliAuthorizationError({ cause: "Sign-in cancelled" }),
+      );
+      // A retry must wait until the old callback listener and account lock are released.
+      yield* Deferred.await(attempt.finished);
+    }
+  });
   const store = Effect.fn("cloud.cli_token.store")(function* (token: PersistedToken) {
     yield* semaphore.withPermits(1)(
-      persist(token).pipe(
+      withSharedCloudAuthLock(sharedAuthDir, persist(token)).pipe(
         Effect.asVoid,
         Effect.mapError((cause) => new CloudCliAuthorizationError({ cause })),
       ),
     );
   });
 
-  return CloudCliTokenManager.of({ get, getExisting, hasCredential, store, clear });
+  return CloudCliTokenManager.of({
+    get,
+    getInBrowser,
+    cancelLogin,
+    getExisting,
+    hasCredential,
+    store,
+    clear,
+  });
 });
 
 export const layer = Layer.effect(CloudCliTokenManager, make);

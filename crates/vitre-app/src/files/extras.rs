@@ -4,6 +4,7 @@ use gpui_component::WindowExt as _;
 
 #[derive(Clone)]
 pub struct FileContext {
+    pub client: Arc<EnvironmentClient>,
     pub cwd: String,
     pub path: String,
 }
@@ -96,6 +97,7 @@ impl FilesPanel {
     pub(super) fn copy_focused(&self, cx: &mut Context<Self>) {
         if let Some(path) = &self.tree_focused {
             cx.set_global(FileClipboard(FileContext {
+                client: self.client.clone(),
                 cwd: self.cwd.clone(),
                 path: path.clone(),
             }));
@@ -130,6 +132,12 @@ impl FilesPanel {
         parent: String,
         cx: &mut Context<Self>,
     ) {
+        if !Arc::ptr_eq(&self.client, &source.client) {
+            self.status =
+                Some("Copying across execution environments is not available yet.".into());
+            cx.notify();
+            return;
+        }
         let name = source.path.rsplit('/').next().unwrap_or(&source.path);
         let path = if parent.is_empty() {
             name.to_string()
@@ -202,37 +210,95 @@ impl FilesPanel {
             image: None,
             detail: "Loading image…".into(),
         });
-        // This client currently owns a local sidecar. Resolve against its root,
-        // reject escaping symlinks, and keep I/O and decoding off the UI thread.
-        let task = cx.background_executor().spawn(async move {
-            use std::io::Read as _;
-            let result = (|| -> anyhow::Result<(Arc<gpui::RenderImage>, String)> {
-                let root = std::fs::canonicalize(cwd)?;
-                let absolute = std::fs::canonicalize(root.join(&file_path))?;
-                anyhow::ensure!(absolute.starts_with(root), "Image is outside the workspace");
-                let mut bytes = Vec::new();
-                std::fs::File::open(absolute)?
-                    .take(32 * 1024 * 1024 + 1)
-                    .read_to_end(&mut bytes)?;
-                anyhow::ensure!(bytes.len() <= 32 * 1024 * 1024, "Image exceeds 32 MB");
-                let mut reader =
-                    image::ImageReader::new(std::io::Cursor::new(&bytes)).with_guessed_format()?;
-                let mut limits = image::Limits::default();
-                limits.max_alloc = Some(128 * 1024 * 1024);
-                limits.max_image_width = Some(16384);
-                limits.max_image_height = Some(16384);
-                reader.limits(limits);
-                let decoded = reader.decode()?;
-                let detail = format!(
-                    "{} × {} · {} KB",
-                    decoded.width(),
-                    decoded.height(),
-                    bytes.len().div_ceil(1024)
+        let remote = self.remote;
+        let client = self.client.clone();
+        let thread_id = self.asset_thread_id.clone();
+        let task = gpui_tokio::Tokio::spawn_result(cx, async move {
+            let remote_bytes = if remote {
+                let thread_id =
+                    thread_id.ok_or_else(|| anyhow::anyhow!("No cloud workspace selected"))?;
+                let session = client
+                    .sessions()
+                    .borrow()
+                    .clone()
+                    .ok_or_else(|| anyhow::anyhow!("Cloud is disconnected"))?;
+                let signed = client
+                    .call::<vitre_contracts::methods::AssetsCreateUrl>(
+                        &vitre_contracts::AssetCreateUrlInput {
+                            resource: vitre_contracts::AssetResource::WorkspaceFile {
+                                thread_id,
+                                path: vitre_contracts::TrimmedNonEmptyString(format!(
+                                    "{cwd}/{file_path}"
+                                )),
+                            },
+                        },
+                    )
+                    .await
+                    .map_err(|error| anyhow::anyhow!("{error}"))?;
+                let base = reqwest::Url::parse(&session.target.base_url)?;
+                let url = base.join(&signed.relative_url.0)?;
+                anyhow::ensure!(
+                    url.origin() == base.origin()
+                        && url.username().is_empty()
+                        && url.password().is_none(),
+                    "Invalid image origin"
                 );
-                let image = crate::image_render::from_dynamic(decoded.thumbnail(4096, 4096));
-                Ok((image, detail))
-            })();
-            result.map_err(|e| e.to_string())
+                let http = reqwest::Client::builder()
+                    .redirect(reqwest::redirect::Policy::none())
+                    .timeout(Duration::from_secs(30))
+                    .build()?;
+                let mut response = http.get(url).send().await?.error_for_status()?;
+                anyhow::ensure!(response.status().is_success(), "Image redirect rejected");
+                let mut bytes = Vec::new();
+                while let Some(chunk) = response.chunk().await? {
+                    anyhow::ensure!(
+                        bytes.len() + chunk.len() <= 32 * 1024 * 1024,
+                        "Image exceeds 32 MB"
+                    );
+                    bytes.extend_from_slice(&chunk);
+                }
+                Some(bytes)
+            } else {
+                None
+            };
+            tokio::task::spawn_blocking(
+                move || -> anyhow::Result<(Arc<gpui::RenderImage>, String)> {
+                    use std::io::Read as _;
+                    let bytes = if let Some(bytes) = remote_bytes {
+                        bytes
+                    } else {
+                        let root = std::fs::canonicalize(cwd)?;
+                        let absolute = std::fs::canonicalize(root.join(&file_path))?;
+                        anyhow::ensure!(
+                            absolute.starts_with(root),
+                            "Image is outside the workspace"
+                        );
+                        let mut bytes = Vec::new();
+                        std::fs::File::open(absolute)?
+                            .take(32 * 1024 * 1024 + 1)
+                            .read_to_end(&mut bytes)?;
+                        anyhow::ensure!(bytes.len() <= 32 * 1024 * 1024, "Image exceeds 32 MB");
+                        bytes
+                    };
+                    let mut reader = image::ImageReader::new(std::io::Cursor::new(&bytes))
+                        .with_guessed_format()?;
+                    let mut limits = image::Limits::default();
+                    limits.max_alloc = Some(128 * 1024 * 1024);
+                    limits.max_image_width = Some(16384);
+                    limits.max_image_height = Some(16384);
+                    reader.limits(limits);
+                    let decoded = reader.decode()?;
+                    let detail = format!(
+                        "{} × {} · {} KB",
+                        decoded.width(),
+                        decoded.height(),
+                        bytes.len().div_ceil(1024)
+                    );
+                    let image = crate::image_render::from_dynamic(decoded.thumbnail(4096, 4096));
+                    Ok((image, detail))
+                },
+            )
+            .await?
         });
         cx.spawn_in(window, async move |this, cx| {
             let result = task.await;

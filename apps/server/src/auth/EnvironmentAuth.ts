@@ -427,6 +427,7 @@ export class EnvironmentAuth extends Context.Service<
       requestMetadata: AuthClientMetadata,
       input?: {
         readonly proofKeyThumbprint?: string;
+        readonly includeWebSocketTicket?: boolean;
       },
     ) => Effect.Effect<
       AuthAccessTokenResult,
@@ -722,23 +723,34 @@ export const make = Effect.gen(function* () {
           }),
         ),
         Effect.flatMap((session) =>
-          DateTime.now.pipe(
-            Effect.map(
-              (now) =>
-                ({
-                  access_token: session.token,
-                  issued_token_type: AuthAccessTokenType,
-                  token_type: input?.proofKeyThumbprint ? "DPoP" : "Bearer",
-                  expires_in: Math.max(
-                    0,
-                    Math.floor(
-                      (session.expiresAt.epochMilliseconds - now.epochMilliseconds) / 1000,
-                    ),
-                  ),
-                  scope: encodeOAuthScope(session.scopes),
-                }) satisfies AuthAccessTokenResult,
-            ),
-          ),
+          Effect.gen(function* () {
+            const now = yield* DateTime.now;
+            const websocket = input?.includeWebSocketTicket
+              ? yield* sessions
+                  .issueWebSocketToken(session.sessionId)
+                  .pipe(
+                    Effect.mapError((cause) => new ServerAuthWebSocketTokenIssueError({ cause })),
+                  )
+              : undefined;
+            return {
+              access_token: session.token,
+              issued_token_type: AuthAccessTokenType,
+              token_type: input?.proofKeyThumbprint ? "DPoP" : "Bearer",
+              expires_in: Math.max(
+                0,
+                Math.floor((session.expiresAt.epochMilliseconds - now.epochMilliseconds) / 1000),
+              ),
+              scope: encodeOAuthScope(session.scopes),
+              ...(websocket
+                ? {
+                    websocket_ticket: {
+                      ticket: websocket.token,
+                      expiresAt: DateTime.toUtc(websocket.expiresAt),
+                    },
+                  }
+                : {}),
+            } satisfies AuthAccessTokenResult;
+          }),
         ),
         Effect.withSpan("EnvironmentAuth.exchangeBootstrapCredentialForAccessToken"),
       );
