@@ -207,44 +207,100 @@ impl ChatApp {
             for project in &snapshot.projects {
                 let id = project.id.clone();
                 let active = selected.as_ref() == Some(&id);
+                let member = ProjectMember {
+                    physical_key: derive_physical_project_key(project),
+                    project_id: id.clone(),
+                    title: project.title.0.clone().into(),
+                    workspace_root: project.workspace_root.0.clone().into(),
+                };
+                let menu_member = member.clone();
+                let menu_owner = cx.entity().downgrade();
+                let context_owner = menu_owner.clone();
                 tabs = tabs.child(
                     h_flex()
                         .id(SharedString::from(format!("project-tab-{}", id.0)))
-                        .px_3()
-                        .py_2()
-                        .gap_2()
+                        .pl_3()
+                        .pr_1()
+                        .gap_1()
                         .max_w(px(200.))
                         .flex_shrink_0()
                         .rounded_md()
-                        .cursor_pointer()
                         .when(active, |tab| tab.bg(cx.theme().list_active))
                         .hover(|tab| tab.bg(cx.theme().list_hover))
-                        .child(self.project_icon(&project.title.0, &project.workspace_root.0, cx))
                         .child(
-                            div()
+                            h_flex()
+                                .id(SharedString::from(format!(
+                                    "project-tab-select-{}",
+                                    project.id.0
+                                )))
+                                .gap_2()
                                 .min_w_0()
-                                .truncate()
-                                .text_sm()
-                                .child(project.title.0.clone()),
+                                .py_2()
+                                .cursor_pointer()
+                                .child(self.project_icon(
+                                    &project.title.0,
+                                    &project.workspace_root.0,
+                                    cx,
+                                ))
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_sm()
+                                        .child(project.title.0.clone()),
+                                )
+                                .on_click(cx.listener(move |app, _, window, cx| {
+                                    if app.tab_project_id().as_ref() == Some(&id)
+                                        || app.draft_creating
+                                    {
+                                        return;
+                                    }
+                                    let thread = app
+                                        .sidebar_rows
+                                        .iter()
+                                        .flat_map(|row| &row.threads)
+                                        .find(|t| {
+                                            app.shell_thread(&t.id)
+                                                .is_some_and(|t| t.project_id == id)
+                                        })
+                                        .map(|t| t.id.clone());
+                                    if let Some(thread) = thread {
+                                        app.select_thread(thread, cx);
+                                    } else {
+                                        app.new_thread(Some(id.clone()), window, cx);
+                                    }
+                                })),
                         )
-                        .on_click(cx.listener(move |app, _, window, cx| {
-                            if app.tab_project_id().as_ref() == Some(&id) || app.draft_creating {
-                                return;
-                            }
-                            let thread = app
-                                .sidebar_rows
-                                .iter()
-                                .flat_map(|row| &row.threads)
-                                .find(|t| {
-                                    app.shell_thread(&t.id).is_some_and(|t| t.project_id == id)
-                                })
-                                .map(|t| t.id.clone());
-                            if let Some(thread) = thread {
-                                app.select_thread(thread, cx);
-                            } else {
-                                app.new_thread(Some(id.clone()), window, cx);
-                            }
-                        })),
+                        .child(
+                            Button::new(SharedString::from(format!(
+                                "project-tab-menu-{}",
+                                project.id.0
+                            )))
+                            .ghost()
+                            .xsmall()
+                            .icon(IconName::Ellipsis)
+                            .tooltip("Project actions")
+                            .dropdown_menu(
+                                move |menu, window, cx| {
+                                    project_context_menu(
+                                        menu,
+                                        &menu_owner,
+                                        std::slice::from_ref(&menu_member),
+                                        window,
+                                        cx,
+                                    )
+                                },
+                            ),
+                        )
+                        .context_menu(move |menu, window, cx| {
+                            project_context_menu(
+                                menu,
+                                &context_owner,
+                                std::slice::from_ref(&member),
+                                window,
+                                cx,
+                            )
+                        }),
                 );
             }
         }
