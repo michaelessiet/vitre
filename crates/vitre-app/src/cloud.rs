@@ -14,7 +14,7 @@ use gpui_component::{
     tag::Tag,
     v_flex,
 };
-use vitre_contracts::{CloudProvider, CloudTask, CloudTaskKind, CloudTaskState};
+use vitre_contracts::{CloudProvider, CloudTask, CloudTaskState};
 
 pub(crate) use forms::{Sheet, render_sheet as render_sheet_card};
 pub(crate) use presentation::*;

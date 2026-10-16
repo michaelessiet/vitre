@@ -7226,10 +7226,11 @@ impl ChatApp {
                 .as_ref()
                 .is_some_and(|session| session.status == OrchestrationSessionStatus::Running)
         });
-        let dispatching = self.local_dispatch.is_some() || matches!(
-            presentation.facts.delivery,
-            conversation_status::Delivery::Submitting
-        );
+        let dispatching = self.local_dispatch.is_some()
+            || matches!(
+                presentation.facts.delivery,
+                conversation_status::Delivery::Submitting
+            );
         // Model picker: current selection comes from the SHELL copy (meta
         // events are shell-scoped); options come from the server config.
         let current_selection: Option<ModelSelection> = self
@@ -7243,23 +7244,6 @@ impl ChatApp {
             .as_ref()
             .and_then(|selection| selection.instance_id.clone().flatten())
             .and_then(|value| value.as_str().map(str::to_string));
-        let session_error: Option<SharedString> = view.and_then(|view| {
-            view.session
-                .as_ref()
-                .filter(|session| {
-                    // A saved model selection takes effect on the next turn.
-                    // Do not present the previous provider's limit as a failure
-                    // of the provider the user has just selected.
-                    let session_instance = session
-                        .provider_instance_id
-                        .as_ref()
-                        .and_then(Option::as_ref);
-                    !matches!((session_instance, current_instance.as_deref()),
-                        (Some(previous), Some(selected)) if previous.0 != selected)
-                })
-                .and_then(|session| session.last_error.as_ref())
-                .map(|error| error.0.clone().into())
-        });
         let providers = &self.provider_snapshots;
         let model_label: SharedString = providers
             .iter()

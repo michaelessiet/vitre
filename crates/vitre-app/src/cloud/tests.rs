@@ -1,4 +1,5 @@
 use super::*;
+use vitre_contracts::CloudTaskKind;
 
 pub(crate) mod fixtures {
     use super::*;
