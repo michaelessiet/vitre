@@ -9,6 +9,9 @@ publish = false
 name = "vitre"
 path = "src/main.rs"
 
+[features]
+perf-probe = ["gpui/profiler"]
+
 [dependencies]
 alacritty_terminal.workspace = true
 anyhow.workspace = true

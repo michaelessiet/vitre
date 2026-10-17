@@ -557,6 +557,24 @@ pub(super) fn current_request_activities(
             .collect(),
     )
 }
+
+/// The portions of a thread view needed by chat chrome. Recompute once when
+/// the projection is published, rather than cloning and scanning the entire
+/// activity history on every scroll repaint.
+pub(super) fn derive_thread_presentation(
+    view: &OrchestrationThread,
+) -> (
+    Vec<PendingApproval>,
+    Vec<PendingUserInput>,
+    Option<ContextWindowSnapshot>,
+) {
+    let request_activities = current_request_activities(view);
+    (
+        derive_pending_approvals(&request_activities),
+        derive_pending_user_inputs(&request_activities),
+        derive_latest_context_window_snapshot(&view.activities),
+    )
+}
 fn task_turn(task: &vitre_contracts::CloudTask) -> Turn {
     if task.idle == Some(true)
         && !matches!(
@@ -899,10 +917,9 @@ impl ChatApp {
                     .as_ref()
                     .is_none_or(|task| task.state != CloudTaskState::Queued)
             {
-                let activities = current_request_activities(view);
-                if !derive_pending_approvals(&activities).is_empty() {
+                if !self.presentation_pending_approvals.is_empty() {
                     facts.turn = Turn::Approval;
-                } else if !derive_pending_user_inputs(&activities).is_empty() {
+                } else if !self.presentation_pending_inputs.is_empty() {
                     facts.turn = Turn::Input;
                 }
             }
@@ -1778,6 +1795,77 @@ mod tests {
             1
         );
         assert_eq!(view.activities.len(), 3);
+    }
+    #[test]
+    fn presentation_snapshot_tracks_requests_resolutions_and_rehydration() {
+        let mut view = crate::cloud::tests::fixtures::thread();
+        view.latest_turn = Some(
+            serde_json::from_value(serde_json::json!({
+                "turnId":"active", "state":"running", "requestedAt":"2026-10-16T11:00:00Z",
+                "startedAt":"2026-10-16T11:00:00Z", "completedAt":null,
+                "assistantMessageId":null, "sourceProposedPlan":null
+            }))
+            .unwrap(),
+        );
+        let activity = |id: &str, kind: &str, payload: serde_json::Value| {
+            serde_json::from_value(serde_json::json!({
+                "id": id, "kind": kind, "createdAt": "2026-10-16T11:00:01Z",
+                "summary": id, "tone": "info", "turnId": "active", "payload": payload
+            }))
+            .unwrap()
+        };
+        view.activities = vec![
+            activity(
+                "approval",
+                "approval.requested",
+                serde_json::json!({
+                    "requestId":"approve", "requestKind":"command"
+                }),
+            ),
+            activity(
+                "question",
+                "user-input.requested",
+                serde_json::json!({
+                    "requestId":"answer", "questions":[{
+                        "id":"choice", "header":"Choose", "question":"Which?", "options":[]
+                    }]
+                }),
+            ),
+            activity(
+                "context",
+                "context-window.updated",
+                serde_json::json!({
+                    "usedTokens": 250.0, "maxTokens": 1000.0
+                }),
+            ),
+        ];
+        let (approvals, inputs, context) = derive_thread_presentation(&view);
+        assert_eq!(approvals[0].request_id, "approve");
+        assert_eq!(inputs[0].request_id, "answer");
+        assert_eq!(context.unwrap().used_percentage, Some(25.0));
+
+        // Rebuilding from a restored view gives the same UI state. A later
+        // projection update drops both resolved panels without a render scan.
+        let restored = view.clone();
+        assert_eq!(derive_thread_presentation(&restored).0, approvals);
+        view.activities.push(activity(
+            "approval-done",
+            "approval.resolved",
+            serde_json::json!({
+                "requestId":"approve"
+            }),
+        ));
+        view.activities.push(activity(
+            "question-done",
+            "user-input.resolved",
+            serde_json::json!({
+                "requestId":"answer"
+            }),
+        ));
+        let (approvals, inputs, context) = derive_thread_presentation(&view);
+        assert!(approvals.is_empty());
+        assert!(inputs.is_empty());
+        assert_eq!(context.unwrap().used_percentage, Some(25.0));
     }
     #[test]
     fn terminal_transfer_failure_stops_motion_at_the_recoverable_phase() {

@@ -7,6 +7,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(feature = "perf-probe")]
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use anyhow::{Context as _, ensure};
 use base64::Engine as _;
 use gpui::{App, Asset, ImageCacheError, ImageSource, RenderImage, SharedString};
@@ -14,6 +17,14 @@ use gpui::{App, Asset, ImageCacheError, ImageSource, RenderImage, SharedString};
 const MAX_BYTES: usize = 32 * 1024 * 1024;
 // Bound peak decoder scratch space even when a viewport contains many images.
 static DECODES: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+
+#[cfg(feature = "perf-probe")]
+static IMAGE_LOADS: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(feature = "perf-probe")]
+pub(super) fn image_load_count() -> u64 {
+    IMAGE_LOADS.load(Ordering::Relaxed)
+}
 
 #[cfg(debug_assertions)]
 mod verification;
@@ -48,7 +59,7 @@ fn cached_source(url: SharedString, full: bool) -> ImageSource {
         let cache = &mut cx.global_mut::<ImageBudget>().0;
         cache.insert((url.clone(), full), (bytes, Instant::now()));
         let mut evicted = Vec::new();
-        while cache.len() > 32
+        while cache.len() > 64
             || cache.values().map(|(bytes, _)| bytes).sum::<usize>() > 64 * 1024 * 1024
         {
             // Active viewport/lightbox pixels are pinned; evict reusable assets.
@@ -84,7 +95,7 @@ impl Asset for ChatThumbnail {
         url: SharedString,
         cx: &mut App,
     ) -> impl Future<Output = Self::Output> + Send + 'static {
-        load_image(url, 1024, cx)
+        load_image(url, 512, cx)
     }
 }
 
@@ -105,6 +116,8 @@ fn load_image(
     edge: u32,
     cx: &mut App,
 ) -> impl Future<Output = Result<Arc<RenderImage>, ImageCacheError>> + Send + 'static {
+    #[cfg(feature = "perf-probe")]
+    IMAGE_LOADS.fetch_add(1, Ordering::Relaxed);
     let task = gpui_tokio::Tokio::spawn_result(cx, async move {
         let permit = DECODES.acquire().await?;
         let bytes = load_bytes(&url).await?;
@@ -255,17 +268,17 @@ mod tests {
         image::RgbaImage::from_pixel(2048, 1024, image::Rgba([80, 140, 220, 128]))
             .write_to(&mut bytes, image::ImageFormat::Png)
             .unwrap();
-        let thumbnail = decode_sized(bytes.get_ref(), 1024).unwrap();
+        let thumbnail = decode_sized(bytes.get_ref(), 512).unwrap();
         let full = decode_sized(bytes.get_ref(), 4096).unwrap();
         assert_eq!(
             thumbnail.size(0),
-            gpui::size(gpui::DevicePixels(1024), gpui::DevicePixels(512))
+            gpui::size(gpui::DevicePixels(512), gpui::DevicePixels(256))
         );
         assert_eq!(
             full.size(0),
             gpui::size(gpui::DevicePixels(2048), gpui::DevicePixels(1024))
         );
-        assert_eq!(thumbnail.as_bytes(0).unwrap().len(), 1024 * 512 * 4);
+        assert_eq!(thumbnail.as_bytes(0).unwrap().len(), 512 * 256 * 4);
     }
 
     #[tokio::test]
