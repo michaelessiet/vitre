@@ -19,7 +19,6 @@
 release
 .turbo
 .cache
-apps/desktop-tauri
 crates
 experiments
 assets

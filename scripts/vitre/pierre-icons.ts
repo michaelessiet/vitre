@@ -1,15 +1,9 @@
-import {
-  createFileTreeIconResolver,
-  getBuiltInSpriteSheet,
-  type FileTreeIcons,
-} from "@pierre/trees";
+import { createFileTreeIconResolver, type FileTreeIcons } from "@pierre/trees";
 
 export interface PierreIconResolution {
   name: string;
   token?: string;
 }
-
-const PIERRE_ICON_SPRITE_ID = "t3code-pierre-file-icon-sprite";
 
 const T3_FILE_ICON_SPRITE = `
 <svg xmlns="http://www.w3.org/2000/svg" width="0" height="0" aria-hidden="true">
@@ -282,18 +276,4 @@ export function resolvePierreIconForEntry(
 
 export function hasSpecificPierreIconForFileName(fileName: string): boolean {
   return resolvePierreIconForEntry(fileName, "file")?.token !== "default";
-}
-
-export function ensurePierreIconSprite(): void {
-  if (typeof document === "undefined" || document.getElementById(PIERRE_ICON_SPRITE_ID)) return;
-  const container = document.createElement("div");
-  container.id = PIERRE_ICON_SPRITE_ID;
-  container.setAttribute("aria-hidden", "true");
-  container.style.position = "absolute";
-  container.style.width = "0";
-  container.style.height = "0";
-  container.style.overflow = "hidden";
-  container.style.pointerEvents = "none";
-  container.innerHTML = `${getBuiltInSpriteSheet("complete")}${T3_FILE_ICON_SPRITE}`;
-  document.body.prepend(container);
 }

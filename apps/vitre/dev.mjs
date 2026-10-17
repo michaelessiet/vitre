@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 // Dev runner for the native Vitre shell: ensure the server bundle exists,
 // then `cargo run -p vitre-app` against it. The Rust shell spawns and
-// supervises the sidecar itself (same model as the packaged app), so unlike
-// `dev:desktop` there is no separate server dev process here — rebuild the
+// supervises the sidecar itself (same model as the packaged app). Rebuild the
 // bundle (`pnpm --filter t3 build:bundle` or `--rebuild`) to pick up server
 // changes.
 

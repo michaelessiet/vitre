@@ -15,7 +15,7 @@ import {
 } from "@t3tools/contracts";
 import * as NetService from "@t3tools/shared/Net";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { deriveServerPaths } from "../config.ts";
+import { deriveServerPaths, resolveStaticDir } from "../config.ts";
 import { resolveServerConfig } from "./config.ts";
 
 const deriveExplicitServerPaths = (baseDir: string, devUrl: URL | undefined) =>
@@ -38,6 +38,12 @@ const makeDesktopBootstrap = (
 });
 
 it.layer(NodeServices.layer)("cli config resolution", (it) => {
+  it.effect("does not serve a bundled client by default", () =>
+    Effect.gen(function* () {
+      assert.isUndefined(yield* resolveStaticDir());
+    }),
+  );
+
   const defaultObservabilityConfig = {
     traceMinLevel: "Info",
     traceTimingEnabled: true,

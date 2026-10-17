@@ -18,7 +18,9 @@
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
+    "@pierre/trees": "1.0.0-beta.4",
     "@types/pngjs": "6.0.5",
+    "playwright-core": "1.60.0",
     "vite-plus": "catalog:"
   }
 }

@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { runInNewContext } from "node:vm";
-const require = createRequire(new URL("../../apps/desktop/package.json", import.meta.url));
+const require = createRequire(new URL("../package.json", import.meta.url));
 const path = resolve(dirname(require.resolve("playwright-core/package.json")), "lib/coreBundle.js");
 const bundle = await readFile(path, "utf8");
 const marker = "source3 = ";

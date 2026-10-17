@@ -1,13 +1,7 @@
 import "vite-plus/test/config";
 import { defineConfig } from "vite-plus";
-import * as NodeURL from "node:url";
 
 export default defineConfig({
-  resolve: {
-    alias: {
-      "~": NodeURL.fileURLToPath(new URL("./apps/web/src", import.meta.url)),
-    },
-  },
   test: {
     environment: "node",
     exclude: [
@@ -36,8 +30,6 @@ export default defineConfig({
       "pnpm-lock.yaml",
       "*.tsbuildinfo",
       "**/routeTree.gen.ts",
-      "apps/web/public/mockServiceWorker.js",
-      "apps/web/src/lib/vendor/qrcodegen.ts",
       "*.icon/**",
     ],
     sortPackageJson: {},
