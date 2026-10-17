@@ -2,7 +2,7 @@
 
 ## Default Application Target
 
-- Target Vitre (`crates/vitre-app`) for application changes unless the user explicitly specifies T3 Code Electron. Shared backend changes may be made when required to support Vitre.
+- Target Vitre (`crates/vitre-app`) for application changes unless the user explicitly specifies another application. Shared backend changes may be made when required to support Vitre.
 
 ## Task Completion Requirements
 
@@ -12,25 +12,22 @@
   - Run targeted formatting, lint, and type checks for the affected scope when available.
 - Do not run repo-wide `vp check`, `vp run typecheck`, `vp run test`, or equivalent full-suite commands locally unless the user explicitly requests them. CI is responsible for the full verification suite.
 - After frontend feature development or any user-visible frontend behavior change, the primary agent must run one integrated verification pass for each affected client surface after integrating the work:
-  - Web: use the `test-t3-app` skill. Launch one isolated environment, authenticate through the printed pairing URL, and verify the affected flow in the controlled browser.
+  - Vitre: launch the native application and verify the affected flow.
   - Subagents must not independently launch dev servers or repeat integrated client verification unless their delegated task explicitly requires it.
   - Stop dev servers, watchers, and other long-running verification processes when the focused verification is complete.
 
 ## Dev Servers
 
-- In a linked git worktree, dev state defaults to that worktree's gitignored `.t3`. This deliberately outranks an ambient `T3CODE_HOME`, which could otherwise select the installed app's live `~/.t3/userdata` database. An explicit `--home-dir` still wins.
-- Start the web stack with `vp run dev`. Add `--share` when someone needs to open it from another device on the tailnet.
-- Browser dev is single-origin: Vite proxies `/api`, `/ws`, `/oauth`, and `/.well-known` to the backend. Do not set `VITE_HTTP_URL` or `VITE_WS_URL` for `dev`/`dev:web`.
-- Worktree paths supply stable preferred port offsets. Read the actual server and web ports from the `[dev-runner]` line because occupied ports can still shift them.
-- Before handing off a `--share` URL, open its origin in a controlled browser and confirm the app loads. A successful curl is insufficient because browsers reject some otherwise reachable ports.
+- In a linked git worktree, dev state defaults to that worktree's gitignored `.t3`. An explicit `--home-dir` still wins.
+- Start the backend with `vp run dev:server` and the native app with `vp run dev:vitre`.
 
 ## Package Roles
 
-- `apps/server`: Node.js WebSocket server. Wraps Codex app-server (JSON-RPC over stdio), serves the React web app, and manages provider sessions.
-- `apps/web`: React/Vite UI. Owns session UX, conversation/event rendering, and client-side state. Connects to the server via WebSocket.
+- `apps/server`: Node.js WebSocket server. Wraps Codex app-server (JSON-RPC over stdio) and manages provider sessions.
+- `crates/vitre-app`: Native Vitre user interface.
 - `packages/contracts`: Shared effect/Schema schemas and TypeScript contracts for provider events, WebSocket protocol, and model/session types. Keep this package schema-only — no runtime logic.
-- `packages/shared`: Shared runtime utilities consumed by both server and client applications. Uses explicit subpath exports (e.g. `@t3tools/shared/git`) — no barrel index.
-- `packages/client-runtime`: Shared runtime package for web and desktop client code.
+- `packages/shared`: Shared runtime utilities consumed by the server and client integrations. Uses explicit subpath exports (e.g. `@t3tools/shared/git`) — no barrel index.
+- `packages/client-runtime`: Shared runtime package for the relay and native client integration.
 
 ## Reference Repos
 

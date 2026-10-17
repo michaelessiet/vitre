@@ -1,6 +1,6 @@
 # Native file icons
 
-Exported from the installed @pierre/trees 1.0.0-beta.4 (Apache-2.0, Copyright 2025 Pierre Computer Company), combined with T3's MIT custom icons in apps/web/src/pierre-icons.ts. Only SVG artwork and filename/extension lookup tables are included; no web tree runtime or new dependency.
+Exported from the pinned @pierre/trees 1.0.0-beta.4 (Apache-2.0, Copyright 2025 Pierre Computer Company), combined with T3's MIT custom icons in scripts/vitre/pierre-icons.ts. Only SVG artwork and filename/extension lookup tables are included; no web tree runtime dependency.
 
 Local adaptations: standalone 32px SVG documents, explicit light/dark currentColor, and native embedded-asset lookup tables. Regenerate with Node 24: node scripts/vitre/export-file-icons.mjs (prints an apply_patch patch); verify with --check. Rustfmt may be applied to the generated Rust file.
 

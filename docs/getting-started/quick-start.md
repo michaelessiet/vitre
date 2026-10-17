@@ -1,22 +1,18 @@
 # Quick start
 
 ```bash
-# Development (with hot reload)
-bun run dev
+# Install dependencies
+vp install
 
-# Desktop development
-bun run dev:desktop
+# Start the native Vitre development app
+vp run dev:vitre
 
-# Desktop development on an isolated port set
-T3CODE_DEV_INSTANCE=feature-xyz bun run dev:desktop
+# Start only the backend in watch mode
+vp run dev:server
 
-# Production
-bun run build
-bun run start
+# Build the backend package
+vp run --filter t3 build
 
-# Build a shareable macOS .dmg (arm64 by default)
-bun run dist:desktop:dmg
-
-# Or from any project directory after publishing:
+# Run the published backend CLI
 npx t3
 ```

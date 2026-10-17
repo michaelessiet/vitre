@@ -25,23 +25,23 @@ const RunNumberSchema = Schema.FiniteFromString.check(
   Schema.isGreaterThanOrEqualTo(1),
 );
 const ShaSchema = Schema.String.check(Schema.isPattern(/^[0-9a-f]{7,40}$/i));
-const DesktopPackageJsonSchema = Schema.Struct({
+const ServerPackageJsonSchema = Schema.Struct({
   version: Schema.NonEmptyString,
 });
 
-export class InvalidDesktopPackageVersionError extends Schema.TaggedErrorClass<InvalidDesktopPackageVersionError>()(
-  "InvalidDesktopPackageVersionError",
+export class InvalidServerPackageVersionError extends Schema.TaggedErrorClass<InvalidServerPackageVersionError>()(
+  "InvalidServerPackageVersionError",
   {
     version: Schema.String,
   },
 ) {
   override get message(): string {
-    return `Invalid desktop package version '${this.version}'.`;
+    return `Invalid server package version '${this.version}'.`;
   }
 }
 
-export class NightlyReleaseDesktopPackageError extends Schema.TaggedErrorClass<NightlyReleaseDesktopPackageError>()(
-  "NightlyReleaseDesktopPackageError",
+export class NightlyReleaseServerPackageError extends Schema.TaggedErrorClass<NightlyReleaseServerPackageError>()(
+  "NightlyReleaseServerPackageError",
   {
     operation: Schema.Literals(["read", "decode"]),
     packageJsonPath: Schema.String,
@@ -49,7 +49,7 @@ export class NightlyReleaseDesktopPackageError extends Schema.TaggedErrorClass<N
   },
 ) {
   override get message(): string {
-    return `Failed to ${this.operation} desktop package metadata at ${this.packageJsonPath}.`;
+    return `Failed to ${this.operation} server package metadata at ${this.packageJsonPath}.`;
   }
 }
 
@@ -79,8 +79,8 @@ export class NightlyReleaseGitHubOutputAppendError extends Schema.TaggedErrorCla
 const RepoRoot = Effect.service(Path.Path).pipe(
   Effect.flatMap((path) => path.fromFileUrl(new URL("..", import.meta.url))),
 );
-const decodeDesktopPackageJson = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(DesktopPackageJsonSchema),
+const decodeServerPackageJson = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(ServerPackageJsonSchema),
 );
 
 export const resolveNightlyBaseVersion = (version: string) => version.replace(/[-+].*$/, "");
@@ -89,7 +89,7 @@ export const resolveNightlyTargetVersion = (version: string) => {
   const stableCore = resolveNightlyBaseVersion(version);
   const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(stableCore);
   if (!match) {
-    return Effect.fail(new InvalidDesktopPackageVersionError({ version }));
+    return Effect.fail(new InvalidServerPackageVersionError({ version }));
   }
 
   const [, major, minor, patch] = match;
@@ -108,32 +108,32 @@ export const resolveNightlyReleaseMetadata = (
     baseVersion,
     version,
     tag: `v${version}`,
-    name: `T3 Code Nightly ${version} (${shortSha})`,
+    name: `T3 CLI Nightly ${version} (${shortSha})`,
     shortSha,
   };
 };
 
-export const readDesktopBaseVersion = Effect.fn("readDesktopBaseVersion")(function* (
+export const readServerBaseVersion = Effect.fn("readServerBaseVersion")(function* (
   rootDir: string | undefined,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const workspaceRoot = rootDir ? path.resolve(rootDir) : yield* RepoRoot;
-  const packageJsonPath = path.join(workspaceRoot, "apps/desktop/package.json");
+  const packageJsonPath = path.join(workspaceRoot, "apps/server/package.json");
   const packageJsonSource = yield* fs.readFileString(packageJsonPath).pipe(
     Effect.mapError(
       (cause) =>
-        new NightlyReleaseDesktopPackageError({
+        new NightlyReleaseServerPackageError({
           operation: "read",
           packageJsonPath,
           cause,
         }),
     ),
   );
-  const packageJson = yield* decodeDesktopPackageJson(packageJsonSource).pipe(
+  const packageJson = yield* decodeServerPackageJson(packageJsonSource).pipe(
     Effect.mapError(
       (cause) =>
-        new NightlyReleaseDesktopPackageError({
+        new NightlyReleaseServerPackageError({
           operation: "decode",
           packageJsonPath,
           cause,
@@ -203,12 +203,12 @@ const command = Command.make(
       Flag.withDefault(false),
     ),
     root: Flag.string("root").pipe(
-      Flag.withDescription("Workspace root used to resolve apps/desktop/package.json."),
+      Flag.withDescription("Workspace root used to resolve apps/server/package.json."),
       Flag.optional,
     ),
   },
   ({ date, runNumber, sha, githubOutput, root }) =>
-    readDesktopBaseVersion(Option.getOrUndefined(root)).pipe(
+    readServerBaseVersion(Option.getOrUndefined(root)).pipe(
       Effect.map((baseVersion) => resolveNightlyReleaseMetadata(baseVersion, date, runNumber, sha)),
       Effect.flatMap((metadata) => writeNightlyReleaseOutput(metadata, githubOutput)),
     ),

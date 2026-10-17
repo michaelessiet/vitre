@@ -27,9 +27,9 @@ body:
       label: Area
       description: Which part of the project would this change affect?
       options:
-        - apps/web
+        - crates/vitre-app
         - apps/server
-        - apps/desktop
+        - apps/marketing
         - packages/contracts or packages/shared
         - Build, CI, or release tooling
         - Docs
