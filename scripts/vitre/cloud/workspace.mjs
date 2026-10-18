@@ -72,6 +72,10 @@ const git = async (cwd, args) =>
         "-c",
         "core.hooksPath=/dev/null",
         "-c",
+        "core.fsmonitor=false",
+        "-c",
+        `safe.directory=${NodePath.resolve(cwd)}`,
+        "-c",
         "gc.auto=0",
         "-c",
         "maintenance.auto=false",
@@ -159,15 +163,28 @@ export async function captureWorkspace(roots, putChunk, options = {}) {
           .filter(Boolean),
       );
       // A selected subdirectory is a standalone source, not its parent repository.
+      const gitMetadata = await NodeFSP.lstat(NodePath.join(base, ".git")).catch((error) => {
+        if (error.code === "ENOENT") return null;
+        throw error;
+      });
       const gitRoot = await git(base, ["rev-parse", "--show-toplevel"])
         .then((path) => NodeFSP.realpath(path.trim()))
-        .catch(() => null);
+        .catch((error) => {
+          if (gitMetadata)
+            throw new Error(
+              "Workspace Git metadata could not be read; retry after repairing the repository",
+              {
+                cause: error,
+              },
+            );
+          return null;
+        });
+      if (gitMetadata && gitRoot !== base)
+        throw new Error("Workspace Git metadata does not identify the selected repository");
       const isRepositoryRoot = gitRoot === base;
-      let tracked = [];
-      try {
-        if (isRepositoryRoot)
-          tracked = (await git(base, ["ls-files", "-z", "--cached"])).split("\0").filter(Boolean);
-      } catch {}
+      const tracked = isRepositoryRoot
+        ? (await git(base, ["ls-files", "-z", "--cached"])).split("\0").filter(Boolean)
+        : [];
       // Excluded directory names identify installed dependencies and build
       // output, which are untracked. Files the repository tracks under such a
       // name (test fixtures, vendored packages) are source and must travel, or
@@ -210,12 +227,29 @@ export async function captureWorkspace(roots, putChunk, options = {}) {
         const before = await NodeFSP.lstat(full).catch(() => null);
         if (before) captured.push({ full, before });
       }
-      let head;
-      try {
-        if (isRepositoryRoot) head = (await git(base, ["rev-parse", "HEAD"])).trim();
-      } catch {}
+      const head = isRepositoryRoot
+        ? await git(base, ["rev-parse", "HEAD"])
+            .then((value) => value.trim())
+            .catch((error) => {
+              throw new Error(
+                "Workspace Git history could not be read; save a commit before transferring",
+                {
+                  cause: error,
+                },
+              );
+            })
+        : undefined;
+      if (head && !/^[a-f0-9]{40}$/.test(head))
+        throw new Error("Workspace Git history contains an unsupported revision");
       if (head && /^[a-f0-9]{40}$/.test(head)) {
-        const indexState = await git(base, ["diff", "--cached", "--raw", "-z"]);
+        const indexState = await git(base, [
+          "diff",
+          "--cached",
+          "--no-ext-diff",
+          "--no-textconv",
+          "--raw",
+          "-z",
+        ]);
         gitBoundaries.push({ base, head, indexState });
         // A bundle contains historical objects, including deleted files. Refuse
         // known credential paths instead of silently including excluded secrets.
@@ -430,7 +464,8 @@ export async function captureWorkspace(roots, putChunk, options = {}) {
   for (const { base, head, indexState } of gitBoundaries) {
     if (
       (await git(base, ["rev-parse", "HEAD"])).trim() !== head ||
-      (await git(base, ["diff", "--cached", "--raw", "-z"])) !== indexState
+      (await git(base, ["diff", "--cached", "--no-ext-diff", "--no-textconv", "--raw", "-z"])) !==
+        indexState
     )
       throw new Error("Workspace changed during transfer; retry");
   }

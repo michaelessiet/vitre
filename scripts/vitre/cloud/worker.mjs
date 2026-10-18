@@ -16,6 +16,7 @@ import {
   createCheckpoint,
   restoreCheckpoint,
   projectWorkspaceFromCheckpoint,
+  IncompleteProjectSnapshotError,
 } from "./checkpoint.mjs";
 
 const BACKEND_PORT = Number(process.env.VITRE_CLOUD_BACKEND_PORT ?? 3773);
@@ -479,6 +480,8 @@ class WorkerFailure extends Error {}
 class WorkerBootstrapFailure extends WorkerFailure {}
 
 function describeFailure(error) {
+  if (error instanceof IncompleteProjectSnapshotError)
+    return new IncompleteProjectSnapshotError().message;
   if (error instanceof WorkerFailure) return error.message;
   if (typeof error?.code === "string" && /^E[A-Z0-9]+$/.test(error.code)) {
     const where =

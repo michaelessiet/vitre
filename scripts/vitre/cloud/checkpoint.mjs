@@ -339,6 +339,18 @@ export async function createCheckpoint({
   }
 }
 
+export class IncompleteProjectSnapshotError extends Error {
+  constructor() {
+    super(
+      "This saved checkpoint omitted Git metadata. Choose another saved snapshot for this project.",
+    );
+    this.name = "IncompleteProjectSnapshotError";
+  }
+}
+
+// The worker's deterministic empty commit for plain uploaded directories.
+const localWorkspaceBaseSha = "8742d9f52a52b29e1195b85b4cb31ed599afb990";
+
 /** Extract only portable workspace bytes; chat, sessions and credentials never enter a fork. */
 export async function projectWorkspaceFromCheckpoint({
   archive,
@@ -381,6 +393,11 @@ export async function projectWorkspaceFromCheckpoint({
     if (metadata.version === 2) {
       if (!workspace) throw new Error("Checkpoint has no portable workspace");
       validateManifest(workspace);
+      // Older workers mistook another user's Git checkout for a plain directory
+      // after Git's ownership check failed. Its file-only manifest cannot recover
+      // unpublished history, the index, or tracked files under excluded folders.
+      if (!workspace.roots[0].git && metadata.baseSha !== localWorkspaceBaseSha)
+        throw new IncompleteProjectSnapshotError();
       return {
         workspace,
         readWorkspaceChunk: readChunk,

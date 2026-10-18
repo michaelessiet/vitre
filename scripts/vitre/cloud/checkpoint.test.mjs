@@ -11,6 +11,7 @@ import {
   isCredentialPath,
   restoreCheckpoint,
   projectWorkspaceFromCheckpoint,
+  IncompleteProjectSnapshotError,
 } from "./checkpoint.mjs";
 
 const exec = NodeUtil.promisify(NodeChildProcess.execFile);
@@ -42,81 +43,131 @@ async function fixture() {
 }
 
 describe("cloud checkpoints", () => {
-  it("converts legacy uploaded non-Git projects without GitHub or the source worker", async () => {
+  it.each([1, 2])(
+    "converts version-%i uploaded non-Git projects without GitHub or the source worker",
+    async (version) => {
+      const f = await fixture();
+      try {
+        await NodeFSP.rm(NodePath.join(f.repo, ".git"), { recursive: true });
+        await NodeFSP.rm(NodePath.join(f.repo, "tracked.txt"));
+        await f.git("init", "--initial-branch=main");
+        await exec(
+          "git",
+          [
+            "-c",
+            "user.name=Vitre",
+            "-c",
+            "user.email=vitre@localhost",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "Local workspace baseline",
+          ],
+          {
+            cwd: f.repo,
+            env: {
+              ...process.env,
+              GIT_AUTHOR_NAME: "Vitre",
+              GIT_AUTHOR_EMAIL: "vitre@localhost",
+              GIT_COMMITTER_NAME: "Vitre",
+              GIT_COMMITTER_EMAIL: "vitre@localhost",
+              GIT_AUTHOR_DATE: "2000-01-01T00:00:00Z",
+              GIT_COMMITTER_DATE: "2000-01-01T00:00:00Z",
+            },
+          },
+        );
+        const baseSha = await f.git("rev-parse", "HEAD");
+        expect(baseSha).toBe("8742d9f52a52b29e1195b85b4cb31ed599afb990");
+        const syntheticGit = NodePath.join(f.root, "non-git");
+        if (version === 2) await NodeFSP.rename(NodePath.join(f.repo, ".git"), syntheticGit);
+        await NodeFSP.writeFile(NodePath.join(f.repo, "notes.txt"), "saved local work\n");
+        const saved = await createCheckpoint({
+          repository: f.repo,
+          database: f.database,
+          directory: f.root,
+          baseSha,
+          ...(version === 2 ? { objectDirectory: NodePath.join(syntheticGit, "objects") } : {}),
+        });
+        const archiveRoot = NodePath.dirname(saved.path);
+        const metadata = JSON.parse(
+          await NodeFSP.readFile(NodePath.join(archiveRoot, "metadata.json"), "utf8"),
+        );
+        await NodeFSP.writeFile(
+          NodePath.join(archiveRoot, "metadata.json"),
+          JSON.stringify({ ...metadata, version }),
+        );
+        const archive = NodePath.join(f.root, "local-legacy.tar.gz");
+        await exec("tar", [
+          "-czf",
+          archive,
+          "-C",
+          archiveRoot,
+          "metadata.json",
+          "repository.bundle",
+          "state.sqlite",
+          ...(version === 2 ? ["workspace.json", "workspace-chunks"] : []),
+        ]);
+        const converted = await projectWorkspaceFromCheckpoint({
+          archive,
+          directory: f.root,
+          baseSha: null,
+          legacyLocal: true,
+          prepareLegacyRepository: () => {
+            throw new Error("Must not request GitHub");
+          },
+        });
+        expect(converted.workspace.roots[0].git).toBeUndefined();
+        const { restoreWorkspace } = await import("./workspace.mjs");
+        const destination = NodePath.join(f.root, "local-copy");
+        await restoreWorkspace(converted.workspace, destination, converted.readWorkspaceChunk);
+        expect(
+          await NodeFSP.readFile(NodePath.join(destination, "primary/notes.txt"), "utf8"),
+        ).toBe("saved local work\n");
+        await converted.dispose();
+        await saved.dispose();
+      } finally {
+        f.db.close();
+      }
+    },
+  );
+  it("rejects older Git checkpoints whose portable workspace silently omitted Git metadata", async () => {
     const f = await fixture();
     try {
-      await NodeFSP.rm(NodePath.join(f.repo, ".git"), { recursive: true });
-      await NodeFSP.rm(NodePath.join(f.repo, "tracked.txt"));
-      await f.git("init", "--initial-branch=main");
-      await exec(
-        "git",
-        [
-          "-c",
-          "user.name=Vitre",
-          "-c",
-          "user.email=vitre@localhost",
-          "commit",
-          "--allow-empty",
-          "-m",
-          "Local workspace baseline",
-        ],
-        {
-          cwd: f.repo,
-          env: {
-            ...process.env,
-            GIT_AUTHOR_NAME: "Vitre",
-            GIT_AUTHOR_EMAIL: "vitre@localhost",
-            GIT_COMMITTER_NAME: "Vitre",
-            GIT_COMMITTER_EMAIL: "vitre@localhost",
-            GIT_AUTHOR_DATE: "2000-01-01T00:00:00Z",
-            GIT_COMMITTER_DATE: "2000-01-01T00:00:00Z",
-          },
-        },
-      );
-      const baseSha = await f.git("rev-parse", "HEAD");
-      await NodeFSP.writeFile(NodePath.join(f.repo, "notes.txt"), "saved local work\n");
       const saved = await createCheckpoint({
         repository: f.repo,
         database: f.database,
         directory: f.root,
-        baseSha,
+        baseSha: f.baseSha,
       });
-      const archiveRoot = NodePath.dirname(saved.path);
-      const metadata = JSON.parse(
-        await NodeFSP.readFile(NodePath.join(archiveRoot, "metadata.json"), "utf8"),
-      );
-      await NodeFSP.writeFile(
-        NodePath.join(archiveRoot, "metadata.json"),
-        JSON.stringify({ ...metadata, version: 1 }),
-      );
-      const archive = NodePath.join(f.root, "local-legacy.tar.gz");
-      await exec("tar", [
-        "-czf",
-        archive,
-        "-C",
-        archiveRoot,
-        "metadata.json",
-        "repository.bundle",
-        "state.sqlite",
-      ]);
-      const converted = await projectWorkspaceFromCheckpoint({
-        archive,
-        directory: f.root,
-        baseSha: null,
-        legacyLocal: true,
-        prepareLegacyRepository: () => {
-          throw new Error("Must not request GitHub");
-        },
-      });
-      expect(converted.workspace.roots[0].git).toBeUndefined();
-      const { restoreWorkspace } = await import("./workspace.mjs");
-      const destination = NodePath.join(f.root, "local-copy");
-      await restoreWorkspace(converted.workspace, destination, converted.readWorkspaceChunk);
-      expect(await NodeFSP.readFile(NodePath.join(destination, "primary/notes.txt"), "utf8")).toBe(
-        "saved local work\n",
-      );
-      await converted.dispose();
-      await saved.dispose();
+      try {
+        const archiveRoot = NodePath.dirname(saved.path);
+        const workspace = structuredClone(saved.workspace);
+        delete workspace.roots[0].git;
+        await NodeFSP.writeFile(
+          NodePath.join(archiveRoot, "workspace.json"),
+          JSON.stringify(workspace),
+        );
+        const archive = NodePath.join(f.root, "incomplete-git.tar.gz");
+        await exec("tar", [
+          "-czf",
+          archive,
+          "-C",
+          archiveRoot,
+          "metadata.json",
+          "workspace.json",
+          "workspace-chunks",
+        ]);
+        await expect(
+          projectWorkspaceFromCheckpoint({
+            archive,
+            directory: f.root,
+            baseSha: f.baseSha,
+            legacyLocal: true,
+          }),
+        ).rejects.toThrow(IncompleteProjectSnapshotError);
+      } finally {
+        await saved.dispose();
+      }
     } finally {
       f.db.close();
     }
