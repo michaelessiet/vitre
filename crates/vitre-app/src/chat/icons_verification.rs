@@ -160,7 +160,7 @@ impl ChatApp {
                         assert!(!ClientSettings::get(cx).project_tabs_enabled);
                     }).map_err(|e| e.to_string())?;
                     eprintln!("[vitre-project-tabs-test] PASS: layout toggle, project switching and Sidebar v2 rendering");
-                    return Ok(());
+                    return super::project_tabs_verification::verify(&this, cx).await;
                 }
                 if mode == "kotlin" {
                     super::ui_verification::float_fixture(cx).await?;
