@@ -19,6 +19,8 @@ pub(super) struct LocalPendingSend {
     #[serde(default)]
     previous_turn: Option<vitre_contracts::TurnId>,
     #[serde(default)]
+    steering: bool,
+    #[serde(default)]
     previous_session_update: Option<String>,
     pub recovery: PendingSend,
     pub optimistic: OrchestrationMessage,
@@ -61,6 +63,7 @@ impl LocalPendingSend {
             command,
             create: Some(create),
             previous_turn: None,
+            steering: false,
             previous_session_update: None,
             recovery,
             optimistic,
@@ -82,9 +85,13 @@ impl LocalPendingSend {
         })
     }
     fn execution_observed(&self, view: &vitre_contracts::OrchestrationThread) -> bool {
-        view.latest_turn
-            .as_ref()
-            .is_some_and(|turn| Some(&turn.turn_id) != self.previous_turn.as_ref())
+        // A steer joins an existing turn; its exact projected message is the
+        // acknowledgement. Waiting for a new turn ID would fence every later send.
+        (self.steering && self.acknowledged(view))
+            || view
+                .latest_turn
+                .as_ref()
+                .is_some_and(|turn| Some(&turn.turn_id) != self.previous_turn.as_ref())
             || view.session.as_ref().is_some_and(|session| {
                 session.status == OrchestrationSessionStatus::Error
                     && self.previous_session_update.as_ref() != Some(&session.updated_at.0)
@@ -145,6 +152,18 @@ impl ChatApp {
                 .and_then(|open| open.state.view.as_ref())
                 .and_then(|view| view.latest_turn.as_ref())
                 .map(|turn| turn.turn_id.clone()),
+            steering: self
+                .thread
+                .as_ref()
+                .and_then(|open| open.state.view.as_ref())
+                .is_some_and(|view| {
+                    view.latest_turn.as_ref().is_some_and(|turn| {
+                        turn.state == OrchestrationLatestTurnState::Running
+                            && view.session.as_ref().is_some_and(|session| {
+                                session.active_turn_id.as_ref() == Some(&turn.turn_id)
+                            })
+                    })
+                }),
             previous_session_update: self
                 .thread
                 .as_ref()
@@ -499,6 +518,7 @@ mod tests {
             thread_id: ThreadId("local-thread".into()),
             create: None,
             previous_turn: None,
+            steering: false,
             previous_session_update: None,
             command: ClientOrchestrationCommand::ThreadTurnStart {
                 bootstrap: None,
@@ -604,6 +624,33 @@ mod tests {
             "turnId":"provider-turn", "state":"running", "requestedAt":"2026-10-16T10:00:00Z",
             "startedAt":null, "completedAt":null, "assistantMessageId":null, "sourceProposedPlan":null
         })).unwrap());
+        assert!(pending.execution_observed(&view));
+    }
+    #[test]
+    fn steering_acknowledges_the_exact_message_without_a_new_turn() {
+        let mut pending = pending("steering");
+        let mut view = crate::cloud::tests::fixtures::thread();
+        view.latest_turn = Some(
+            serde_json::from_value(serde_json::json!({
+                "turnId":"same-turn", "state":"running", "requestedAt":"2026-10-16T10:00:00Z",
+                "startedAt":"2026-10-16T10:00:01Z", "completedAt":null,
+                "assistantMessageId":null, "sourceProposedPlan":null
+            }))
+            .unwrap(),
+        );
+        pending.previous_turn = view.latest_turn.as_ref().map(|turn| turn.turn_id.clone());
+        pending.steering = true;
+        let pending: LocalPendingSend =
+            serde_json::from_slice(&serde_json::to_vec(&pending).unwrap()).unwrap();
+        assert!(!pending.execution_observed(&view));
+        let mut unrelated = pending.optimistic.clone();
+        unrelated.id = MessageId("different-message".into());
+        view.messages.push(unrelated);
+        assert!(!pending.execution_observed(&view));
+        view.messages.push(pending.optimistic.clone());
+        assert!(pending.execution_observed(&view));
+        // Providers may finish the original turn before the message projection arrives.
+        view.latest_turn.as_mut().unwrap().state = OrchestrationLatestTurnState::Completed;
         assert!(pending.execution_observed(&view));
     }
     #[test]
@@ -759,4 +806,111 @@ mod tests {
             );
         });
     }
+}
+
+/// Native acceptance using the disposable icon fixture. Never starts a provider.
+#[cfg(debug_assertions)]
+pub(super) async fn verify_steering(
+    this: &WeakEntity<ChatApp>,
+    cx: &mut gpui::AsyncWindowContext,
+) -> Result<(), String> {
+    ui_verification::float_fixture(cx).await?;
+    let client = this
+        .update_in(cx, |app, window, cx| {
+            window.resize(gpui::size(px(1200.), px(800.)));
+            if app.dock_open() {
+                app.toggle_right_panel(window, cx);
+            }
+            let open = app.thread.as_mut().unwrap();
+            let view = Arc::make_mut(open.state.view.as_mut().unwrap());
+            let at = now_iso();
+            view.latest_turn = Some(
+                serde_json::from_value(serde_json::json!({
+                    "turnId":"steering-fixture", "state":"running", "requestedAt":at,
+                    "startedAt":at, "completedAt":null, "assistantMessageId":null
+                }))
+                .unwrap(),
+            );
+            view.session = Some(
+                serde_json::from_value(serde_json::json!({
+                    "threadId":view.id, "status":"running", "activeTurnId":"steering-fixture",
+                    "updatedAt":at, "lastError":null
+                }))
+                .unwrap(),
+            );
+            app.rebuild_timeline(cx);
+            // Keep the real projection, but prevent fixture prompts from reaching a provider.
+            app.client.take().unwrap()
+        })
+        .map_err(|e| e.to_string())?;
+    let mut previous_command = String::new();
+    for prompt in [
+        "Also check the regression tests",
+        "Use the existing helper instead",
+    ] {
+        this.update_in(cx, |app, window, cx| {
+            app.composer.update(cx, |input, cx| {
+                input.set_value(prompt, window, cx);
+                input.focus(window, cx);
+            });
+            let status = app.conversation_status(cx);
+            assert!(status.can_send && status.can_stop);
+            cx.notify();
+        })
+        .map_err(|e| e.to_string())?;
+        cx.background_executor()
+            .timer(Duration::from_millis(300))
+            .await;
+        if previous_command.is_empty() {
+            ui_verification::capture("steering-send-and-stop", cx).await?;
+        }
+        ui_verification::key("enter", cx).await?;
+        previous_command = this
+            .update(cx, |app, cx| {
+                let id = app.thread.as_ref().unwrap().id.clone();
+                let pending = app
+                    .local_outbox
+                    .get(&id)
+                    .expect("Enter must send during a running turn")
+                    .clone();
+                assert_ne!(pending.command_id(), previous_command);
+                assert!(pending.steering);
+                assert_eq!(pending.recovery.raw_text, prompt);
+                assert!(app.composer.read(cx).value().is_empty());
+                assert!(!app.conversation_status(cx).can_send);
+                // The server echoes this exact message without changing the turn ID.
+                Arc::make_mut(app.thread.as_mut().unwrap().state.view.as_mut().unwrap())
+                    .messages
+                    .push(pending.optimistic.clone());
+                app.reconcile_local_dispatch();
+                assert!(app.local_outbox.is_empty());
+                assert!(app.local_dispatch.is_none());
+                assert!(app.conversation_status(cx).can_send);
+                app.rebuild_timeline(cx);
+                cx.notify();
+                pending.command_id().to_owned()
+            })
+            .map_err(|e| e.to_string())?;
+    }
+    this.update_in(cx, |app, window, cx| {
+        app.client = Some(client);
+        app.composer.update(cx, |input, cx| {
+            input.set_value("Keep this draft", window, cx)
+        });
+        app.stop_turn(cx);
+        let id = &app.thread.as_ref().unwrap().id;
+        assert_eq!(app.local_stops[id].turn_id.0, "steering-fixture");
+        assert_eq!(
+            app.conversation_status(cx).facts.turn,
+            conversation_status::Turn::Stopping
+        );
+        assert!(!app.conversation_status(cx).can_send);
+        assert_eq!(app.composer.read(cx).value(), "Keep this draft");
+    })
+    .map_err(|e| e.to_string())?;
+    eprintln!(
+        "[vitre-steering-test] PASS: native Enter sends two follow-ups in the same turn; exact projection releases each outbox; Stop targets the active turn and preserves the draft"
+    );
+    cx.update(|_, cx| cx.quit()).map_err(|e| e.to_string())?;
+    Ok(())
 }

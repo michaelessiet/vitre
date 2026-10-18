@@ -7340,86 +7340,105 @@ impl ChatApp {
             })
         };
 
-        // Composer: rounded-22 shell, textarea, footer (model label + send).
-        let send_button: gpui::AnyElement =
+        // Sending a follow-up and stopping the active turn are independent actions.
+        let stop_button: Option<gpui::AnyElement> =
             if presentation.facts.turn == conversation_status::Turn::Stopping {
-                Button::new("stop-pending")
-                    .ghost()
-                    .small()
-                    .icon(IconName::CircleX)
-                    .disabled(true)
-                    .into_any_element()
+                Some(
+                    Button::new("stop-pending")
+                        .ghost()
+                        .small()
+                        .icon(IconName::CircleX)
+                        .disabled(true)
+                        .into_any_element(),
+                )
             } else if presentation.can_stop {
-                div()
-                    .id("stop")
-                    .debug_selector(|| "stop".into())
-                    .size_8()
-                    .rounded_full()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .cursor_pointer()
-                    .bg(cx.theme().danger.opacity(0.9))
-                    .hover(|style| style.bg(cx.theme().danger))
-                    .child(
-                        div()
-                            .size(px(10.))
-                            .rounded(px(2.))
-                            .bg(cx.theme().danger_foreground),
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| this.stop_turn(cx)))
-                    .into_any_element()
-            } else if dispatching {
-                div()
-                    .id("send-pending")
-                    .size_8()
-                    .rounded_full()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .bg(cx.theme().primary.opacity(0.5))
-                    .child(
-                        Icon::new(IconName::ArrowUp)
-                            .size_4()
-                            .text_color(cx.theme().primary_foreground.opacity(0.7)),
-                    )
-                    .into_any_element()
-            } else if !can_send {
-                div()
-                    .id("send-disabled")
-                    .debug_selector(|| "send-disabled".into())
-                    .size_8()
-                    .rounded_full()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .bg(cx.theme().muted)
-                    .child(
-                        Icon::new(IconName::ArrowUp)
-                            .size_4()
-                            .text_color(cx.theme().muted_foreground.opacity(0.45)),
-                    )
-                    .into_any_element()
+                Some(
+                    div()
+                        .id("stop")
+                        .debug_selector(|| "stop".into())
+                        .size_8()
+                        .rounded_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor_pointer()
+                        .bg(cx.theme().danger.opacity(0.9))
+                        .hover(|style| style.bg(cx.theme().danger))
+                        .child(
+                            div()
+                                .size(px(10.))
+                                .rounded(px(2.))
+                                .bg(cx.theme().danger_foreground),
+                        )
+                        .tooltip(|window, cx| {
+                            gpui_component::tooltip::Tooltip::new("Stop work").build(window, cx)
+                        })
+                        .on_click(cx.listener(|this, _, _, cx| this.stop_turn(cx)))
+                        .into_any_element(),
+                )
             } else {
-                div()
-                    .id("send")
-                    .debug_selector(|| "send".into())
-                    .size_8()
-                    .rounded_full()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .cursor_pointer()
-                    .bg(cx.theme().primary.opacity(0.9))
-                    .hover(|style| style.bg(cx.theme().primary))
-                    .child(
-                        Icon::new(IconName::ArrowUp)
-                            .size_4()
-                            .text_color(cx.theme().primary_foreground),
-                    )
-                    .on_click(cx.listener(|this, _, window, cx| this.send(window, cx)))
-                    .into_any_element()
+                None
             };
+        let send_button: gpui::AnyElement = if dispatching {
+            div()
+                .id("send-pending")
+                .size_8()
+                .rounded_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(cx.theme().primary.opacity(0.5))
+                .child(
+                    Icon::new(IconName::ArrowUp)
+                        .size_4()
+                        .text_color(cx.theme().primary_foreground.opacity(0.7)),
+                )
+                .into_any_element()
+        } else if !can_send {
+            div()
+                .id("send-disabled")
+                .debug_selector(|| "send-disabled".into())
+                .size_8()
+                .rounded_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(cx.theme().muted)
+                .child(
+                    Icon::new(IconName::ArrowUp)
+                        .size_4()
+                        .text_color(cx.theme().muted_foreground.opacity(0.45)),
+                )
+                .into_any_element()
+        } else {
+            div()
+                .id("send")
+                .debug_selector(|| "send".into())
+                .size_8()
+                .rounded_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer()
+                .bg(cx.theme().primary.opacity(0.9))
+                .hover(|style| style.bg(cx.theme().primary))
+                .child(
+                    Icon::new(IconName::ArrowUp)
+                        .size_4()
+                        .text_color(cx.theme().primary_foreground),
+                )
+                .tooltip(|window, cx| {
+                    gpui_component::tooltip::Tooltip::new("Send message").build(window, cx)
+                })
+                .on_click(cx.listener(|this, _, window, cx| this.send(window, cx)))
+                .into_any_element()
+        };
+        let show_send = stop_button.is_none() || can_send;
+        let send_button = h_flex()
+            .gap_2()
+            .children(stop_button)
+            .when(show_send, |row| row.child(send_button))
+            .into_any_element();
         // The picker rail shows every enabled provider; only probe-ready
         // providers contribute models. Picking one dispatches
         // `ThreadMetaUpdate` (see `set_model`).
