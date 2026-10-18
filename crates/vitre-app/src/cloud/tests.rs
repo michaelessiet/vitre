@@ -27,6 +27,8 @@ pub(crate) mod fixtures {
 
     pub(crate) fn task(id: &str, state: CloudTaskState, with_result: bool) -> CloudTask {
         CloudTask {
+            project_snapshot: None,
+            turn_settings: None,
             runtime_mode: None,
             preparation: None,
             dependency_setup: None,
@@ -75,6 +77,8 @@ pub(crate) mod fixtures {
         tasks: Vec<CloudTask>,
     ) -> CloudOverview {
         CloudOverview {
+            capabilities: None,
+            projects: None,
             revision: None,
             bindings: None,
             handoffs: None,

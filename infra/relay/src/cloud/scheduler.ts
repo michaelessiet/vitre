@@ -13,6 +13,8 @@ import { confirmStopped, schedule, type CloudOperation } from "./state.ts";
 import { CloudStore } from "./store.ts";
 import { CloudAuxiliary } from "./auxiliary.ts";
 import { CloudArtifacts } from "./artifacts.ts";
+import { deliverCloudNotifications } from "./notifications.ts";
+import { referencesTaskArtifacts } from "./projects.ts";
 
 export class CloudScheduler extends Context.Service<
   CloudScheduler,
@@ -179,9 +181,12 @@ export const layer = Layer.effect(
             return yield* Effect.fail(
               new CloudError("cleanup_unavailable", "Artifact deletion is not configured", 503),
             );
-          yield* fromPromise(() =>
-            artifacts.deletePrefix!(`cloud/${encodeURIComponent(userId)}/${task.id}/`),
-          );
+          // Project references outlive the source conversation. Legacy snapshots
+          // retain their archive until converted; portable snapshots live elsewhere.
+          if (!referencesTaskArtifacts(current.state, task.id))
+            yield* fromPromise(() =>
+              artifacts.deletePrefix!(`cloud/${encodeURIComponent(userId)}/${task.id}/`),
+            );
           yield* store.mutate(userId, (doc) => {
             delete doc.state.projections?.[task.id];
             delete doc.state.events?.[task.id];
@@ -307,6 +312,11 @@ export const layer = Layer.effect(
         // Maintenance can involve slow external calls; it must not hold up a wake.
         // Auxiliary cleanup wakes scheduling again when it releases capacity.
         yield* auxiliary.tick(userId);
+        yield* deliverCloudNotifications(userId, claimToken).pipe(
+          Effect.provideService(CloudStore, store),
+          Effect.provideService(CloudConfiguration, config),
+          Effect.ignore,
+        );
         // Only the reserved installation prefix and valid attempt names are eligible.
         const owned = config.machine
           ? yield* fromPromise(() => executor.owned()).pipe(Effect.orElseSucceed(() => []))

@@ -7,8 +7,11 @@ import { relayCloudAccounts } from "../persistence/schema.ts";
 import { CloudError } from "./policy.ts";
 import { initialState, type CloudState } from "./state.ts";
 import type { SealedCredential } from "./crypto.ts";
+import type { CloudMobileDevice, CloudPushEvent } from "./notifications.ts";
 
 export interface CloudPrivateData {
+  mobileDevices?: Record<string, CloudMobileDevice>;
+  pushEvents?: Record<string, CloudPushEvent>;
   credentials: Partial<Record<"codex" | "claude", { version: number; sealed: SealedCredential }>>;
   workerTokens: Record<string, { hash: string; sealed: SealedCredential }>;
   endpoints: Record<string, SealedCredential>;

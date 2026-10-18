@@ -4,6 +4,7 @@ import * as Schema from "effect/Schema";
 import { CloudError } from "./policy.ts";
 import { fromPromise } from "./service.ts";
 import { sha256 } from "./crypto.ts";
+import type { CloudSnapshotRef } from "@t3tools/contracts/cloud";
 
 export interface CloudObjectStorage {
   put: (
@@ -33,6 +34,7 @@ export interface CheckpointManifest {
   attemptId: string;
   checkpointId: string;
   chunks: ArtifactChunk[];
+  workspace?: CloudSnapshotRef;
   result: {
     summary: string;
     diff: string;

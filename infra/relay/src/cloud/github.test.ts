@@ -14,6 +14,41 @@ const repository = {
   revision: 1,
 };
 describe("cloud GitHub credentials", () => {
+  it("validates canonical identity at registration and returns an actionable invalid-branch error", async () => {
+    const client = new GitHubCloudClient(
+      { appId: "", privateKey: "", installationIds: [] },
+      async (url) =>
+        String(url).includes("/commits/")
+          ? new Response(null, { status: 404 })
+          : Response.json({
+              id: 123,
+              private: false,
+              owner: { login: "Owner" },
+              name: "Repo",
+              default_branch: "trunk",
+            }),
+    );
+    const publicRepo = { ...repository, installationId: "public" };
+    expect(await client.verifyRepository(publicRepo, 0)).toMatchObject({
+      id: "123",
+      owner: "Owner",
+      name: "Repo",
+      defaultBranch: "trunk",
+    });
+    await expect(client.verifyRepository({ ...publicRepo, id: "999" }, 0)).rejects.toMatchObject({
+      code: "repository_access",
+    });
+    await expect(
+      client.verifyRepository({ ...publicRepo, name: "different" }, 0),
+    ).rejects.toMatchObject({ code: "repository_access" });
+    await expect(client.resolve(publicRepo, "missing/branch", 0)).rejects.toMatchObject({
+      code: "invalid_branch",
+      status: 400,
+    });
+    await expect(client.verifyRepository(repository, 0)).rejects.toMatchObject({
+      code: "repository_access",
+    });
+  });
   it("reconciles a successful PR after its response was lost without publishing twice", async () => {
     const keys = NodeCrypto.generateKeyPairSync("rsa", { modulusLength: 2048 });
     let writes = 0;

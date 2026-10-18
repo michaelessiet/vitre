@@ -19,6 +19,7 @@ import {
   bootstrapWorker,
   providerEnvironment,
   workerModelSelection,
+  workerTurnSettings,
   WorkerControlClient,
   makeLocalBackendClient,
   providerFailurePhase,
@@ -37,6 +38,40 @@ import { captureWorkspace, restoreWorkspace, digest } from "./workspace.mjs";
 
 const decodeCommand = Schema.decodeUnknownSync(ClientOrchestrationCommand);
 const exec = NodeUtil.promisify(NodeChildProcess.execFile);
+
+it("applies explicit follow-up settings without overwriting imported thread defaults", () => {
+  const thread = {
+    modelSelection: {
+      instanceId: "codex",
+      model: "existing",
+      options: [{ id: "reasoning", value: "high" }],
+    },
+    runtimeMode: "approval-required",
+    interactionMode: "plan",
+  };
+  expect(
+    workerTurnSettings({ provider: "codex", model: "old", runtimeMode: "full-access" }, thread, {}),
+  ).toEqual(thread);
+  expect(
+    workerTurnSettings(
+      {
+        provider: "codex",
+        turnSettings: {
+          model: "new",
+          modelOptions: [],
+          runtimeMode: "auto-accept-edits",
+          interactionMode: "default",
+        },
+      },
+      thread,
+      {},
+    ),
+  ).toEqual({
+    modelSelection: { instanceId: "codex", model: "new", options: [] },
+    runtimeMode: "auto-accept-edits",
+    interactionMode: "default",
+  });
+});
 
 it("settles a finished turn despite stale thread-level approval flags", () => {
   const requestedAt = "2026-10-16T07:21:30.160Z";

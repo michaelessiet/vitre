@@ -89,6 +89,12 @@ export class GitHubCloudClient {
       redirect: "manual",
       signal: AbortSignal.timeout(30_000),
     });
+    if (response.status === 404)
+      throw new CloudError(
+        "github_not_found",
+        "GitHub resource is unavailable or access is missing",
+        404,
+      );
     if (!response.ok)
       throw new CloudError("github_unavailable", `GitHub request failed (${response.status})`, 502);
     return response.status === 204 ? null : response.json();
@@ -248,10 +254,45 @@ export class GitHubCloudClient {
     const result = (await this.request(
       `/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.name)}/commits/${encodeURIComponent(branch)}`,
       token,
-    )) as { sha?: unknown };
+    ).catch((error: unknown) => {
+      if (error instanceof CloudError && error.code === "github_not_found")
+        throw new CloudError(
+          "invalid_branch",
+          "The selected branch is unavailable. Check its name and try again.",
+          400,
+        );
+      throw error;
+    })) as { sha?: unknown };
     if (typeof result.sha !== "string" || !/^[a-f0-9]{40}$/.test(result.sha))
       throw new CloudError("invalid_revision", "GitHub did not return a commit SHA", 502);
     return { sha: result.sha, token };
+  }
+  async verifyRepository(repository: CloudRepository, now: number): Promise<CloudRepository> {
+    const resolved =
+      repository.installationId === "public"
+        ? await this.publicRepository(repository.owner, repository.name)
+        : (await this.repositories(now)).find(
+            (entry) =>
+              entry.id === repository.id && entry.installationId === repository.installationId,
+          );
+    if (
+      !resolved ||
+      resolved.id !== repository.id ||
+      resolved.owner.toLowerCase() !== repository.owner.toLowerCase() ||
+      resolved.name.toLowerCase() !== repository.name.toLowerCase()
+    )
+      throw new CloudError(
+        "repository_access",
+        "Repository is unavailable. Check the URL or connect GitHub access for this repository.",
+        403,
+      );
+    return {
+      ...repository,
+      id: resolved.id,
+      owner: resolved.owner,
+      name: resolved.name,
+      defaultBranch: resolved.defaultBranch,
+    };
   }
   async issue(
     repository: CloudRepository,

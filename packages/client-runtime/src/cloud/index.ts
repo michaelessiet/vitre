@@ -1,4 +1,5 @@
 import * as Schema from "effect/Schema";
+export { cloudConversationLayer } from "./connection.ts";
 import {
   CloudCommand,
   CloudConnection,
@@ -7,6 +8,8 @@ import {
   CloudLoginStatus,
   CloudTaskFeed,
   CloudRepository,
+  CloudProjectSnapshot,
+  type CloudMobileDeviceRegistration,
   type CloudProvider,
 } from "@t3tools/contracts/cloud";
 
@@ -46,9 +49,14 @@ const ErrorBody = Schema.Struct({
   requestDisposition: Schema.optional(Schema.Literals(["rejected", "unknown"])),
   retryable: Schema.optional(Schema.Boolean),
 });
+const RelayAuthErrorBody = Schema.TaggedStruct("RelayAuthInvalidError", {
+  code: Schema.Literal("auth_invalid"),
+  reason: Schema.Literals(["missing_bearer", "invalid_bearer", "invalid_dpop", "not_authorized"]),
+});
 
 const encodeJson = Schema.encodeSync(Schema.UnknownFromJsonString);
 const decodeError = Schema.decodeUnknownOption(ErrorBody);
+const decodeRelayAuthError = Schema.decodeUnknownOption(RelayAuthErrorBody);
 const decodeOverview = Schema.decodeUnknownSync(CloudOverview);
 const decodeCommandResult = Schema.decodeUnknownSync(CommandResult);
 const decodeCommand = Schema.decodeUnknownSync(CloudCommand);
@@ -62,6 +70,9 @@ const decodeRepositories = Schema.decodeUnknownSync(Schema.Array(CloudRepository
 const decodeRepository = Schema.decodeUnknownSync(CloudRepository);
 
 /** No UI, browser storage, filesystem access, or provider credentials cached here. */
+const decodeProjectSnapshots = Schema.decodeUnknownSync(Schema.Array(CloudProjectSnapshot));
+const decodeUploadedChunk = Schema.decodeUnknownSync(Schema.Struct({ sha256: Schema.String }));
+
 export function makeCloudClient(options: CloudClientOptions) {
   const origin = new URL(options.baseUrl);
   if (
@@ -97,6 +108,17 @@ export function makeCloudClient(options: CloudClientOptions) {
       const data: unknown = await response.json();
       if (!response.ok) {
         const error = decodeError(data);
+        const relayAuth = decodeRelayAuthError(data);
+        if (relayAuth._tag === "Some") {
+          throw new CloudClientError(
+            response.status,
+            relayAuth.value.code,
+            relayAuth.value.reason === "not_authorized"
+              ? "This account is not authorized for this cloud deployment."
+              : "Cloud sign-in was rejected. Sign out and sign in again. If it persists, check this build's Clerk JWT template.",
+            "rejected",
+          );
+        }
         throw new CloudClientError(
           response.status,
           error._tag === "Some" ? error.value.code : "cloud_unavailable",
@@ -117,6 +139,14 @@ export function makeCloudClient(options: CloudClientOptions) {
     return `/tasks/${id}`;
   };
   return {
+    registerMobileDevice: async (registration: CloudMobileDeviceRegistration) =>
+      decodeCredentialResult(await request("/mobile/devices", registration)),
+    projectSnapshots: async (projectId: string) => {
+      taskPath(projectId);
+      return decodeProjectSnapshots(await request(`/projects/${projectId}/snapshots`));
+    },
+    uploadChunk: async (base64: string) =>
+      decodeUploadedChunk(await request("/workspaces/chunks", { base64 })),
     repositories: async () => decodeRepositories(await request("/repositories/available")),
     publicRepository: async (owner: string, name: string) => {
       if (!/^[a-zA-Z0-9-]{1,100}$/.test(owner) || !/^[a-zA-Z0-9_.-]{1,100}$/.test(name))
@@ -179,5 +209,24 @@ export function makeCloudClient(options: CloudClientOptions) {
       signal?: AbortSignal,
     ) => decodeCredentialResult(await request("/provider-credentials", input, signal)),
   };
+}
+
+/** Only repository URLs are accepted; branch selection is an independent field. */
+export function parseGithubRepository(input: string): { owner: string; name: string } {
+  const text = input.trim();
+  const match =
+    /^(?:https:\/\/github\.com\/)?([a-zA-Z0-9](?:[a-zA-Z0-9-]{0,99}))\/([a-zA-Z0-9_.-]{1,100})\/?$/.exec(
+      text,
+    );
+  const owner = match?.[1];
+  const name = match?.[2]?.replace(/\.git$/, "");
+  if (!owner || !name || name === "." || name === "..")
+    throw new CloudClientError(
+      0,
+      "invalid_repository",
+      "Enter a GitHub repository URL or owner/repo. Select its branch separately.",
+      "rejected",
+    );
+  return { owner, name };
 }
 export type CloudClient = ReturnType<typeof makeCloudClient>;

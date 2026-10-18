@@ -11,6 +11,8 @@ import {
   CloudWorkspaceManifest,
   CloudSnapshotRef,
   CloudWorkspaceChunkUpload,
+  CloudProjectSnapshot,
+  CloudMobileDeviceRegistration,
 } from "@t3tools/contracts/cloud";
 import {
   RelayClientAuth,
@@ -115,6 +117,7 @@ const Manifest = Schema.Struct({
   taskId: Id,
   attemptId: Id,
   checkpointId: Id,
+  workspace: Schema.optionalKey(CloudSnapshotRef),
   chunks: Schema.Array(
     Schema.Struct({ index: Schema.Int, sha256: Schema.String, sizeBytes: Schema.Int }),
   ).check(Schema.isMaxLength(1280)),
@@ -128,6 +131,16 @@ const Manifest = Schema.Struct({
 });
 const cloudGroup = HttpApiGroup.make("cloud")
   .add(
+    HttpApiEndpoint.post("mobileDevice", "/v1/cloud/mobile/devices", {
+      payload: CloudMobileDeviceRegistration,
+      success: Ok,
+      error: errors,
+    }),
+    HttpApiEndpoint.get("projectSnapshots", "/v1/cloud/projects/:projectId/snapshots", {
+      params: Schema.Struct({ projectId: Id }),
+      success: Schema.Array(CloudProjectSnapshot),
+      error: errors,
+    }),
     HttpApiEndpoint.get("workspaceChunkStatus", "/v1/cloud/workspaces/chunks/:hash/status", {
       params: Schema.Struct({ hash: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)) }),
       success: Schema.Struct({ present: Schema.Boolean }),
@@ -157,7 +170,10 @@ const cloudGroup = HttpApiGroup.make("cloud")
       error: errors,
     }),
     HttpApiEndpoint.get("publicRepository", "/v1/cloud/repositories/public/:owner/:name", {
-      params: Schema.Struct({ owner: Id, name: Id }),
+      params: Schema.Struct({
+        owner: Schema.String.check(Schema.isPattern(/^[a-zA-Z0-9-]{1,100}$/)),
+        name: Schema.String.check(Schema.isPattern(/^[a-zA-Z0-9_.-]{1,100}$/)),
+      }),
       success: Schema.NullOr(CloudRepository),
       error: errors,
     }),
@@ -212,6 +228,41 @@ const cloudGroup = HttpApiGroup.make("cloud")
   )
   .middleware(RelayClientAuth);
 const callbackGroup = HttpApiGroup.make("cloudWorker").add(
+  HttpApiEndpoint.get("legacyRepository", "/v1/cloud/worker/:taskId/legacy-repository", {
+    params: taskParams,
+    headers: workerHeaders,
+    success: Schema.Unknown,
+    error: cloudErrors,
+  }),
+  HttpApiEndpoint.post("workerWorkspaceChunk", "/v1/cloud/worker/:taskId/workspace-chunks", {
+    params: taskParams,
+    headers: workerHeaders,
+    payload: CloudWorkspaceChunkUpload,
+    success: Schema.Struct({ sha256: Schema.String }),
+    error: cloudErrors,
+  }),
+  HttpApiEndpoint.post("workerWorkspaceSave", "/v1/cloud/worker/:taskId/workspace", {
+    params: taskParams,
+    headers: workerHeaders,
+    payload: Schema.Struct({ manifest: CloudWorkspaceManifest, seed: Schema.Boolean }),
+    success: CloudSnapshotRef,
+    error: cloudErrors,
+  }),
+  HttpApiEndpoint.get("seed", "/v1/cloud/worker/:taskId/seed", {
+    params: taskParams,
+    headers: workerHeaders,
+    success: Schema.Unknown,
+    error: cloudErrors,
+  }),
+  HttpApiEndpoint.get("seedChunk", "/v1/cloud/worker/:taskId/seed/:index", {
+    params: Schema.Struct({
+      taskId: Id,
+      index: Schema.String.check(Schema.isPattern(/^[0-9]{1,4}$/)),
+    }),
+    headers: workerHeaders,
+    success: Schema.Unknown,
+    error: cloudErrors,
+  }),
   HttpApiEndpoint.post("mirror", "/v1/cloud/worker/mirror", {
     headers: workerHeaders,
     payload: Schema.Struct({ callback: CloudWorkerCallback, conversation: Schema.Unknown }),
@@ -353,6 +404,21 @@ export const cloudApiLayer = HttpApiBuilder.group(
       return userId;
     });
     return handlers
+      .handle("mobileDevice", ({ payload }) =>
+        Effect.gen(function* () {
+          const { userId } = yield* RelayClientPrincipal;
+          yield* service.registerMobileDevice(userId, payload).pipe(Effect.mapError(cloudError));
+          return { ok: true as const };
+        }),
+      )
+      .handle("projectSnapshots", ({ params }) =>
+        Effect.gen(function* () {
+          const { userId } = yield* RelayClientPrincipal;
+          return yield* service
+            .projectSnapshots(userId, params.projectId)
+            .pipe(Effect.mapError(cloudError));
+        }),
+      )
       .handle("workspaceChunkStatus", ({ params }) =>
         Effect.gen(function* () {
           const userId = yield* workspaceUser;
@@ -481,6 +547,36 @@ export const cloudWorkerApiLayer = HttpApiBuilder.group(
     const token = (headers: { authorization: string }) =>
       headers.authorization.startsWith("Bearer ") ? headers.authorization.slice(7) : "";
     return handlers
+      .handle("legacyRepository", ({ params, headers }) =>
+        control.legacyRepository(params.taskId, token(headers)).pipe(Effect.mapError(cloudError)),
+      )
+      .handle("workerWorkspaceChunk", ({ params, headers, payload }) =>
+        Effect.gen(function* () {
+          const bytes = yield* Effect.tryPromise({
+            try: () => decodeWorkspaceChunkUpload(payload),
+            catch: () =>
+              new CloudBadRequest({ code: "invalid_chunk", message: "Invalid workspace chunk" }),
+          });
+          return yield* control
+            .uploadWorkerWorkspace(params.taskId, token(headers), bytes)
+            .pipe(Effect.mapError(cloudError));
+        }),
+      )
+      .handle("workerWorkspaceSave", ({ params, headers, payload }) =>
+        control
+          .saveWorkerWorkspace(params.taskId, token(headers), payload.manifest, payload.seed)
+          .pipe(Effect.mapError(cloudError)),
+      )
+      .handle("seed", ({ params, headers }) =>
+        control
+          .restore(params.taskId, token(headers), undefined, true)
+          .pipe(Effect.mapError(cloudError)),
+      )
+      .handle("seedChunk", ({ params, headers }) =>
+        control
+          .restore(params.taskId, token(headers), Number(params.index), true)
+          .pipe(Effect.mapError(cloudError)),
+      )
       .handle("mirror", ({ headers, payload }) =>
         control
           .mirror(token(headers), payload.callback, payload.conversation)

@@ -2245,6 +2245,98 @@
         {
           "additionalProperties": false,
           "properties": {
+            "attachments": {
+              "allOf": [
+                {
+                  "maxItems": 8
+                }
+              ],
+              "items": {
+                "$ref": "#/$defs/CloudAttachment"
+              },
+              "type": "array"
+            },
+            "idempotencyKey": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "interactionMode": {
+              "enum": ["default", "plan"],
+              "type": "string"
+            },
+            "model": {
+              "allOf": [
+                {
+                  "minLength": 1
+                },
+                {
+                  "maxLength": 65536
+                }
+              ],
+              "type": "string"
+            },
+            "modelOptions": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/$defs/ProviderOptionSelection"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "object"
+                }
+              ]
+            },
+            "projectId": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "prompt": {
+              "allOf": [
+                {
+                  "minLength": 1
+                },
+                {
+                  "maxLength": 65536
+                }
+              ],
+              "type": "string"
+            },
+            "provider": {
+              "$ref": "#/$defs/CloudProvider"
+            },
+            "runtimeMode": {
+              "enum": ["approval-required", "auto-accept-edits", "auto", "full-access"],
+              "type": "string"
+            },
+            "snapshotId": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "type": {
+              "enum": ["task.createFromProject"],
+              "type": "string"
+            }
+          },
+          "required": ["type", "idempotencyKey", "projectId", "snapshotId", "provider", "prompt"],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "cloudTaskId": {
               "anyOf": [
                 {
@@ -2816,6 +2908,34 @@
               ],
               "type": "string"
             },
+            "interactionMode": {
+              "enum": ["default", "plan"],
+              "type": "string"
+            },
+            "model": {
+              "allOf": [
+                {
+                  "minLength": 1
+                },
+                {
+                  "maxLength": 65536
+                }
+              ],
+              "type": "string"
+            },
+            "modelOptions": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/$defs/ProviderOptionSelection"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "object"
+                }
+              ]
+            },
             "prompt": {
               "allOf": [
                 {
@@ -2825,6 +2945,10 @@
                   "maxLength": 65536
                 }
               ],
+              "type": "string"
+            },
+            "runtimeMode": {
+              "enum": ["approval-required", "auto-accept-edits", "auto", "full-access"],
               "type": "string"
             },
             "taskId": {
@@ -3587,6 +3711,44 @@
       "required": ["id", "state", "verificationUrl", "userCode", "error"],
       "type": "object"
     },
+    "CloudMobileDeviceRegistration": {
+      "additionalProperties": false,
+      "properties": {
+        "deviceId": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "platform": {
+          "enum": ["ios", "android"],
+          "type": "string"
+        },
+        "token": {
+          "anyOf": [
+            {
+              "allOf": [
+                {
+                  "pattern": "^(?:Expo|Exponent)PushToken\\[[a-zA-Z0-9_-]{1,200}\\]$"
+                }
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "version": {
+          "enum": [2],
+          "type": "number"
+        }
+      },
+      "required": ["version", "deviceId", "platform", "token"],
+      "type": "object"
+    },
     "CloudOverview": {
       "additionalProperties": false,
       "properties": {
@@ -3602,12 +3764,33 @@
           },
           "type": "array"
         },
+        "capabilities": {
+          "additionalProperties": false,
+          "properties": {
+            "followUpSettings": {
+              "type": "boolean"
+            },
+            "mobileNotifications": {
+              "type": "boolean"
+            },
+            "projectCreation": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
         "enabled": {
           "type": "boolean"
         },
         "handoffs": {
           "items": {
             "$ref": "#/$defs/CloudHandoffOperation"
+          },
+          "type": "array"
+        },
+        "projects": {
+          "items": {
+            "$ref": "#/$defs/CloudProject"
           },
           "type": "array"
         },
@@ -3717,6 +3900,216 @@
         }
       },
       "required": ["operationId", "conversationId", "generation", "history"],
+      "type": "object"
+    },
+    "CloudProject": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "latestSnapshot": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CloudProjectSnapshot"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "repository": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CloudRepository"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revision": {
+          "allOf": [
+            {
+              "minimum": 0
+            }
+          ],
+          "type": "integer"
+        },
+        "title": {
+          "allOf": [
+            {
+              "minLength": 1
+            },
+            {
+              "maxLength": 65536
+            }
+          ],
+          "type": "string"
+        }
+      },
+      "required": ["id", "title", "repository", "revision", "latestSnapshot"],
+      "type": "object"
+    },
+    "CloudProjectSnapshot": {
+      "additionalProperties": false,
+      "properties": {
+        "baseBranch": {
+          "allOf": [
+            {
+              "minLength": 1
+            },
+            {
+              "maxLength": 65536
+            }
+          ],
+          "type": "string"
+        },
+        "baseSha": {
+          "anyOf": [
+            {
+              "allOf": [
+                {
+                  "pattern": "^[a-f0-9]{40}$"
+                }
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "branch": {
+          "allOf": [
+            {
+              "minLength": 1
+            },
+            {
+              "maxLength": 65536
+            }
+          ],
+          "type": "string"
+        },
+        "checkpoint": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CloudCheckpoint"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "projectId": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "revision": {
+          "allOf": [
+            {
+              "minimum": 0
+            }
+          ],
+          "type": "integer"
+        },
+        "roots": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "allOf": [
+                  {
+                    "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                  }
+                ],
+                "type": "string"
+              },
+              "name": {
+                "allOf": [
+                  {
+                    "minLength": 1
+                  },
+                  {
+                    "maxLength": 65536
+                  }
+                ],
+                "type": "string"
+              }
+            },
+            "required": ["id", "name"],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "savedAt": {
+          "$ref": "#/$defs/TrimmedNonEmptyString"
+        },
+        "sourceKind": {
+          "enum": ["github", "local"],
+          "type": "string"
+        },
+        "sourceTaskId": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "sourceTitle": {
+          "allOf": [
+            {
+              "minLength": 1
+            },
+            {
+              "maxLength": 65536
+            }
+          ],
+          "type": "string"
+        },
+        "workspace": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CloudSnapshotRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "projectId",
+        "revision",
+        "sourceTaskId",
+        "sourceTitle",
+        "savedAt",
+        "sourceKind",
+        "workspace",
+        "checkpoint",
+        "baseBranch",
+        "baseSha",
+        "roots"
+      ],
       "type": "object"
     },
     "CloudProvider": {
@@ -4795,6 +5188,162 @@
           ],
           "type": "string"
         },
+        "projectSnapshot": {
+          "additionalProperties": false,
+          "properties": {
+            "baseBranch": {
+              "allOf": [
+                {
+                  "minLength": 1
+                },
+                {
+                  "maxLength": 65536
+                }
+              ],
+              "type": "string"
+            },
+            "baseSha": {
+              "anyOf": [
+                {
+                  "allOf": [
+                    {
+                      "pattern": "^[a-f0-9]{40}$"
+                    }
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "branch": {
+              "allOf": [
+                {
+                  "minLength": 1
+                },
+                {
+                  "maxLength": 65536
+                }
+              ],
+              "type": "string"
+            },
+            "checkpoint": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CloudCheckpoint"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "id": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "projectId": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "revision": {
+              "allOf": [
+                {
+                  "minimum": 0
+                }
+              ],
+              "type": "integer"
+            },
+            "roots": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "allOf": [
+                      {
+                        "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                      }
+                    ],
+                    "type": "string"
+                  },
+                  "name": {
+                    "allOf": [
+                      {
+                        "minLength": 1
+                      },
+                      {
+                        "maxLength": 65536
+                      }
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": ["id", "name"],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "savedAt": {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            },
+            "sourceKind": {
+              "enum": ["github", "local"],
+              "type": "string"
+            },
+            "sourceTaskId": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "sourceTitle": {
+              "allOf": [
+                {
+                  "minLength": 1
+                },
+                {
+                  "maxLength": 65536
+                }
+              ],
+              "type": "string"
+            },
+            "workspace": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CloudSnapshotRef"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "projectId",
+            "revision",
+            "sourceTaskId",
+            "sourceTitle",
+            "savedAt",
+            "sourceKind",
+            "workspace",
+            "checkpoint",
+            "baseBranch",
+            "baseSha",
+            "roots"
+          ],
+          "type": "object"
+        },
         "prompt": {
           "allOf": [
             {
@@ -4898,6 +5447,44 @@
             }
           ],
           "type": "string"
+        },
+        "turnSettings": {
+          "additionalProperties": false,
+          "properties": {
+            "interactionMode": {
+              "enum": ["default", "plan"],
+              "type": "string"
+            },
+            "model": {
+              "allOf": [
+                {
+                  "minLength": 1
+                },
+                {
+                  "maxLength": 65536
+                }
+              ],
+              "type": "string"
+            },
+            "modelOptions": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/$defs/ProviderOptionSelection"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "object"
+                }
+              ]
+            },
+            "runtimeMode": {
+              "enum": ["approval-required", "auto-accept-edits", "auto", "full-access"],
+              "type": "string"
+            }
+          },
+          "type": "object"
         },
         "updatedAt": {
           "$ref": "#/$defs/TrimmedNonEmptyString"

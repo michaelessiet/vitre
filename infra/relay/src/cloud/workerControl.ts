@@ -1,4 +1,6 @@
 import { shouldYieldIdleWorker } from "./state.ts";
+import { recordProjectSnapshot, workspaceRoots, projectSnapshot } from "./projects.ts";
+import { enqueueCloudNotification, enqueueConversationNotifications } from "./notifications.ts";
 // @effect-diagnostics preferSchemaOverJson:off - Provider/session payloads and encrypted endpoint envelopes are opaque JSON.
 import {
   readWorkspace,
@@ -69,12 +71,85 @@ export const make = Effect.gen(function* () {
   });
 
   return {
+    legacyRepository: Effect.fn("cloud.worker_legacy_repository")(function* (
+      taskId: string,
+      token: string,
+    ) {
+      const { task } = yield* authenticate(taskId, token);
+      if (!task.projectSnapshot?.checkpoint || !task.baseSha)
+        return yield* Effect.fail(
+          new CloudError("invalid_snapshot", "No legacy project workspace is selected", 400),
+        );
+      const now = yield* currentMillis;
+      return yield* fromPromise(() => github.resolve(task.repository, task.baseSha!, now));
+    }),
     workspaceChunkStatus: (userId: string, hash: string) =>
       workspaceChunkStatus(userId, hash).pipe(Effect.provideService(CloudArtifacts, artifacts)),
     uploadWorkspace: (userId: string, bytes: Uint8Array<ArrayBuffer>) =>
       putWorkspaceChunk(userId, bytes).pipe(Effect.provideService(CloudArtifacts, artifacts)),
     finalizeWorkspace: (userId: string, manifest: CloudWorkspaceManifest) =>
       finalizeWorkspace(userId, manifest).pipe(Effect.provideService(CloudArtifacts, artifacts)),
+    uploadWorkerWorkspace: Effect.fn("cloud.worker_workspace_upload")(function* (
+      taskId: string,
+      token: string,
+      bytes: Uint8Array<ArrayBuffer>,
+    ) {
+      yield* authenticate(taskId, token);
+      return yield* putWorkspaceChunk(config.allowedUserId, bytes).pipe(
+        Effect.provideService(CloudArtifacts, artifacts),
+      );
+    }),
+    saveWorkerWorkspace: Effect.fn("cloud.worker_workspace_save")(function* (
+      taskId: string,
+      token: string,
+      manifest: CloudWorkspaceManifest,
+      seed: boolean,
+    ) {
+      const { task, attempt } = yield* authenticate(taskId, token);
+      if (seed && !task.projectSnapshot?.checkpoint)
+        return yield* Effect.fail(
+          new CloudError("invalid_snapshot", "This task has no project checkpoint", 400),
+        );
+      const workspace = yield* finalizeWorkspace(config.allowedUserId, manifest).pipe(
+        Effect.provideService(CloudArtifacts, artifacts),
+      );
+      if (seed) {
+        const tokenHash = yield* fromPromise(() => sha256(token));
+        yield* store.mutate(config.allowedUserId, (doc) => {
+          const { task: current } = authenticateDocument(doc, taskId, tokenHash);
+          if (current.attempt?.id !== attempt.id || !current.projectSnapshot)
+            throw new CloudError("stale_worker", "Snapshot preparation was replaced");
+          const head = manifest.roots[0]?.git?.head;
+          current.source =
+            current.projectSnapshot.sourceKind === "github" && head
+              ? { kind: "github", revision: head, snapshot: workspace }
+              : {
+                  kind: "local",
+                  name:
+                    doc.state.projects?.[current.projectSnapshot.projectId]?.title ??
+                    task.repository.name,
+                  snapshot: workspace,
+                };
+          current.baseSha = head ?? current.baseSha;
+          const { project, snapshot } = projectSnapshot(
+            doc.state,
+            current.projectSnapshot.projectId,
+            current.projectSnapshot.id,
+          );
+          // A conversion enriches the same immutable checkpoint, never selects newer work.
+          const prepared = { ...snapshot, workspace, roots: workspaceRoots(manifest) };
+          if (snapshot.workspace && snapshot.workspace.sha256 !== workspace.sha256)
+            throw new CloudError(
+              "snapshot_conflict",
+              "Snapshot conversion produced different content",
+            );
+          doc.state.projectSnapshots![project.id]![snapshot.id] = prepared;
+          if (project.latestSnapshot?.id === snapshot.id)
+            doc.state.projects![project.id] = { ...project, latestSnapshot: prepared };
+        });
+      }
+      return workspace;
+    }),
     workspace: Effect.fn("cloud.worker_workspace")(function* (
       taskId: string,
       token: string,
@@ -166,10 +241,20 @@ export const make = Effect.gen(function* () {
       const key = `cloud/${encodeURIComponent(config.allowedUserId)}/${callback.taskId}/events/${callback.attemptId}/${callback.sequence}-${hash}.json`;
       yield* fromPromise(() => artifacts.put(key, bytes, { sha256: hash }));
       const now = yield* currentMillis;
-      yield* store.mutate(config.allowedUserId, (doc) => {
-        if (acceptCallback(doc.state, callback, now))
+      const notify = yield* store.mutate(config.allowedUserId, (doc) => {
+        const before = Object.keys(doc.private.pushEvents ?? {}).length;
+        if (acceptCallback(doc.state, callback, now)) {
           (doc.state.projections ??= {})[callback.taskId] = { key, sha256: hash };
+          enqueueConversationNotifications(
+            doc,
+            doc.state.tasks[callback.taskId]!,
+            conversation,
+            now,
+          );
+        }
+        return Object.keys(doc.private.pushEvents ?? {}).length > before;
       });
+      if (notify) yield* config.wake(config.allowedUserId).pipe(Effect.ignore);
     }),
     events: Effect.fnUntraced(function* (userId: string, taskId: string, after: number) {
       if (userId !== config.allowedUserId || !userId)
@@ -241,19 +326,21 @@ export const make = Effect.gen(function* () {
             )
           : null;
       const resolved =
-        task.source?.kind === "local"
-          ? { sha: null, token: "" }
-          : snapshotHead
-            ? { sha: snapshotHead, token: "" }
-            : yield* fromPromise(() =>
-                github.resolve(
-                  task.repository,
-                  task.source?.kind === "github"
-                    ? task.source.revision
-                    : (task.baseSha ?? task.baseBranch),
-                  now,
-                ),
-              );
+        task.projectSnapshot?.checkpoint && !task.source
+          ? { sha: task.baseSha, token: "" }
+          : task.source?.kind === "local" || task.projectSnapshot?.sourceKind === "local"
+            ? { sha: null, token: "" }
+            : snapshotHead
+              ? { sha: snapshotHead, token: "" }
+              : yield* fromPromise(() =>
+                  github.resolve(
+                    task.repository,
+                    task.source?.kind === "github"
+                      ? task.source.revision
+                      : (task.baseSha ?? task.baseBranch),
+                    now,
+                  ),
+                );
       yield* store.mutate(config.allowedUserId, (doc) => {
         const t = taskFor(doc.state, taskId);
         if (t.attempt?.id !== attempt.id || t.state !== "preparing")
@@ -433,6 +520,18 @@ export const make = Effect.gen(function* () {
           new CloudError("stale_worker", "Checkpoint belongs to a different attempt"),
         );
       if (task.result?.id === manifest.checkpointId) return;
+      const workspaceBytes = manifest.workspace
+        ? yield* readWorkspace(config.allowedUserId, manifest.workspace.sha256).pipe(
+            Effect.provideService(CloudArtifacts, artifacts),
+          )
+        : null;
+      const workspaceManifest = workspaceBytes
+        ? (JSON.parse(new TextDecoder().decode(workspaceBytes)) as CloudWorkspaceManifest)
+        : null;
+      if (workspaceManifest)
+        yield* finalizeWorkspace(config.allowedUserId, workspaceManifest).pipe(
+          Effect.provideService(CloudArtifacts, artifacts),
+        );
       const saved = yield* finalizeManifest(config.allowedUserId, manifest).pipe(
         Effect.provideService(CloudArtifacts, artifacts),
       );
@@ -454,11 +553,35 @@ export const make = Effect.gen(function* () {
           summary: manifest.result.summary,
           createdAt: iso(now),
         };
-        acceptCheckpoint(
+        const accepted = acceptCheckpoint(
           document.state,
           { ...callback, checkpoint, ...(callback.phase === "completed" ? { result } : {}) },
           now,
         );
+        if (accepted)
+          recordProjectSnapshot(document.state, task, {
+            id: checkpoint.id,
+            savedAt: checkpoint.createdAt,
+            sourceKind: task.source?.kind ?? task.projectSnapshot?.sourceKind ?? "github",
+            workspace: manifest.workspace ?? null,
+            checkpoint: manifest.workspace ? null : checkpoint,
+            baseBranch: task.baseBranch,
+            branch: workspaceManifest?.roots[0]?.git?.branch ?? task.branch,
+            baseSha: workspaceManifest?.roots[0]?.git?.head ?? task.baseSha,
+            roots: workspaceManifest ? workspaceRoots(workspaceManifest) : [],
+          });
+        if (
+          accepted &&
+          callback.phase === "completed" &&
+          document.state.tasks[task.id]?.state === "completed"
+        )
+          enqueueCloudNotification(
+            document,
+            task,
+            "completed",
+            task.turnRequestId ?? attempt.id,
+            now,
+          );
       });
       // A saved checkpoint can release a queued conversation immediately.
       yield* config.wake(config.allowedUserId).pipe(Effect.ignore);
@@ -467,9 +590,10 @@ export const make = Effect.gen(function* () {
       taskId: string,
       token: string,
       index?: number,
+      seed = false,
     ) {
       const { task } = yield* authenticate(taskId, token);
-      const checkpoint = task.checkpoint;
+      const checkpoint = seed ? task.projectSnapshot?.checkpoint : task.checkpoint;
       if (!checkpoint)
         return yield* Effect.fail(
           new CloudError("not_found", "No complete checkpoint exists", 404),
@@ -481,7 +605,8 @@ export const make = Effect.gen(function* () {
         );
       }
       const manifest = JSON.parse(new TextDecoder().decode(bytes)) as CheckpointManifest;
-      if (index === undefined) return { checkpoint, manifest };
+      if (index === undefined)
+        return { checkpoint, manifest: seed ? { chunks: manifest.chunks } : manifest };
       const chunk = manifest.chunks[index];
       if (!Number.isSafeInteger(index) || index < 0 || !chunk || chunk.index !== index) {
         return yield* Effect.fail(
@@ -490,7 +615,7 @@ export const make = Effect.gen(function* () {
       }
       const prefix = artifactPrefix(
         config.allowedUserId,
-        taskId,
+        checkpoint.taskId,
         checkpoint.attemptId,
         checkpoint.id,
       );

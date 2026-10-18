@@ -10,6 +10,7 @@ import {
   createCheckpoint,
   isCredentialPath,
   restoreCheckpoint,
+  projectWorkspaceFromCheckpoint,
 } from "./checkpoint.mjs";
 
 const exec = NodeUtil.promisify(NodeChildProcess.execFile);
@@ -41,6 +42,203 @@ async function fixture() {
 }
 
 describe("cloud checkpoints", () => {
+  it("converts legacy uploaded non-Git projects without GitHub or the source worker", async () => {
+    const f = await fixture();
+    try {
+      await NodeFSP.rm(NodePath.join(f.repo, ".git"), { recursive: true });
+      await NodeFSP.rm(NodePath.join(f.repo, "tracked.txt"));
+      await f.git("init", "--initial-branch=main");
+      await exec(
+        "git",
+        [
+          "-c",
+          "user.name=Vitre",
+          "-c",
+          "user.email=vitre@localhost",
+          "commit",
+          "--allow-empty",
+          "-m",
+          "Local workspace baseline",
+        ],
+        {
+          cwd: f.repo,
+          env: {
+            ...process.env,
+            GIT_AUTHOR_NAME: "Vitre",
+            GIT_AUTHOR_EMAIL: "vitre@localhost",
+            GIT_COMMITTER_NAME: "Vitre",
+            GIT_COMMITTER_EMAIL: "vitre@localhost",
+            GIT_AUTHOR_DATE: "2000-01-01T00:00:00Z",
+            GIT_COMMITTER_DATE: "2000-01-01T00:00:00Z",
+          },
+        },
+      );
+      const baseSha = await f.git("rev-parse", "HEAD");
+      await NodeFSP.writeFile(NodePath.join(f.repo, "notes.txt"), "saved local work\n");
+      const saved = await createCheckpoint({
+        repository: f.repo,
+        database: f.database,
+        directory: f.root,
+        baseSha,
+      });
+      const archiveRoot = NodePath.dirname(saved.path);
+      const metadata = JSON.parse(
+        await NodeFSP.readFile(NodePath.join(archiveRoot, "metadata.json"), "utf8"),
+      );
+      await NodeFSP.writeFile(
+        NodePath.join(archiveRoot, "metadata.json"),
+        JSON.stringify({ ...metadata, version: 1 }),
+      );
+      const archive = NodePath.join(f.root, "local-legacy.tar.gz");
+      await exec("tar", [
+        "-czf",
+        archive,
+        "-C",
+        archiveRoot,
+        "metadata.json",
+        "repository.bundle",
+        "state.sqlite",
+      ]);
+      const converted = await projectWorkspaceFromCheckpoint({
+        archive,
+        directory: f.root,
+        baseSha: null,
+        legacyLocal: true,
+        prepareLegacyRepository: () => {
+          throw new Error("Must not request GitHub");
+        },
+      });
+      expect(converted.workspace.roots[0].git).toBeUndefined();
+      const { restoreWorkspace } = await import("./workspace.mjs");
+      const destination = NodePath.join(f.root, "local-copy");
+      await restoreWorkspace(converted.workspace, destination, converted.readWorkspaceChunk);
+      expect(await NodeFSP.readFile(NodePath.join(destination, "primary/notes.txt"), "utf8")).toBe(
+        "saved local work\n",
+      );
+      await converted.dispose();
+      await saved.dispose();
+    } finally {
+      f.db.close();
+    }
+  });
+  it("forks an immutable workspace with unpublished commits, index changes and additional roots, without sessions or chat", async () => {
+    const f = await fixture();
+    try {
+      await NodeFSP.writeFile(NodePath.join(f.repo, "unpublished.txt"), "unpublished\n");
+      await f.git("add", ".");
+      await f.git("commit", "-m", "Unpublished");
+      const head = await f.git("rev-parse", "HEAD");
+      await NodeFSP.writeFile(NodePath.join(f.repo, "tracked.txt"), "staged\n");
+      await f.git("add", ".");
+      await NodeFSP.writeFile(NodePath.join(f.repo, "tracked.txt"), "unstaged\n");
+      const extra = NodePath.join(f.root, "assets");
+      await NodeFSP.mkdir(extra);
+      await NodeFSP.writeFile(NodePath.join(extra, "design.txt"), "additional root");
+      const saved = await createCheckpoint({
+        repository: f.repo,
+        database: f.database,
+        directory: f.root,
+        baseSha: f.baseSha,
+        additionalRoots: [{ id: "assets", path: extra }],
+      });
+      const converted = await projectWorkspaceFromCheckpoint({
+        archive: saved.path,
+        directory: f.root,
+        baseSha: f.baseSha,
+        prepareLegacyRepository: () => {
+          throw new Error("Portable snapshots must not clone GitHub");
+        },
+      });
+      const retry = await projectWorkspaceFromCheckpoint({
+        archive: saved.path,
+        directory: f.root,
+        baseSha: f.baseSha,
+      });
+      expect(converted.workspace).toEqual(retry.workspace);
+      expect(converted.workspace.entries.map((entry) => entry.path)).not.toContain("state.sqlite");
+      expect(converted.workspace.roots.map((root) => root.id)).toEqual(["primary", "assets"]);
+      const { restoreWorkspace } = await import("./workspace.mjs");
+      const a = NodePath.join(f.root, "copy-a");
+      const b = NodePath.join(f.root, "copy-b");
+      await restoreWorkspace(converted.workspace, a, converted.readWorkspaceChunk);
+      await restoreWorkspace(converted.workspace, b, converted.readWorkspaceChunk);
+      const gitCopy = async (...args) =>
+        (await exec("git", args, { cwd: NodePath.join(a, "primary") })).stdout.trim();
+      await gitCopy("checkout", "-b", "vitre/new-task");
+      expect(await gitCopy("rev-parse", "HEAD")).toBe(head);
+      expect(await gitCopy("show", ":tracked.txt")).toBe("staged");
+      expect(await NodeFSP.readFile(NodePath.join(a, "primary/tracked.txt"), "utf8")).toBe(
+        "unstaged\n",
+      );
+      expect(await NodeFSP.readFile(NodePath.join(a, "assets/design.txt"), "utf8")).toBe(
+        "additional root",
+      );
+      await NodeFSP.writeFile(NodePath.join(a, "primary/tracked.txt"), "new conversation");
+      expect(await NodeFSP.readFile(NodePath.join(b, "primary/tracked.txt"), "utf8")).toBe(
+        "unstaged\n",
+      );
+      expect(await f.git("branch", "--show-current")).toBe("main");
+      expect(await NodeFSP.readFile(NodePath.join(f.repo, "tracked.txt"), "utf8")).toBe(
+        "unstaged\n",
+      );
+      expect(await NodeFSP.stat(NodePath.join(a, "state.sqlite")).catch(() => null)).toBeNull();
+      await converted.dispose();
+      await retry.dispose();
+      await saved.dispose();
+    } finally {
+      f.db.close();
+    }
+  });
+  it("converts a legacy Git delta on the cloud side and can resume by repeating conversion", async () => {
+    const f = await fixture();
+    try {
+      await NodeFSP.writeFile(NodePath.join(f.repo, "tracked.txt"), "legacy saved work\n");
+      const saved = await createCheckpoint({
+        repository: f.repo,
+        database: f.database,
+        directory: f.root,
+        baseSha: f.baseSha,
+      });
+      const archiveRoot = NodePath.dirname(saved.path);
+      const metadataPath = NodePath.join(archiveRoot, "metadata.json");
+      const metadata = JSON.parse(await NodeFSP.readFile(metadataPath, "utf8"));
+      await NodeFSP.writeFile(metadataPath, JSON.stringify({ ...metadata, version: 1 }));
+      const archive = NodePath.join(f.root, "legacy.tar.gz");
+      await exec("tar", [
+        "-czf",
+        archive,
+        "-C",
+        archiveRoot,
+        "metadata.json",
+        "repository.bundle",
+        "state.sqlite",
+      ]);
+      const convert = () =>
+        projectWorkspaceFromCheckpoint({
+          archive,
+          directory: f.root,
+          baseSha: f.baseSha,
+          prepareLegacyRepository: async (destination) => {
+            await exec("git", ["clone", "--no-checkout", f.repo, destination]);
+            return destination;
+          },
+        });
+      const first = await convert();
+      const second = await convert();
+      expect(first.workspace).toEqual(second.workspace);
+      const { restoreWorkspace } = await import("./workspace.mjs");
+      const destination = NodePath.join(f.root, "legacy-copy");
+      await restoreWorkspace(first.workspace, destination, first.readWorkspaceChunk);
+      expect(
+        await NodeFSP.readFile(NodePath.join(destination, "primary/tracked.txt"), "utf8"),
+      ).toBe("legacy saved work\n");
+      await first.dispose();
+      await second.dispose();
+      await saved.dispose();
+    } finally {
+      f.db.close();
+    }
+  });
   it("checkpoints fixtures added after the pinned base without changing their staged state", async () => {
     const f = await fixture();
     try {
