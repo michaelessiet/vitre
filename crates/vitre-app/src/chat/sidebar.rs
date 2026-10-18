@@ -81,6 +81,7 @@ pub(super) struct SidebarProjectRow {
 /// One thread row's render-ready state.
 pub(super) struct SidebarThreadRow {
     id: ThreadId,
+    project_id: ProjectId,
     location: ThreadLocation,
     cloud: Option<CloudRowMeta>,
     title: SharedString,
@@ -163,6 +164,22 @@ impl Render for DraggedProjectRow {
 }
 
 impl ChatApp {
+    /// Use every unarchived conversation, including rows outside the preview
+    /// window. Grouped worktrees still notify only their own physical tab.
+    pub(super) fn project_tab_attention(&self, project: &ProjectId) -> Option<ThreadStatus> {
+        resolve_project_status(
+            self.sidebar_rows
+                .iter()
+                .flat_map(|row| &row.threads)
+                .filter(|thread| &thread.project_id == project)
+                .map(|thread| {
+                    thread.status.filter(|status| {
+                        !matches!(status, ThreadStatus::Working | ThreadStatus::Connecting)
+                    })
+                }),
+        )
+    }
+
     pub(super) fn tab_project_id(&self) -> Option<ProjectId> {
         self.thread
             .as_ref()
@@ -204,9 +221,16 @@ impl ChatApp {
             .border_b_1()
             .border_color(cx.theme().border);
         if let Some(snapshot) = &self.shell.snapshot {
-            for project in &snapshot.projects {
+            let physical_keys: Vec<_> = snapshot
+                .projects
+                .iter()
+                .map(derive_physical_project_key)
+                .collect();
+            for index in self.sidebar.order_projects(&physical_keys) {
+                let project = &snapshot.projects[index];
                 let id = project.id.clone();
                 let active = selected.as_ref() == Some(&id);
+                let attention = self.project_tab_attention(&id);
                 let member = ProjectMember {
                     physical_key: derive_physical_project_key(project),
                     project_id: id.clone(),
@@ -216,6 +240,11 @@ impl ChatApp {
                 let menu_member = member.clone();
                 let menu_owner = cx.entity().downgrade();
                 let context_owner = menu_owner.clone();
+                let dragged = DraggedProjectRow {
+                    keys: vec![member.physical_key.clone()],
+                    label: member.title.clone(),
+                };
+                let target_keys = dragged.keys.clone();
                 tabs = tabs.child(
                     h_flex()
                         .id(SharedString::from(format!("project-tab-{}", id.0)))
@@ -227,6 +256,12 @@ impl ChatApp {
                         .rounded_md()
                         .when(active, |tab| tab.bg(cx.theme().list_active))
                         .hover(|tab| tab.bg(cx.theme().list_hover))
+                        .drag_over::<DraggedProjectRow>(|style, _, _, cx| {
+                            style.bg(cx.theme().drop_target)
+                        })
+                        .on_drop(cx.listener(move |app, dragged: &DraggedProjectRow, _, cx| {
+                            app.reorder_projects(&dragged.keys, &target_keys, cx);
+                        }))
                         .child(
                             h_flex()
                                 .id(SharedString::from(format!(
@@ -236,7 +271,8 @@ impl ChatApp {
                                 .gap_2()
                                 .min_w_0()
                                 .py_2()
-                                .cursor_pointer()
+                                .cursor(CursorStyle::OpenHand)
+                                .on_drag(dragged, |dragged, _, _, cx| cx.new(|_| dragged.clone()))
                                 .child(self.project_icon(
                                     &project.title.0,
                                     &project.workspace_root.0,
@@ -249,6 +285,29 @@ impl ChatApp {
                                         .text_sm()
                                         .child(project.title.0.clone()),
                                 )
+                                .when_some(attention, |tab, status| {
+                                    tab.child(
+                                        div()
+                                            .id(SharedString::from(format!(
+                                                "project-tab-attention-{}",
+                                                project.id.0
+                                            )))
+                                            .size(px(6.))
+                                            .flex_shrink_0()
+                                            .rounded_full()
+                                            .bg(status_colors(status, cx.theme().is_dark()).dot)
+                                            .tooltip(move |window, cx| {
+                                                gpui_component::tooltip::Tooltip::new(
+                                                    if status == ThreadStatus::Completed {
+                                                        "Unread conversation"
+                                                    } else {
+                                                        status.label()
+                                                    },
+                                                )
+                                                .build(window, cx)
+                                            }),
+                                    )
+                                })
                                 .on_click(cx.listener(move |app, _, window, cx| {
                                     if app.tab_project_id().as_ref() == Some(&id)
                                         || app.draft_creating
@@ -507,6 +566,7 @@ impl ChatApp {
                         .zip(statuses)
                         .map(|(thread, status)| SidebarThreadRow {
                             id: thread.id.clone(),
+                            project_id: thread.project_id.clone(),
                             location: self.thread_location(&thread.id),
                             cloud: self
                                 .thread_location(&thread.id)

@@ -46,6 +46,8 @@ mod preview_verification;
 mod project_actions;
 mod project_icons;
 mod project_scripts;
+#[cfg(debug_assertions)]
+mod project_tabs_verification;
 mod question_reply;
 #[cfg(debug_assertions)]
 mod reasoning_verification;
