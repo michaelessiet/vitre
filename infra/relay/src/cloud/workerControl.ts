@@ -1,5 +1,10 @@
 import { shouldYieldIdleWorker } from "./state.ts";
-import { recordProjectSnapshot, workspaceRoots, projectSnapshot } from "./projects.ts";
+import {
+  recordProjectSnapshot,
+  workspaceRoots,
+  projectSnapshot,
+  validateProjectSnapshotWorkspace,
+} from "./projects.ts";
 import { enqueueCloudNotification, enqueueConversationNotifications } from "./notifications.ts";
 // @effect-diagnostics preferSchemaOverJson:off - Provider/session payloads and encrypted endpoint envelopes are opaque JSON.
 import {
@@ -110,6 +115,11 @@ export const make = Effect.gen(function* () {
         return yield* Effect.fail(
           new CloudError("invalid_snapshot", "This task has no project checkpoint", 400),
         );
+      if (seed && task.projectSnapshot)
+        yield* Effect.try({
+          try: () => validateProjectSnapshotWorkspace(task.projectSnapshot!, manifest),
+          catch: (error) => error as CloudError,
+        });
       const workspace = yield* finalizeWorkspace(config.allowedUserId, manifest).pipe(
         Effect.provideService(CloudArtifacts, artifacts),
       );

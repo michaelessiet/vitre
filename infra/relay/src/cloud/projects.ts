@@ -7,6 +7,25 @@ import type {
 import type { CloudState } from "./state.ts";
 import { CloudError } from "./policy.ts";
 
+// Legacy checkpoints use this deterministic empty commit for non-Git workspaces.
+const NON_GIT_BASELINE = "8742d9f52a52b29e1195b85b4cb31ed599afb990";
+
+export function validateProjectSnapshotWorkspace(
+  snapshot: CloudProjectSnapshot,
+  manifest: CloudWorkspaceManifest,
+): void {
+  if (
+    !manifest.roots[0]?.git &&
+    ((snapshot.baseSha !== null && snapshot.baseSha !== NON_GIT_BASELINE) ||
+      (snapshot.checkpoint && snapshot.baseSha === null))
+  )
+    throw new CloudError(
+      "snapshot_unavailable",
+      "This saved snapshot omitted Git metadata. Choose another saved snapshot for this project.",
+      409,
+    );
+}
+
 export function projectIdentity(task: CloudTask): string {
   return (
     task.projectId ??
