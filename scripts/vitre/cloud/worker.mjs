@@ -5,7 +5,7 @@ import {
   dependencySetup,
   dependencySetupFingerprint,
 } from "./dependencies.mjs";
-import { restoreWorkspace, validateManifest } from "./workspace.mjs";
+import { createWorkspaceBranch, restoreWorkspace, validateManifest } from "./workspace.mjs";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
@@ -1211,11 +1211,7 @@ export async function runWorker() {
         await copyWorkspace(NodePath.join(staging, manifest.roots[0].id), WORKSPACE);
         if (manifest.roots[0].git) {
           task.baseSha = manifest.roots[0].git.head;
-          if (task.projectSnapshot)
-            await command("git", ["checkout", "-b", task.branch], {
-              uid: 0,
-              env: childEnvironment("/home/vitre"),
-            });
+          if (task.projectSnapshot) await createWorkspaceBranch(WORKSPACE, task.branch);
         }
         if (primaryIsNonGit) {
           await NodeFSP.rm(NodePath.join(ROOT, "non-git"), { recursive: true, force: true });

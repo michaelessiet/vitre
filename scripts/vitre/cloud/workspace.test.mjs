@@ -26,7 +26,7 @@ async function fixture() {
   return { path, chunks, capture };
 }
 describe("portable workspaces", () => {
-  it("preserves Git history, index and tracked fixtures when the capture process has a different owner", async () => {
+  it("preserves Git history, index and tracked fixtures across capture and branching with a different owner", async () => {
     const f = await fixture();
     const git = async (...args) => (await exec("git", args, { cwd: f.path })).stdout.trim();
     await git("init", "--initial-branch=main");
@@ -81,6 +81,29 @@ describe("portable workspaces", () => {
       chunks.get(hash),
     );
     const copy = NodePath.join(out.path, "restored/root");
+    const hook = NodePath.join(copy, ".git/hooks/post-checkout");
+    await NodeFSP.writeFile(hook, '#!/bin/sh\nprintf called > "$0.invoked"\n', { mode: 0o755 });
+    await expect(
+      exec("git", ["checkout", "-b", "vitre/new-task"], { cwd: copy, env }),
+    ).rejects.toThrow("dubious ownership");
+    await exec(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        `
+      import { createWorkspaceBranch } from ${JSON.stringify(new URL("./workspace.mjs", import.meta.url).href)};
+      await createWorkspaceBranch(process.argv[1], "vitre/new-task");
+    `,
+        copy,
+      ],
+      { env },
+    );
+    expect((await exec("git", ["branch", "--show-current"], { cwd: copy })).stdout.trim()).toBe(
+      "vitre/new-task",
+    );
+    expect(await git("branch", "--show-current")).toBe("main");
+    expect(await NodeFSP.stat(`${hook}.invoked`).catch(() => null)).toBeNull();
     expect((await exec("git", ["rev-parse", "HEAD"], { cwd: copy })).stdout.trim()).toBe(head);
     expect((await exec("git", ["show", ":tracked.txt"], { cwd: copy })).stdout).toBe("staged\n");
     expect(await NodeFSP.readFile(NodePath.join(copy, "tracked.txt"), "utf8")).toBe("unstaged\n");

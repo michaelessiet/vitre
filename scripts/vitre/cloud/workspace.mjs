@@ -85,6 +85,11 @@ const git = async (cwd, args) =>
     )
   ).stdout;
 
+/** A restored checkout may belong to the setup user while its Git data belongs to root. */
+export async function createWorkspaceBranch(repository, branch) {
+  await git(repository, ["checkout", "-b", branch]);
+}
+
 /** Capture a consistent file set without following symlinks or changing the source. */
 export async function captureWorkspace(roots, putChunk, options = {}) {
   if (!roots.length || roots.length > 16 || new Set(roots.map((r) => r.id)).size !== roots.length)
