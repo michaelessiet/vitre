@@ -282,6 +282,7 @@ impl ChatApp {
                             ]}
                         })).unwrap();
                         Arc::make_mut(app.thread.as_mut().unwrap().state.view.as_mut().unwrap()).activities.push(activity);
+                        app.rebuild_timeline(cx);
                         cx.notify();
                     }).map_err(|e|e.to_string())?;
                     executor.timer(Duration::from_millis(250)).await;
@@ -353,6 +354,14 @@ impl ChatApp {
                     this.update_in(cx, |app, window, cx| app.verify_chat_images(window, cx)).map_err(|e|e.to_string())?;
                     return Ok(());
                 }
+                #[cfg(feature = "perf-probe")]
+                if mode == "chat-perf" {
+                    return super::perf_verification::verify(&this, cx).await;
+                }
+                #[cfg(not(feature = "perf-probe"))]
+                if mode == "chat-perf" {
+                    return Err("chat-perf requires the perf-probe Cargo feature".into());
+                }
                 if mode == "ask" {
                     this.update_in(cx, |app, window, cx| {
                         app.set_ask_mode(cx);
@@ -422,7 +431,7 @@ impl ChatApp {
                 }
                 Ok::<_,String>(())
             };
-            let result = tokio::select! { r = run => r, _ = executor.timer(Duration::from_secs(if mode == "languages" || mode == "kotlin" { 180 } else { 40 })) => Err("Icon verification timed out".into()) };
+            let result = tokio::select! { r = run => r, _ = executor.timer(Duration::from_secs(if mode == "languages" || mode == "kotlin" || mode == "chat-perf" { 180 } else { 40 })) => Err("Icon verification timed out".into()) };
             match result {Ok(())=>eprintln!("[vitre-icons-test] PASS: signed SVG favicon, missing/broken fallbacks, nested file tree, four file tabs, Search and Hide panel mouse hit targets, dock restoration ({mode})"),Err(e)=>eprintln!("[vitre-icons-test] FAIL: {e}")}
         }).detach();
     }

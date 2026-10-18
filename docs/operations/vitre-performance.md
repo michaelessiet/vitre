@@ -75,6 +75,45 @@ direct playback for ANSI/Unicode output exceeding 512 KiB repeatedly. It asserts
 that the final streamed text is unchanged. Terminal timings exclude actual VT
 parsing and painting; synthetic batch sizes do not predict real UI frame rates.
 
+## Long conversation scrolling fixture
+
+The opt-in native fixture runs in a disposable `VITRE_HOME` and never sends a
+provider turn. Build with `perf-probe` to enable GPUI frame timings. It creates
+100, 1,000, or 5,000 user/assistant turns with varied Markdown and two distinct
+image source keys on every fourth user turn, then sends 100 wheel events down
+and 100 back, 16 ms apart. The image bytes are identical 1024 × 768 PNGs; the
+source keys are distinct so each attachment exercises the decoded-image cache.
+For example:
+
+```sh
+VITRE_HOME=/tmp/vitre-polish-perf-1000 \
+VITRE_VERIFY_ICONS=chat-perf \
+VITRE_CHAT_PERF_TURNS=1000 \
+VITRE_CHAT_PERF_OUTPUT=/tmp/vitre-perf-1000.json \
+VITRE_SIGNING_IDENTITY= \
+vp run dev:vitre --features perf-probe --offline
+```
+
+On this Mac, one run before and after caching the minimap/request derivations
+and reducing thumbnails gave the following results. Draw p95 is time inside
+`Window::draw`; present p95 is the interval between successive presentations
+during the scripted scroll. Values are milliseconds. These are controlled
+fixture measurements, not a promise for every conversation or display.
+
+| Turns | Direction | Draw p95 before → after | Present p95 before → after | Image loads before → after |
+| ----: | --------- | ----------------------: | -------------------------: | -------------------------: |
+|   100 | Down      |               6.8 → 6.5 |                12.3 → 12.8 |                    26 → 26 |
+|   100 | Back      |               3.9 → 3.7 |                10.9 → 10.8 |                      9 → 0 |
+| 1,000 | Down      |              11.1 → 7.1 |                26.5 → 22.0 |                    26 → 26 |
+| 1,000 | Back      |               8.8 → 4.8 |                26.5 → 25.5 |                      9 → 0 |
+| 5,000 | Down      |              28.4 → 7.3 |                75.2 → 25.0 |                    26 → 26 |
+| 5,000 | Back      |              25.1 → 6.2 |                68.6 → 26.6 |                      9 → 0 |
+
+The first pass includes image decoding as new attachments enter the viewport.
+The back pass traverses previously viewed images and shows cache reuse. The
+fixture does not cover network image latency, active streaming, or an individual
+assistant message so large that its Markdown body dominates row layout.
+
 ## Measurements collected on this host
 
 Host: Apple M5 Max, 64 GiB RAM, arm64, macOS 27.0.1. This is substantially more

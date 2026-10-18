@@ -232,6 +232,7 @@ fn terminal_cloud_state_removes_stale_approval_panel_but_preserves_history_and_d
             "summary":"Command approval requested", "tone":"tool", "turnId":null,
             "payload":{"requestId":"approve-stale","requestKind":"command","detail":"git status --short"}
         })).unwrap());
+        app.rebuild_timeline(cx);
         cx.notify();
     });
     draw(cx);
@@ -303,6 +304,7 @@ fn new_cloud_request_cannot_revive_an_old_turn_or_approval(cx: &mut TestAppConte
             "summary":"Command approval requested", "tone":"tool", "turnId":"old-turn",
             "payload":{"requestId":"approve-old","requestKind":"command","detail":"git status"}
         })).unwrap());
+        app.rebuild_timeline(cx);
         cx.notify();
     });
     for state in [
@@ -338,6 +340,7 @@ fn new_cloud_request_cannot_revive_an_old_turn_or_approval(cx: &mut TestAppConte
             attachments: None,
             streaming: false,
         });
+        app.rebuild_timeline(cx);
         cx.notify();
     });
     draw(cx);
@@ -357,6 +360,7 @@ fn new_cloud_request_cannot_revive_an_old_turn_or_approval(cx: &mut TestAppConte
             }))
             .unwrap(),
         );
+        app.rebuild_timeline(cx);
         cx.notify();
     });
     draw(cx);
@@ -371,6 +375,7 @@ fn new_cloud_request_cannot_revive_an_old_turn_or_approval(cx: &mut TestAppConte
         approval.created_at = tnes("2026-10-16T11:00:01Z");
         approval.payload["requestId"] = serde_json::json!("approve-new");
         view.activities.push(approval);
+        app.rebuild_timeline(cx);
         cx.notify();
     });
     draw(cx);

@@ -25,6 +25,9 @@ mod images;
 mod local_delivery;
 #[cfg(debug_assertions)]
 mod menu_verification;
+mod minimap;
+#[cfg(all(debug_assertions, feature = "perf-probe"))]
+mod perf_verification;
 #[cfg(debug_assertions)]
 mod phase5_verification;
 mod plan_save;
@@ -113,9 +116,9 @@ use vitre_state::diff_panel::ordered_turn_diff_summaries;
 use vitre_state::local_dispatch::{LocalDispatchSnapshot, merge_optimistic_messages};
 use vitre_state::review_comments::{ReviewCommentContext, append_review_comments_to_prompt};
 use vitre_state::session_logic::{
-    ActivePlanState, ApprovalRequestKind, PendingApproval, PendingUserInput, PlanStepStatus,
-    UserInputQuestion, derive_active_plan_state, derive_latest_context_window_snapshot,
-    derive_pending_approvals, derive_pending_user_inputs,
+    ActivePlanState, ApprovalRequestKind, ContextWindowSnapshot, PendingApproval, PendingUserInput,
+    PlanStepStatus, UserInputQuestion, derive_active_plan_state,
+    derive_latest_context_window_snapshot, derive_pending_approvals, derive_pending_user_inputs,
 };
 use vitre_state::terminal_context::{TerminalContextSelection, append_terminal_contexts_to_prompt};
 use vitre_state::work_log::{self, DerivedTimelineRow, TimelineDeriveInput, WorkLogEntry};
@@ -356,6 +359,12 @@ pub struct ChatApp {
     timeline: Vec<TimelineRow>,
     /// Height fingerprint per timeline row, parallel to `timeline`.
     timeline_hashes: Vec<u64>,
+    /// Sampled turn markers and request/context derivations change with the
+    /// thread view, not with the scroll position.
+    timeline_markers: Vec<minimap::TimelineMarker>,
+    presentation_pending_approvals: Vec<PendingApproval>,
+    presentation_pending_inputs: Vec<PendingUserInput>,
+    presentation_context: Option<ContextWindowSnapshot>,
     /// Long user prompts are collapsed until explicitly expanded.
     expanded_user_messages: HashSet<MessageId>,
     /// Revert target per user message, rebuilt alongside `timeline`.
@@ -2377,6 +2386,10 @@ impl ChatApp {
             pending_timeline_anchor: None,
             timeline: Vec::new(),
             timeline_hashes: Vec::new(),
+            timeline_markers: Vec::new(),
+            presentation_pending_approvals: Vec::new(),
+            presentation_pending_inputs: Vec::new(),
+            presentation_context: None,
             expanded_user_messages: HashSet::new(),
             revert_turn_counts: HashMap::new(),
             sidebar,
@@ -3300,6 +3313,10 @@ impl ChatApp {
         // re-arm tail following so the new thread opens at its newest message.
         self.timeline = Vec::new();
         self.timeline_hashes = Vec::new();
+        self.timeline_markers.clear();
+        self.presentation_pending_approvals.clear();
+        self.presentation_pending_inputs.clear();
+        self.presentation_context = None;
         self.revert_turn_counts = HashMap::new();
         self.timeline_list = new_timeline_list();
         // The drawer unmounts with the thread: panes are per-thread views
@@ -3517,6 +3534,10 @@ impl ChatApp {
         self.changed_files.clear_local();
         self.timeline = Vec::new();
         self.timeline_hashes = Vec::new();
+        self.timeline_markers.clear();
+        self.presentation_pending_approvals.clear();
+        self.presentation_pending_inputs.clear();
+        self.presentation_context = None;
         self.revert_turn_counts = HashMap::new();
         self.timeline_list = new_timeline_list();
         self.terminal_views.clear();
@@ -3911,10 +3932,8 @@ impl ChatApp {
 
     /// The front pending user-input request (the one the panel shows).
     fn active_pending_user_input(&self) -> Option<PendingUserInput> {
-        let view = self.thread.as_ref()?.state.view.as_ref()?;
-        derive_pending_user_inputs(&conversation_status::current_request_activities(view))
-            .into_iter()
-            .next()
+        self.thread.as_ref()?.state.view.as_ref()?;
+        self.presentation_pending_inputs.first().cloned()
     }
 
     /// Draft for `request_id`, resetting whenever the front request changes.
@@ -5854,6 +5873,10 @@ impl ChatApp {
             self.smoothing_tick = None;
             self.timeline = Vec::new();
             self.timeline_hashes = Vec::new();
+            self.timeline_markers.clear();
+            self.presentation_pending_approvals.clear();
+            self.presentation_pending_inputs.clear();
+            self.presentation_context = None;
             self.pending_timeline_anchor = None;
             self.revert_turn_counts = HashMap::new();
             self.work_entries = Vec::new();
@@ -5882,6 +5905,11 @@ impl ChatApp {
         });
         self.sync_stream_smoothing(cx);
         let view = view.as_ref();
+        (
+            self.presentation_pending_approvals,
+            self.presentation_pending_inputs,
+            self.presentation_context,
+        ) = conversation_status::derive_thread_presentation(view);
         let running = view
             .session
             .as_ref()
@@ -6054,6 +6082,7 @@ impl ChatApp {
                 )
             })
             .collect();
+        self.timeline_markers = minimap::derive_markers(&rows, &self.display_messages);
         let previous = std::mem::replace(&mut self.timeline, rows);
         let previous_hashes: Vec<u64> = std::mem::replace(&mut self.timeline_hashes, hashes);
 
@@ -7294,17 +7323,16 @@ impl ChatApp {
         // Pending approvals / user-input requests are derived from the
         // activity log (the reducer deliberately skips their events); the
         // approval panel takes precedence, like the Electron composer.
-        let request_view = view.filter(|_| presentation.show_requests);
-        let pending_approvals = request_view
-            .map(|view| {
-                derive_pending_approvals(&conversation_status::current_request_activities(view))
-            })
-            .unwrap_or_default();
-        let pending_inputs = request_view
-            .map(|view| {
-                derive_pending_user_inputs(&conversation_status::current_request_activities(view))
-            })
-            .unwrap_or_default();
+        let pending_approvals: &[PendingApproval] = if presentation.show_requests {
+            &self.presentation_pending_approvals
+        } else {
+            &[]
+        };
+        let pending_inputs: &[PendingUserInput] = if presentation.show_requests {
+            &self.presentation_pending_inputs
+        } else {
+            &[]
+        };
         let active_approval = pending_approvals.first().cloned();
         let active_input = if active_approval.is_none() {
             pending_inputs.first().cloned()
@@ -7485,9 +7513,8 @@ impl ChatApp {
         // Context meter (ContextWindowMeter port): usage ring beside the send
         // button, latest `context-window.updated` payload behind it. Electron
         // shows the detail in a hover popover; a tooltip carries it here.
-        let context_meter: Option<gpui::AnyElement> = view
-            .and_then(|view| derive_latest_context_window_snapshot(&view.activities))
-            .map(|usage| {
+        let context_meter: Option<gpui::AnyElement> =
+            self.presentation_context.as_ref().map(|usage| {
                 let percentage = usage.used_percentage.unwrap_or(0.0).clamp(0.0, 100.0);
                 let overloaded = percentage > 90.0;
                 let color = if overloaded {
@@ -7770,76 +7797,31 @@ impl ChatApp {
                     .child(footer),
             );
 
-        // A compact map of user turns. Keep a representative sample for very
-        // long threads so the rail stays useful instead of becoming a solid
-        // stripe; the first and last turns are always represented.
-        let all_markers: Vec<(usize, SharedString)> = self
-            .timeline
-            .iter()
-            .enumerate()
-            .filter_map(|(item_ix, row)| {
-                let TimelineRow::Message(message_ix) = row else {
-                    return None;
-                };
-                let message = self.display_messages.get(*message_ix)?;
-                (message.role == OrchestrationMessageRole::User).then(|| {
-                    let prompt = message
-                        .text
-                        .0
-                        .split_whitespace()
-                        .take(12)
-                        .collect::<Vec<_>>()
-                        .join(" ");
-                    let reply = self.timeline[item_ix + 1..].iter().find_map(|next| {
-                        let TimelineRow::Message(next_ix) = next else {
-                            return None;
-                        };
-                        let next = self.display_messages.get(*next_ix)?;
-                        (next.role == OrchestrationMessageRole::Assistant).then(|| {
-                            next.text
-                                .0
-                                .split_whitespace()
-                                .take(10)
-                                .collect::<Vec<_>>()
-                                .join(" ")
-                        })
-                    });
-                    let preview = reply
-                        .filter(|reply| !reply.is_empty())
-                        .map_or(prompt.clone(), |reply| {
-                            format!("{prompt}\n\nAssistant: {reply}")
-                        });
-                    (item_ix, SharedString::from(preview))
-                })
-            })
-            .collect();
-        let marker_count = all_markers.len();
-        let marker_step = marker_count.div_ceil(40).max(1);
-        let minimap_markers: Vec<_> = all_markers
-            .into_iter()
-            .enumerate()
-            .filter_map(|(index, marker)| {
-                (index % marker_step == 0 || index + 1 == marker_count).then_some(marker)
-            })
-            .collect();
+        // Only the active marker changes with scrolling. The sampled markers
+        // and tooltip text are derived when the thread view changes.
         let visible_item = self.timeline_list.logical_scroll_top().item_ix;
-        let active_marker = minimap_markers
+        let active_marker = self
+            .timeline_markers
             .iter()
-            .rposition(|(item_ix, _)| *item_ix <= visible_item)
+            .rposition(|marker| marker.item_ix <= visible_item)
             .unwrap_or(0);
-        let minimap: Option<AnyElement> =
-            (minimap_markers.len() > 1).then(|| {
-                v_flex()
-                    .absolute()
-                    .top_0()
-                    .left(px(8.))
-                    .bottom_0()
-                    .w(px(24.))
-                    .items_center()
-                    .justify_center()
-                    .child(v_flex().gap(px(3.)).items_center().children(
-                        minimap_markers.into_iter().enumerate().map(
-                            |(index, (item_ix, preview))| {
+        let minimap: Option<AnyElement> = (self.timeline_markers.len() > 1).then(|| {
+            v_flex()
+                .absolute()
+                .top_0()
+                .left(px(8.))
+                .bottom_0()
+                .w(px(24.))
+                .items_center()
+                .justify_center()
+                .child(
+                    v_flex().gap(px(3.)).items_center().children(
+                        self.timeline_markers
+                            .iter()
+                            .enumerate()
+                            .map(|(index, marker)| {
+                                let item_ix = marker.item_ix;
+                                let preview = marker.preview.clone();
                                 let active = index == active_marker;
                                 let width = gpui_base::motion::spring(
                                     (item_ix, "timeline-marker"),
@@ -7876,11 +7858,11 @@ impl ChatApp {
                                         });
                                         cx.notify();
                                     }))
-                            },
-                        ),
-                    ))
-                    .into_any_element()
-            });
+                            }),
+                    ),
+                )
+                .into_any_element()
+        });
 
         let main = v_flex()
             .flex_1()
