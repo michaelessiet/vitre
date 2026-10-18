@@ -108,7 +108,7 @@ export function retainIdleWorkspace(keepAliveSeconds, idleSince, now, yieldIdle)
 }
 
 /** A completed current turn wins over stale thread-level pending-input flags. */
-export function classifyWorkerTurn(latestTurn, requestedAt, shell, resident, idleWake) {
+export function classifyWorkerTurn(latestTurn, requestedAt, shell, resident, idleWake, session) {
   const currentTurn = latestTurn && Date.parse(latestTurn.requestedAt) >= Date.parse(requestedAt);
   if (
     (currentTurn &&
@@ -117,6 +117,11 @@ export function classifyWorkerTurn(latestTurn, requestedAt, shell, resident, idl
   )
     return "settled";
   if (shell?.hasPendingApprovals || shell?.hasPendingUserInput) return "waiting_for_input";
+  if (
+    (currentTurn && ["error", "interrupted"].includes(latestTurn.state)) ||
+    session?.status === "error"
+  )
+    return "failed";
   return "working";
 }
 
@@ -1630,6 +1635,7 @@ export async function runWorker() {
         threadShell,
         resident,
         idle && (task.wakeOnly || journal.activated),
+        thread.session,
       );
       if (turnObservation === "waiting_for_input") {
         await mirror();
@@ -1707,10 +1713,7 @@ export async function runWorker() {
         return;
       }
       await mirror();
-      if (
-        (currentTurn && ["error", "interrupted"].includes(thread.latestTurn.state)) ||
-        thread.session?.status === "error"
-      ) {
+      if (turnObservation === "failed") {
         await callback(
           providerFailurePhase(thread.session?.lastError ?? ""),
           "Provider execution stopped; review the saved checkpoint before continuing",
