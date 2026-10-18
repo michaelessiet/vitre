@@ -322,8 +322,133 @@ export async function createCheckpoint({
     ]);
     return {
       path: NodePath.join(staging, "checkpoint.tar.gz"),
+      workspace: JSON.parse(
+        await NodeFSP.readFile(NodePath.join(staging, "workspace.json"), "utf8"),
+      ),
+      readWorkspaceChunk: (hash) => {
+        if (!/^[a-f0-9]{64}$/.test(hash)) throw new Error("Invalid workspace chunk hash");
+        return NodeFSP.readFile(NodePath.join(staging, "workspace-chunks", hash));
+      },
       commit,
       diff,
+      dispose: () => NodeFSP.rm(staging, { recursive: true, force: true }),
+    };
+  } catch (error) {
+    await NodeFSP.rm(staging, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+/** Extract only portable workspace bytes; chat, sessions and credentials never enter a fork. */
+export async function projectWorkspaceFromCheckpoint({
+  archive,
+  directory,
+  prepareLegacyRepository,
+  baseSha,
+  legacyLocal = false,
+}) {
+  const staging = await NodeFSP.mkdtemp(
+    NodePath.join(NodePath.resolve(directory), "project-seed-"),
+  );
+  try {
+    const entries = (await exec("tar", ["-tzf", archive], { maxBuffer: 16 * 1024 * 1024 })).stdout
+      .trim()
+      .split("\n");
+    if (new Set(entries).size !== entries.length || entries.length > 100_000)
+      throw new Error("Invalid project checkpoint archive");
+    const read = async (name, limit) => {
+      if (!entries.includes(name)) throw new Error(`Checkpoint is missing ${name}`);
+      return (await exec("tar", ["-xOzf", archive, name], { encoding: "buffer", maxBuffer: limit }))
+        .stdout;
+    };
+    const metadata = JSON.parse((await read("metadata.json", 4096)).toString());
+    if (
+      ![1, 2].includes(metadata.version) ||
+      (baseSha !== null && metadata.baseSha !== baseSha) ||
+      !/^[a-f0-9]{40}$/.test(metadata.commit) ||
+      !/^refs\/vitre-checkpoints\/[a-f0-9-]{36}$/.test(metadata.ref)
+    )
+      throw new Error("Project checkpoint metadata does not match its source");
+    const { validateManifest, restoreWorkspace, captureWorkspace } =
+      await import("./workspace.mjs");
+    let workspace = entries.includes("workspace.json")
+      ? JSON.parse((await read("workspace.json", 8 * 1024 * 1024)).toString())
+      : null;
+    const readChunk = (hash) => {
+      if (!/^[a-f0-9]{64}$/.test(hash)) throw new Error("Invalid workspace chunk hash");
+      return read(`workspace-chunks/${hash}`, 4 * 1024 * 1024);
+    };
+    if (metadata.version === 2) {
+      if (!workspace) throw new Error("Checkpoint has no portable workspace");
+      validateManifest(workspace);
+      return {
+        workspace,
+        readWorkspaceChunk: readChunk,
+        dispose: () => NodeFSP.rm(staging, { recursive: true, force: true }),
+      };
+    }
+    // Older checkpoints kept the primary root as a Git delta from the pinned base.
+    // The caller provides an isolated clone. Never restore the source database.
+    const destination = NodePath.join(staging, "repository");
+    let repository;
+    if (legacyLocal) {
+      // Version-1 uploads used this deterministic empty baseline, not GitHub.
+      repository = destination;
+      await NodeFSP.mkdir(repository);
+      await git(repository, ["init", "--initial-branch=main"]);
+      await git(
+        repository,
+        [
+          "-c",
+          "user.name=Vitre",
+          "-c",
+          "user.email=vitre@localhost",
+          "commit",
+          "--allow-empty",
+          "-m",
+          "Local workspace baseline",
+        ],
+        {
+          GIT_AUTHOR_DATE: "2000-01-01T00:00:00Z",
+          GIT_COMMITTER_DATE: "2000-01-01T00:00:00Z",
+          GIT_AUTHOR_NAME: "Vitre",
+          GIT_AUTHOR_EMAIL: "vitre@localhost",
+          GIT_COMMITTER_NAME: "Vitre",
+          GIT_COMMITTER_EMAIL: "vitre@localhost",
+        },
+      );
+    } else repository = await prepareLegacyRepository(destination);
+    const bundle = NodePath.join(staging, "repository.bundle");
+    await NodeFSP.writeFile(bundle, await read("repository.bundle", 256 * 1024 * 1024));
+    await git(repository, ["bundle", "verify", bundle]);
+    await git(repository, ["fetch", bundle, metadata.ref]);
+    if ((await git(repository, ["rev-parse", "FETCH_HEAD"])) !== metadata.commit)
+      throw new Error("Project checkpoint commit mismatch");
+    await git(repository, ["reset", "--hard", metadata.commit]);
+    if (legacyLocal)
+      await NodeFSP.rm(NodePath.join(repository, ".git"), { recursive: true, force: true });
+    const roots = [{ id: "primary", path: repository }];
+    if (workspace) {
+      validateManifest(workspace);
+      if (workspace.roots.some((root) => root.id === "primary"))
+        throw new Error("Duplicate primary workspace");
+      const extra = NodePath.join(staging, "roots");
+      await restoreWorkspace(workspace, extra, readChunk);
+      roots.push(
+        ...workspace.roots.map((root) => ({ id: root.id, path: NodePath.join(extra, root.id) })),
+      );
+    }
+    const chunks = NodePath.join(staging, "chunks");
+    await NodeFSP.mkdir(chunks);
+    workspace = await captureWorkspace(roots, (hash, bytes) =>
+      NodeFSP.writeFile(NodePath.join(chunks, hash), bytes),
+    );
+    return {
+      workspace,
+      readWorkspaceChunk: (hash) => {
+        if (!/^[a-f0-9]{64}$/.test(hash)) throw new Error("Invalid workspace chunk hash");
+        return NodeFSP.readFile(NodePath.join(chunks, hash));
+      },
       dispose: () => NodeFSP.rm(staging, { recursive: true, force: true }),
     };
   } catch (error) {

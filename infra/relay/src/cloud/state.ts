@@ -8,7 +8,10 @@ import type {
   CloudRepository,
   CloudTask,
   CloudWorkerCallback,
+  CloudProject,
+  CloudProjectSnapshot,
 } from "@t3tools/contracts/cloud";
+import { backfillProjects, projectSnapshot } from "./projects.ts";
 import { requestHandoff, advanceHandoff, stopHandoff, type HandoffState } from "./handoff.ts";
 import { CLOUD_POLICY, CloudError, iso, month, runReservation } from "./policy.ts";
 import { accrueJobs, activeJobs, type CloudJob, type PublicationInput } from "./jobs.ts";
@@ -30,6 +33,8 @@ type Mutable<T> = T extends object ? { -readonly [K in keyof T]: Mutable<T[K]> }
 export type MutableCloudTask = Mutable<CloudTask>;
 
 export interface CloudState {
+  projects?: Record<string, CloudProject>;
+  projectSnapshots?: Record<string, Record<string, CloudProjectSnapshot>>;
   /** Supplied from the SQL account row on load/CAS; never an independent counter. */
   revision?: number;
   providerLeaseTurns?: Partial<Record<CloudProvider, string | null>>;
@@ -205,6 +210,8 @@ export function publicOverview(state: CloudState, enabled: boolean, now: number)
     Object.values(state.tasks).reduce((n, t) => n + (t.attempt?.reservedMicroDollars ?? 0), 0);
   const spent = state.usage[month(now)] ?? 0;
   return {
+    projects: Object.values(state.projects ?? {}),
+    capabilities: { projectCreation: true, followUpSettings: true, mobileNotifications: true },
     ...(state.revision !== undefined ? { revision: state.revision } : {}),
     bindings: Object.values(state.bindings ?? {}),
     handoffs: Object.values(state.handoffs ?? {}),
@@ -245,7 +252,52 @@ export function applyCommand(
     throw new CloudError("disabled", "Cloud execution is disabled", 503);
   }
   let entityId = id;
+  backfillProjects(state);
   switch (command.type) {
+    case "task.createFromProject": {
+      const { project, snapshot } = projectSnapshot(state, command.projectId, command.snapshotId);
+      const repositoryId = project.repository?.id ?? project.id;
+      const source = snapshot.workspace
+        ? snapshot.sourceKind === "github" && snapshot.baseSha
+          ? { kind: "github" as const, revision: snapshot.baseSha, snapshot: snapshot.workspace }
+          : { kind: "local" as const, name: project.title, snapshot: snapshot.workspace }
+        : undefined;
+      // Reuse the normal creation policy, receipt, scheduler and provider leases.
+      // A checkpoint seed is restored by the new worker without importing history.
+      if (!state.repositories[repositoryId] && project.repository)
+        state.repositories[repositoryId] = structuredClone(project.repository);
+      if (!source && !project.repository)
+        state.repositories[repositoryId] = {
+          id: repositoryId,
+          installationId: "local",
+          owner: "local",
+          name: project.title,
+          defaultBranch: snapshot.baseBranch,
+          setupCommand: "",
+          testCommand: "",
+          revision: 0,
+        };
+      entityId = applyCommand(
+        state,
+        {
+          ...command,
+          type: "task.create",
+          repositoryId,
+          baseBranch: snapshot.baseBranch,
+          kind: "build",
+          issueNumber: null,
+          ...(source ? { source } : {}),
+        },
+        id,
+        fingerprint,
+        now,
+        enabled,
+      );
+      const task = state.tasks[entityId]!;
+      task.projectSnapshot = { ...snapshot, roots: snapshot.roots.map((root) => ({ ...root })) };
+      task.baseSha = snapshot.baseSha;
+      break;
+    }
     case "publication.retry": {
       const publication = state.publications[command.publicationId];
       if (!publication || publication.state !== "failed")
@@ -507,6 +559,21 @@ export function applyCommand(
       )
         throw new CloudError("task_busy", "Task cannot be continued in this state");
       task.prompt = command.prompt;
+      task.turnSettings = {
+        ...(command.model !== undefined ? { model: command.model } : {}),
+        ...(command.modelOptions !== undefined
+          ? { modelOptions: command.modelOptions.map((option) => ({ ...option })) }
+          : {}),
+        ...(command.runtimeMode !== undefined ? { runtimeMode: command.runtimeMode } : {}),
+        ...(command.interactionMode !== undefined
+          ? { interactionMode: command.interactionMode }
+          : {}),
+      };
+      if (command.model !== undefined) task.model = command.model;
+      if (command.modelOptions !== undefined)
+        task.modelOptions = command.modelOptions.map((option) => ({ ...option }));
+      if (command.runtimeMode !== undefined) task.runtimeMode = command.runtimeMode;
+      if (command.interactionMode !== undefined) task.interactionMode = command.interactionMode;
       task.attachments = command.attachments
         ? command.attachments.map((attachment) => ({
             ...attachment,

@@ -12,6 +12,7 @@ import { CloudArtifacts } from "./artifacts.ts";
 import { CloudError } from "./policy.ts";
 import { CredentialVault, sha256 } from "./crypto.ts";
 import { applyCommand, confirmStopped, schedule } from "./state.ts";
+import { backfillProjects, recordProjectSnapshot } from "./projects.ts";
 const encodeJson = Schema.encodeSync(Schema.UnknownFromJsonString);
 afterEach(() => vi.unstubAllGlobals());
 
@@ -68,6 +69,185 @@ const auth = JSON.stringify({
 });
 
 describe("cloud account and credential boundaries", () => {
+  it.effect("stores mobile tokens encrypted and keeps registration account scoped", () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      const token = "ExpoPushToken[mobile-test]";
+      const register = (userId: string, value: string | null) =>
+        f.run(
+          CloudService.pipe(
+            Effect.flatMap((service) =>
+              service.registerMobileDevice(userId, {
+                version: 2,
+                deviceId: "phone",
+                platform: "android",
+                token: value,
+              }),
+            ),
+          ),
+        );
+      expect((yield* Effect.flip(register("other", token))).code).toBe("forbidden");
+      yield* register("user", token);
+      expect(encodeJson(f.state())).not.toContain(token);
+      expect(f.state().private.mobileDevices?.phone?.tokenHash).toBe(
+        yield* Effect.promise(() => sha256(token)),
+      );
+      const overview = yield* f.run(
+        CloudService.pipe(Effect.flatMap((service) => service.overview("user"))),
+      );
+      expect(encodeJson(overview)).not.toContain("mobileDevices");
+      yield* register("user", null);
+      expect(f.state().private.mobileDevices?.phone).toBeUndefined();
+    }),
+  );
+  it.effect(
+    "registers an unconfigured public repository and pins the accepted branch across lost responses",
+    () =>
+      Effect.gen(function* () {
+        const f = fixture();
+        f.state().state.accounts.codex.state = "connected";
+        let head = "a".repeat(40);
+        const fetch = vi.fn(async (url: string) =>
+          url.includes("/commits/")
+            ? Response.json({ sha: head })
+            : Response.json({
+                id: 42,
+                private: false,
+                owner: { login: "Owner" },
+                name: "Repo",
+                default_branch: "main",
+              }),
+        );
+        vi.stubGlobal("fetch", fetch);
+        const repository = {
+          id: "42",
+          installationId: "public",
+          owner: "owner",
+          name: "repo",
+          defaultBranch: "untrusted",
+          setupCommand: "",
+          testCommand: "",
+          revision: 0,
+        };
+        const save = { type: "repository.save" as const, idempotencyKey: "register", repository };
+        const send = (command: Parameters<CloudService["Service"]["command"]>[1]) =>
+          f.run(CloudService.pipe(Effect.flatMap((service) => service.command("user", command))));
+        yield* send(save);
+        expect(f.state().state.repositories["42"]).toMatchObject({
+          owner: "Owner",
+          name: "Repo",
+          defaultBranch: "main",
+          revision: 1,
+        });
+        const command = {
+          type: "task.create" as const,
+          idempotencyKey: "create",
+          repositoryId: "42",
+          baseBranch: "feature",
+          provider: "codex" as const,
+          prompt: "Work",
+          kind: "build" as const,
+          issueNumber: null,
+        };
+        const result = yield* send(command);
+        const calls = fetch.mock.calls.length;
+        head = "b".repeat(40);
+        yield* send(save);
+        expect((yield* send(command)).entityId).toBe(result.entityId);
+        expect(fetch).toHaveBeenCalledTimes(calls);
+        expect(f.state().state.tasks[result.entityId]!.baseSha).toBe("a".repeat(40));
+        expect(Object.keys(f.state().state.tasks)).toHaveLength(1);
+      }),
+  );
+
+  it.effect(
+    "copies only owned intact project snapshots and keeps the pin after source deletion",
+    () =>
+      Effect.gen(function* () {
+        const f = fixture();
+        const doc = f.state();
+        doc.state.accounts.codex.state = "connected";
+        const bytes = new TextEncoder().encode(
+          encodeJson({
+            version: 2,
+            roots: [
+              { id: "primary", name: "Uploaded" },
+              { id: "assets", name: "Assets" },
+            ],
+            entries: [],
+          }),
+        );
+        const digest = yield* Effect.promise(() => sha256(bytes));
+        const key = `cloud-workspaces/user/manifests/${digest}`;
+        f.objects.set(key, bytes);
+        applyCommand(
+          doc.state,
+          {
+            type: "task.create",
+            idempotencyKey: "source",
+            repositoryId: "local",
+            projectId: "uploaded",
+            source: { kind: "local", name: "Uploaded", snapshot: { id: digest, sha256: digest } },
+            baseBranch: "main",
+            provider: "codex",
+            prompt: "Original history",
+            kind: "build",
+            issueNumber: null,
+          },
+          "source",
+          "fingerprint",
+          0,
+          true,
+        );
+        backfillProjects(doc.state);
+        recordProjectSnapshot(doc.state, doc.state.tasks.source!, {
+          id: "saved",
+          savedAt: "2026-10-01T00:00:00Z",
+          sourceKind: "local",
+          workspace: { id: digest, sha256: digest },
+          checkpoint: null,
+          baseBranch: "main",
+          baseSha: null,
+          roots: [
+            { id: "primary", name: "Uploaded" },
+            { id: "assets", name: "Assets" },
+          ],
+        });
+        const command = {
+          type: "task.createFromProject" as const,
+          idempotencyKey: "copy",
+          projectId: "uploaded",
+          snapshotId: "saved",
+          provider: "codex" as const,
+          prompt: "Fresh history",
+        };
+        const send = (user: string, idempotencyKey: string) =>
+          f.run(
+            CloudService.pipe(
+              Effect.flatMap((service) => service.command(user, { ...command, idempotencyKey })),
+            ),
+          );
+        expect((yield* Effect.flip(send("other", "copy"))).code).toBe("forbidden");
+        f.objects.delete(key);
+        f.objects.set(`cloud-workspaces/other/manifests/${digest}`, bytes);
+        expect((yield* Effect.flip(send("user", "missing"))).code).toBe("incomplete_workspace");
+        f.objects.set(key, new TextEncoder().encode("corrupted"));
+        expect((yield* Effect.flip(send("user", "corrupt"))).code).toBe("incomplete_workspace");
+        f.objects.set(key, bytes);
+        const result = yield* send("user", "copy");
+        const copy = f.state().state.tasks[result.entityId]!;
+        expect(copy.projectSnapshot?.id).toBe("saved");
+        expect(copy.projectSnapshot?.roots).toHaveLength(2);
+        expect(copy.handoff).toBeUndefined();
+        expect(copy.checkpoint).toBeNull();
+        expect(copy.prompt).toBe("Fresh history");
+        expect(copy.branch).toBe(`vitre/${copy.id}`);
+        f.state().state.deletedTasks.push("source");
+        delete f.state().state.tasks.source;
+        expect((yield* send("user", "copy")).entityId).toBe(copy.id);
+        expect((yield* send("user", "second-copy")).entityId).not.toBe(copy.id);
+      }),
+  );
   it.effect(
     "starts an owned uploaded Git repository without upstream access, preserving unpublished HEAD",
     () =>

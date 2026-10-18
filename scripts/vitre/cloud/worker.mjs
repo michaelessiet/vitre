@@ -12,7 +12,11 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 import * as NodeTimersPromises from "node:timers/promises";
-import { createCheckpoint, restoreCheckpoint } from "./checkpoint.mjs";
+import {
+  createCheckpoint,
+  restoreCheckpoint,
+  projectWorkspaceFromCheckpoint,
+} from "./checkpoint.mjs";
 
 const BACKEND_PORT = Number(process.env.VITRE_CLOUD_BACKEND_PORT ?? 3773);
 if (!Number.isInteger(BACKEND_PORT) || BACKEND_PORT < 1024 || BACKEND_PORT > 65535)
@@ -383,6 +387,25 @@ export function workerModelSelection(task, models) {
     instanceId,
     model: task.model ?? models[instanceId],
     ...(task.modelOptions ? { options: task.modelOptions } : {}),
+  };
+}
+
+export function workerTurnSettings(task, thread, models) {
+  const settings = task.turnSettings;
+  return {
+    modelSelection:
+      settings?.model || settings?.modelOptions
+        ? workerModelSelection(
+            {
+              ...task,
+              model: settings.model ?? thread.modelSelection.model,
+              modelOptions: settings.modelOptions ?? thread.modelSelection.options,
+            },
+            models,
+          )
+        : thread.modelSelection,
+    runtimeMode: settings?.runtimeMode ?? thread.runtimeMode,
+    interactionMode: settings?.interactionMode ?? thread.interactionMode,
   };
 }
 
@@ -842,6 +865,27 @@ export async function runWorker() {
     },
   });
   let initialCredential;
+  const uploadPortableWorkspace = async (saved, seed = false) => {
+    validateManifest(saved.workspace);
+    const hashes = new Set(saved.workspace.entries.flatMap((entry) => entry.chunks));
+    for (const root of saved.workspace.roots)
+      for (const blob of root.git ? [root.git.bundle, root.git.index] : [])
+        for (const hash of blob.chunks) hashes.add(hash);
+    for (const hash of hashes) {
+      const bytes = await saved.readWorkspaceChunk(hash);
+      if (digest(bytes) !== hash)
+        throw new WorkerFailure("Saved workspace failed integrity verification");
+      const uploaded = await retryControlRequest(() =>
+        control.request(`worker/${taskId}/workspace-chunks`, {
+          base64: Buffer.from(bytes).toString("base64"),
+        }),
+      );
+      if (uploaded.sha256 !== hash) throw new WorkerFailure("Uploaded workspace digest mismatch");
+    }
+    return retryControlRequest(() =>
+      control.request(`worker/${taskId}/workspace`, { manifest: saved.workspace, seed }),
+    );
+  };
   const checkpoint = async (phase, thread = null, test = { output: "", code: null }) => {
     // Stop the provider process tree before taking the database/worktree boundary.
     if (backend && backendAuthenticated) {
@@ -876,6 +920,7 @@ export async function runWorker() {
     });
     try {
       const id = NodeCrypto.randomUUID();
+      const workspace = await uploadPortableWorkspace(saved);
       const file = await NodeFSP.open(saved.path, "r");
       const chunks = [];
       try {
@@ -906,6 +951,7 @@ export async function runWorker() {
         attemptId: attempt.id,
         checkpointId: id,
         chunks,
+        workspace,
         result: {
           summary: lastAssistant?.text ?? "Workspace checkpoint saved",
           diff: saved.diff,
@@ -946,11 +992,17 @@ export async function runWorker() {
       )
     )
       throw new WorkerFailure("Invalid workspace root mapping");
-    const exists = await NodeFSP.stat(
-      primaryIsNonGit ? NodePath.join(ROOT, "non-git") : NodePath.join(WORKSPACE, ".git"),
-    )
-      .then(() => true)
-      .catch(() => false);
+    const exists =
+      (!task.projectSnapshot || previousJournal?.workspaceRestored || task.checkpoint) &&
+      (await NodeFSP.stat(
+        primaryIsNonGit ? NodePath.join(ROOT, "non-git") : NodePath.join(WORKSPACE, ".git"),
+      )
+        .then(() => true)
+        .catch(() => false));
+    if (!exists && task.projectSnapshot) {
+      await NodeFSP.rm(WORKSPACE, { recursive: true, force: true });
+      await NodeFSP.rm(NodePath.join(ROOT, "non-git"), { recursive: true, force: true });
+    }
     const setupFingerprint = async () =>
       Promise.all(
         [WORKSPACE, ...additionalRoots.map((root) => root.path)].map(async (cwd) => [
@@ -972,7 +1024,73 @@ export async function runWorker() {
     // root or the setup user this run need their ownership fixed afterwards.
     let ownershipChanged = !exists;
     if (!exists) {
-      await reportPreparation(task.source || task.checkpoint ? "restoring" : "cloning");
+      await reportPreparation(
+        task.source || task.checkpoint || task.projectSnapshot ? "restoring" : "cloning",
+      );
+      if (task.projectSnapshot?.checkpoint && !task.source) {
+        await callback("heartbeat", "Preparing saved project workspace from an older checkpoint");
+        const { manifest: seedManifest } = await control.request(`worker/${taskId}/seed`);
+        const archive = NodePath.join(ROOT, "project-seed.tar.gz");
+        const file = await NodeFSP.open(archive, "w", 0o600);
+        try {
+          for (const chunk of seedManifest.chunks) {
+            const fetched = await control.request(`worker/${taskId}/seed/${chunk.index}`);
+            const bytes = Buffer.from(fetched.base64, "base64");
+            if (bytes.length !== chunk.sizeBytes || digest(bytes) !== chunk.sha256)
+              throw new WorkerFailure("Project snapshot failed integrity verification");
+            await file.write(bytes);
+          }
+        } finally {
+          await file.close();
+        }
+        const saved = await projectWorkspaceFromCheckpoint({
+          archive,
+          directory: ROOT,
+          baseSha: task.baseSha,
+          legacyLocal: task.projectSnapshot.sourceKind === "local",
+          prepareLegacyRepository: async (destination) => {
+            const access = await control.request(`worker/${taskId}/legacy-repository`);
+            const env = {
+              ...childEnvironment("/home/vitre-setup"),
+              ...(access.token
+                ? {
+                    GIT_CONFIG_COUNT: "1",
+                    GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
+                    GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${access.token}`).toString("base64")}`,
+                  }
+                : {}),
+            };
+            rememberCredential(access.token);
+            await command(
+              "git",
+              [
+                "clone",
+                "--no-checkout",
+                `https://github.com/${task.repository.owner}/${task.repository.name}.git`,
+                destination,
+              ],
+              { uid: 0, cwd: ROOT, env },
+            );
+            return destination;
+          },
+        });
+        try {
+          const snapshot = await uploadPortableWorkspace(saved, true);
+          const head = saved.workspace.roots[0]?.git?.head;
+          task.source =
+            task.projectSnapshot.sourceKind === "github" && head
+              ? { kind: "github", revision: head, snapshot }
+              : { kind: "local", name: task.repository.name, snapshot };
+          task.baseSha = head ?? task.baseSha;
+        } finally {
+          await saved.dispose();
+          await NodeFSP.rm(archive, { force: true });
+        }
+        await callback(
+          "heartbeat",
+          "Saved project workspace is ready; creating an independent conversation",
+        );
+      }
       if (task.source?.kind !== "local" && !task.baseSha)
         throw new WorkerFailure("A pinned repository revision is required");
       const manifest = task.source
@@ -1085,6 +1203,11 @@ export async function runWorker() {
         await copyWorkspace(NodePath.join(staging, manifest.roots[0].id), WORKSPACE);
         if (manifest.roots[0].git) {
           task.baseSha = manifest.roots[0].git.head;
+          if (task.projectSnapshot)
+            await command("git", ["checkout", "-b", task.branch], {
+              uid: 0,
+              env: childEnvironment("/home/vitre"),
+            });
         }
         if (primaryIsNonGit) {
           await NodeFSP.rm(NodePath.join(ROOT, "non-git"), { recursive: true, force: true });
@@ -1128,6 +1251,8 @@ export async function runWorker() {
         await NodeFSP.rm(archive);
       }
     }
+    journal.workspaceRestored = true;
+    await atomicJson(journalPath, journal);
     if (reuseSetup) await reportSetup("reused");
     if (!journal.setupComplete) {
       let installed = false;
@@ -1407,9 +1532,7 @@ export async function runWorker() {
             return Buffer.from(chunk.base64, "base64");
           }),
         },
-        modelSelection: currentThread.modelSelection,
-        runtimeMode: currentThread.runtimeMode,
-        interactionMode: currentThread.interactionMode,
+        ...workerTurnSettings(turnTask, currentThread, models),
         createdAt: journal.requestedAt,
       });
       return true;
@@ -1627,7 +1750,6 @@ export async function runWorker() {
           : {}),
       },
     ).catch(() => {});
-    // oxlint-disable-next-line preserve-caught-error -- Raw provider failures may contain credentials.
     throw new WorkerFailure("Worker run failed; sandbox disk retained");
   } finally {
     clearInterval(heartbeatTimer);

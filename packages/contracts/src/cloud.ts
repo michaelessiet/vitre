@@ -20,6 +20,7 @@ const Digest = Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/));
 export const CloudExecutionTarget = Schema.Literals(["local", "cloud-github", "cloud-local"]);
 export type CloudExecutionTarget = typeof CloudExecutionTarget.Type;
 export const CloudSnapshotRef = Schema.Struct({ id: Id, sha256: Digest });
+export type CloudSnapshotRef = typeof CloudSnapshotRef.Type;
 /** Encoding affects transport only; chunk digests always identify decoded bytes. */
 export const CloudWorkspaceChunkUpload = Schema.Struct({
   base64: Schema.String.check(Schema.isMaxLength(6 * 1024 * 1024)),
@@ -287,6 +288,31 @@ export const CloudCheckpoint = Schema.Struct({
   createdAt: Timestamp,
 });
 export type CloudCheckpoint = typeof CloudCheckpoint.Type;
+/** An immutable, account-owned starting point for a new conversation. */
+export const CloudProjectSnapshot = Schema.Struct({
+  id: Id,
+  projectId: Id,
+  revision: Revision,
+  sourceTaskId: Id,
+  sourceTitle: Text,
+  savedAt: Timestamp,
+  sourceKind: Schema.Literals(["github", "local"]),
+  workspace: Schema.NullOr(CloudSnapshotRef),
+  checkpoint: Schema.NullOr(CloudCheckpoint),
+  baseBranch: Text,
+  baseSha: Schema.NullOr(Sha),
+  roots: Schema.Array(Schema.Struct({ id: Id, name: Text })),
+  branch: Schema.optionalKey(Text),
+});
+export type CloudProjectSnapshot = typeof CloudProjectSnapshot.Type;
+export const CloudProject = Schema.Struct({
+  id: Id,
+  title: Text,
+  repository: Schema.NullOr(CloudRepository),
+  revision: Revision,
+  latestSnapshot: Schema.NullOr(CloudProjectSnapshot),
+});
+export type CloudProject = typeof CloudProject.Type;
 export const CloudResultRevision = Schema.Struct({
   id: Id,
   taskId: Id,
@@ -349,6 +375,15 @@ export const CloudDependencySetup = Schema.Struct({
 });
 export type CloudDependencySetup = typeof CloudDependencySetup.Type;
 export const CloudTask = Schema.Struct({
+  turnSettings: Schema.optionalKey(
+    Schema.Struct({
+      model: Schema.optionalKey(Text),
+      modelOptions: Schema.optionalKey(ProviderOptionSelections),
+      runtimeMode: Schema.optionalKey(RuntimeMode),
+      interactionMode: Schema.optionalKey(ProviderInteractionMode),
+    }),
+  ),
+  projectSnapshot: Schema.optionalKey(CloudProjectSnapshot),
   preparation: Schema.optionalKey(CloudPreparation),
   dependencySetup: Schema.optionalKey(CloudDependencySetup),
   runtimeMode: Schema.optionalKey(RuntimeMode),
@@ -402,6 +437,14 @@ export const CloudUsageSummary = Schema.Struct({
 });
 export type CloudUsageSummary = typeof CloudUsageSummary.Type;
 export const CloudOverview = Schema.Struct({
+  projects: Schema.optionalKey(Schema.Array(CloudProject)),
+  capabilities: Schema.optionalKey(
+    Schema.Struct({
+      projectCreation: Schema.optionalKey(Schema.Boolean),
+      followUpSettings: Schema.optionalKey(Schema.Boolean),
+      mobileNotifications: Schema.optionalKey(Schema.Boolean),
+    }),
+  ),
   revision: Schema.optionalKey(Revision),
   enabled: Schema.Boolean,
   repositories: Schema.Array(CloudRepository),
@@ -413,6 +456,16 @@ export const CloudOverview = Schema.Struct({
   usage: CloudUsageSummary,
 });
 export type CloudOverview = typeof CloudOverview.Type;
+/** Expo transport is versioned separately from the legacy APNs / Live Activity registry. */
+export const CloudMobileDeviceRegistration = Schema.Struct({
+  version: Schema.Literal(2),
+  deviceId: Id,
+  platform: Schema.Literals(["ios", "android"]),
+  token: Schema.NullOr(
+    Schema.String.check(Schema.isPattern(/^(?:Expo|Exponent)PushToken\[[a-zA-Z0-9_-]{1,200}\]$/)),
+  ),
+});
+export type CloudMobileDeviceRegistration = typeof CloudMobileDeviceRegistration.Type;
 export const CloudConnection = Schema.Struct({
   environmentId: Id,
   httpBaseUrl: Schema.String,
@@ -468,6 +521,19 @@ export const CloudTaskFeed = Schema.Struct({
   conversation: Schema.Unknown,
 });
 export const CloudCommand = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("task.createFromProject"),
+    idempotencyKey: Id,
+    projectId: Id,
+    snapshotId: Id,
+    provider: CloudProvider,
+    prompt: Text,
+    model: Schema.optionalKey(Text),
+    modelOptions: Schema.optionalKey(ProviderOptionSelections),
+    runtimeMode: Schema.optionalKey(RuntimeMode),
+    interactionMode: Schema.optionalKey(ProviderInteractionMode),
+    attachments: Schema.optionalKey(CloudAttachments),
+  }),
   Schema.Struct({
     type: Schema.Literal("handoff.request"),
     idempotencyKey: Id,
@@ -537,6 +603,10 @@ export const CloudCommand = Schema.Union([
   Schema.Struct({ type: Schema.Literal("task.wake"), idempotencyKey: Id, taskId: Id }),
   Schema.Struct({
     type: Schema.Literal("task.continue"),
+    model: Schema.optionalKey(Text),
+    modelOptions: Schema.optionalKey(ProviderOptionSelections),
+    runtimeMode: Schema.optionalKey(RuntimeMode),
+    interactionMode: Schema.optionalKey(ProviderInteractionMode),
     attachments: Schema.optionalKey(CloudAttachments),
     idempotencyKey: Id,
     taskId: Id,
