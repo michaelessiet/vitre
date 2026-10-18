@@ -182,6 +182,9 @@ impl ChatApp {
                 if mode == "chat-text" {
                     return super::text_verification::verify(&this, cx).await;
                 }
+                if mode == "steering" {
+                    return super::local_delivery::verify_steering(&this, cx).await;
+                }
                 if mode == "text-questions" {
                     super::ui_verification::float_fixture(cx).await?;
                     this.update_in(cx, |app, w, cx| {

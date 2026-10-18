@@ -190,6 +190,7 @@ fn minimum_window_keeps_every_approval_action_visible(cx: &mut TestAppContext) {
             "summary":"Command approval requested", "tone":"tool", "turnId":null,
             "payload":{"requestId":"approve-minimum","requestKind":"command","detail":"git log -2 --format=%H"}
         })).unwrap());
+        app.rebuild_timeline(cx);
         cx.notify();
     });
     draw(cx);

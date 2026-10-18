@@ -127,6 +127,7 @@ pub(super) struct Facts {
     pub started_at: Option<String>,
     pub can_cancel_transfer: bool,
     pub execution_available: bool,
+    pub supports_steering: bool,
     pub execution_invalidated: bool,
     pub execution_stale: bool,
     pub cancellable_preparation: bool,
@@ -331,7 +332,12 @@ impl ConversationStatus {
             && (facts.attention == Attention::None
                 || (facts.editable_after_error && facts.attention == Attention::Error))
             && matches!(facts.delivery, Delivery::None | Delivery::Rejected)
-            && matches!(facts.turn, Turn::Idle | Turn::Finished)
+            && (matches!(facts.turn, Turn::Idle | Turn::Finished)
+                || (facts.turn == Turn::Working
+                    && facts.supports_steering
+                    && facts.execution_available
+                    && !facts.execution_stale
+                    && !facts.execution_invalidated))
             && (facts.execution_available || facts.connection == Connection::Dormant);
         let execution_interrupted = facts.execution_invalidated
             || matches!(
@@ -838,6 +844,7 @@ impl ChatApp {
                 Transcript::Cached
             },
             execution_available: connection == Connection::Live && !execution_stale,
+            supports_steering: matches!(open.feed, ThreadFeed::Local { .. }),
             execution_stale,
             execution_invalidated: task
                 .as_ref()
@@ -1624,7 +1631,51 @@ mod tests {
             connection: Connection::Live,
             transcript: Transcript::Current,
             execution_available: true,
+            supports_steering: true,
             ..Facts::default()
+        }
+    }
+    #[test]
+    fn running_local_turn_allows_followups_and_stop_independently() {
+        let status = ConversationStatus::derive(working());
+        assert!(status.can_send);
+        assert!(status.can_stop);
+        for delivery in [
+            Delivery::Submitting,
+            Delivery::Accepted,
+            Delivery::Uncertain,
+        ] {
+            assert!(
+                !ConversationStatus::derive(Facts {
+                    delivery,
+                    ..working()
+                })
+                .can_send
+            );
+        }
+        for facts in [
+            Facts {
+                supports_steering: false,
+                ..working()
+            },
+            Facts {
+                execution_available: false,
+                ..working()
+            },
+            Facts {
+                execution_stale: true,
+                ..working()
+            },
+            Facts {
+                execution_invalidated: true,
+                ..working()
+            },
+            Facts {
+                ownership_fenced: true,
+                ..working()
+            },
+        ] {
+            assert!(!ConversationStatus::derive(facts).can_send);
         }
     }
     #[test]
