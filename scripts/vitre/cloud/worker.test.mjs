@@ -102,6 +102,44 @@ it("settles a finished turn despite stale thread-level approval flags", () => {
   ).toBe("waiting_for_input");
 });
 
+it.each([
+  { state: "running", current: true, resident: true, expected: "working" },
+  { state: "error", current: false, resident: true, expected: "working" },
+  { state: "error", current: true, resident: true, expected: "failed" },
+  { state: "interrupted", current: true, resident: false, expected: "failed" },
+  { state: "interrupted", current: true, resident: true, expected: "settled" },
+])("observes $state worker turns (current=$current, resident=$resident)", (test) => {
+  const requestedAt = "2026-10-19T00:00:00Z";
+  expect(
+    classifyWorkerTurn(
+      {
+        state: test.state,
+        requestedAt: test.current ? requestedAt : "2026-10-18T23:00:00Z",
+      },
+      requestedAt,
+      {},
+      test.resident,
+      false,
+      { status: "running" },
+    ),
+  ).toBe(test.expected);
+});
+
+it("observes provider failure before a turn exists without overriding pending input", () => {
+  const requestedAt = "2026-10-19T00:00:00Z";
+  expect(classifyWorkerTurn(null, requestedAt, {}, true, false, { status: "running" })).toBe(
+    "working",
+  );
+  expect(classifyWorkerTurn(null, requestedAt, {}, true, false, { status: "error" })).toBe(
+    "failed",
+  );
+  expect(
+    classifyWorkerTurn(null, requestedAt, { hasPendingUserInput: true }, true, false, {
+      status: "error",
+    }),
+  ).toBe("waiting_for_input");
+});
+
 it("restores exact historical activities and permissions without restoring a live session", () => {
   const createdAt = "2026-10-16T00:00:00.000Z";
   const activity = {

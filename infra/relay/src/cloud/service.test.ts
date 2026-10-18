@@ -13,6 +13,7 @@ import { CloudError } from "./policy.ts";
 import { CredentialVault, sha256 } from "./crypto.ts";
 import { applyCommand, confirmStopped, schedule } from "./state.ts";
 import { backfillProjects, recordProjectSnapshot } from "./projects.ts";
+import type { CloudWorkspaceManifest } from "@t3tools/contracts/cloud";
 const encodeJson = Schema.encodeSync(Schema.UnknownFromJsonString);
 afterEach(() => vi.unstubAllGlobals());
 
@@ -247,6 +248,138 @@ describe("cloud account and credential boundaries", () => {
         expect((yield* send("user", "copy")).entityId).toBe(copy.id);
         expect((yield* send("user", "second-copy")).entityId).not.toBe(copy.id);
       }),
+  );
+  it.effect.each([
+    { path: "cached", kind: "Git", checkpoint: true, baseSha: "a".repeat(40), rejected: true },
+    { path: "seed", kind: "Git", checkpoint: true, baseSha: "a".repeat(40), rejected: true },
+    { path: "cached", kind: "unknown", checkpoint: true, baseSha: null, rejected: true },
+    { path: "seed", kind: "unknown", checkpoint: true, baseSha: null, rejected: true },
+    {
+      path: "cached",
+      kind: "Git workspace-only",
+      checkpoint: false,
+      baseSha: "a".repeat(40),
+      rejected: true,
+    },
+    { path: "cached", kind: "initial non-Git", checkpoint: false, baseSha: null, rejected: false },
+    {
+      path: "cached",
+      kind: "non-Git",
+      checkpoint: true,
+      baseSha: "8742d9f52a52b29e1195b85b4cb31ed599afb990",
+      rejected: false,
+    },
+    {
+      path: "seed",
+      kind: "non-Git",
+      checkpoint: true,
+      baseSha: "8742d9f52a52b29e1195b85b4cb31ed599afb990",
+      rejected: false,
+    },
+  ])("validates $kind snapshot metadata before $path workspace mutations", (test) =>
+    Effect.gen(function* () {
+      const f = fixture();
+      const doc = f.state();
+      doc.state.accounts.codex.state = "connected";
+      const manifest: CloudWorkspaceManifest = {
+        version: 2,
+        roots: [{ id: "primary", name: "Uploaded" }],
+        entries: [],
+      };
+      const bytes = new TextEncoder().encode(encodeJson(manifest));
+      const digest = yield* Effect.promise(() => sha256(bytes));
+      const workspace = { id: digest, sha256: digest };
+      applyCommand(
+        doc.state,
+        {
+          type: "task.create",
+          idempotencyKey: "source",
+          repositoryId: "local",
+          projectId: "uploaded",
+          source: { kind: "local", name: "Uploaded", snapshot: workspace },
+          baseBranch: "main",
+          provider: "codex",
+          prompt: "Original history",
+          kind: "build",
+          issueNumber: null,
+        },
+        "source",
+        "source",
+        0,
+        true,
+      );
+      doc.state.tasks.source!.state = "cancelled";
+      recordProjectSnapshot(doc.state, doc.state.tasks.source!, {
+        id: "saved",
+        savedAt: "2026-10-01T00:00:00Z",
+        sourceKind: "local",
+        workspace: test.path === "cached" ? workspace : null,
+        checkpoint: test.checkpoint
+          ? {
+              id: "saved",
+              taskId: "source",
+              attemptId: "source-1",
+              sequence: 1,
+              objectKey: "owned/checkpoint",
+              sha256: "b".repeat(64),
+              sizeBytes: 1,
+              createdAt: "2026-10-01T00:00:00Z",
+            }
+          : null,
+        baseBranch: "main",
+        baseSha: test.baseSha,
+        roots: manifest.roots,
+      });
+      const command = {
+        type: "task.createFromProject" as const,
+        idempotencyKey: "copy",
+        projectId: "uploaded",
+        snapshotId: "saved",
+        provider: "codex" as const,
+        prompt: "Fresh history",
+      };
+      const token = "worker-token";
+      if (test.path === "cached") {
+        f.objects.set(`cloud-workspaces/user/manifests/${digest}`, bytes);
+      } else {
+        applyCommand(doc.state, command, "copy", "copy", 0, true);
+        schedule(doc.state, 0, true, true);
+        doc.private.workerTokens.copy = {
+          hash: yield* Effect.promise(() => sha256(token)),
+          sealed: yield* Effect.promise(() =>
+            new CredentialVault(f.config.encryptionKey).seal(token, "user:worker:copy"),
+          ),
+        };
+      }
+      const before = structuredClone(f.state());
+      const objectsBefore = new Map(f.objects);
+      const action =
+        test.path === "cached"
+          ? f.run(
+              CloudService.pipe(
+                Effect.flatMap((s) => s.command("user", command)),
+                Effect.asVoid,
+              ),
+            )
+          : f.run(
+              CloudWorkerControl.pipe(
+                Effect.flatMap((s) => s.saveWorkerWorkspace("copy", token, manifest, true)),
+                Effect.asVoid,
+              ),
+            );
+      if (test.rejected) {
+        const error = yield* Effect.flip(action);
+        expect(error.code).toBe("snapshot_unavailable");
+        expect(error.message).toContain("omitted Git metadata");
+        expect(f.state()).toEqual(before);
+        expect(f.objects).toEqual(objectsBefore);
+      } else {
+        yield* action;
+        expect(Object.keys(f.state().state.tasks)).toHaveLength(2);
+        expect(f.state().state.projects?.uploaded?.latestSnapshot?.workspace).not.toBeNull();
+        if (test.path === "seed") expect(f.state().state.tasks.copy?.source).toBeDefined();
+      }
+    }),
   );
   it.effect(
     "starts an owned uploaded Git repository without upstream access, preserving unpublished HEAD",

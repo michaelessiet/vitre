@@ -7,7 +7,12 @@ import type {
   CloudProjectSnapshot,
   CloudMobileDeviceRegistration,
 } from "@t3tools/contracts/cloud";
-import { backfillProjects, projectSnapshot, projectSnapshots } from "./projects.ts";
+import {
+  backfillProjects,
+  projectSnapshot,
+  projectSnapshots,
+  validateProjectSnapshotWorkspace,
+} from "./projects.ts";
 import { CloudWorkspaceManifest } from "@t3tools/contracts/cloud";
 import * as Schema from "effect/Schema";
 import { enqueueCloudNotification } from "./notifications.ts";
@@ -220,7 +225,12 @@ export const layer = Layer.effect(
             const bytes = yield* readWorkspace(userId, snapshot.workspace.sha256).pipe(
               Effect.provideService(CloudArtifacts, artifacts),
             );
-            yield* finalizeWorkspace(userId, JSON.parse(new TextDecoder().decode(bytes))).pipe(
+            const manifest = JSON.parse(new TextDecoder().decode(bytes)) as CloudWorkspaceManifest;
+            yield* Effect.try({
+              try: () => validateProjectSnapshotWorkspace(snapshot, manifest),
+              catch: (error) => error as CloudError,
+            });
+            yield* finalizeWorkspace(userId, manifest).pipe(
               Effect.provideService(CloudArtifacts, artifacts),
             );
           } else if (snapshot.checkpoint) {

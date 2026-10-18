@@ -26,6 +26,107 @@ async function fixture() {
   return { path, chunks, capture };
 }
 describe("portable workspaces", () => {
+  it("preserves Git history, index and tracked fixtures across capture and branching with a different owner", async () => {
+    const f = await fixture();
+    const git = async (...args) => (await exec("git", args, { cwd: f.path })).stdout.trim();
+    await git("init", "--initial-branch=main");
+    await git("config", "user.name", "Test");
+    await git("config", "user.email", "test@example.com");
+    await NodeFSP.mkdir(NodePath.join(f.path, "fixtures/node_modules"), { recursive: true });
+    await NodeFSP.writeFile(NodePath.join(f.path, "fixtures/node_modules/source.js"), "fixture\n");
+    await NodeFSP.writeFile(NodePath.join(f.path, "tracked.txt"), "base\n");
+    await git("add", "-f", ".");
+    await git("commit", "-m", "Unpublished fixture");
+    const head = await git("rev-parse", "HEAD");
+    await NodeFSP.writeFile(NodePath.join(f.path, "tracked.txt"), "staged\n");
+    await git("add", "tracked.txt");
+    await NodeFSP.writeFile(NodePath.join(f.path, "tracked.txt"), "unstaged\n");
+    const projectScript = NodePath.join(f.path, ".git", "project-script");
+    await NodeFSP.writeFile(projectScript, '#!/bin/sh\nprintf called > "$0.invoked"\n', {
+      mode: 0o755,
+    });
+    await git("config", "core.fsmonitor", projectScript);
+    await git("config", "diff.external", projectScript);
+    const env = {
+      ...process.env,
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CONFIG_SYSTEM: "/dev/null",
+      GIT_TEST_ASSUME_DIFFERENT_OWNER: "1",
+    };
+    await expect(
+      exec("git", ["rev-parse", "--show-toplevel"], { cwd: f.path, env }),
+    ).rejects.toThrow("dubious ownership");
+    // Exercise Git's real ownership check in a child without changing the test runner environment.
+    const script = `
+      import { captureWorkspace } from ${JSON.stringify(new URL("./workspace.mjs", import.meta.url).href)};
+      const chunks = new Map();
+      const manifest = await captureWorkspace([{ id: "root", path: process.argv[1] }],
+        async (hash, bytes) => chunks.set(hash, Buffer.from(bytes).toString("base64")));
+      process.stdout.write(JSON.stringify({ manifest, chunks: [...chunks] }));
+    `;
+    const result = JSON.parse(
+      (await exec(process.execPath, ["--input-type=module", "--eval", script, f.path], { env }))
+        .stdout,
+    );
+    expect(result.manifest.roots[0].git.head).toBe(head);
+    expect(await NodeFSP.stat(`${projectScript}.invoked`).catch(() => null)).toBeNull();
+    expect(result.manifest.entries.map((entry) => entry.path)).toContain(
+      "fixtures/node_modules/source.js",
+    );
+    const chunks = new Map(
+      result.chunks.map(([hash, bytes]) => [hash, Buffer.from(bytes, "base64")]),
+    );
+    const out = await fixture();
+    await restoreWorkspace(result.manifest, NodePath.join(out.path, "restored"), async (hash) =>
+      chunks.get(hash),
+    );
+    const copy = NodePath.join(out.path, "restored/root");
+    const hook = NodePath.join(copy, ".git/hooks/post-checkout");
+    await NodeFSP.writeFile(hook, '#!/bin/sh\nprintf called > "$0.invoked"\n', { mode: 0o755 });
+    await expect(
+      exec("git", ["checkout", "-b", "vitre/new-task"], { cwd: copy, env }),
+    ).rejects.toThrow("dubious ownership");
+    await exec(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        `
+      import { createWorkspaceBranch } from ${JSON.stringify(new URL("./workspace.mjs", import.meta.url).href)};
+      await createWorkspaceBranch(process.argv[1], "vitre/new-task");
+    `,
+        copy,
+      ],
+      { env },
+    );
+    expect((await exec("git", ["branch", "--show-current"], { cwd: copy })).stdout.trim()).toBe(
+      "vitre/new-task",
+    );
+    expect(await git("branch", "--show-current")).toBe("main");
+    expect(await NodeFSP.stat(`${hook}.invoked`).catch(() => null)).toBeNull();
+    expect((await exec("git", ["rev-parse", "HEAD"], { cwd: copy })).stdout.trim()).toBe(head);
+    expect((await exec("git", ["show", ":tracked.txt"], { cwd: copy })).stdout).toBe("staged\n");
+    expect(await NodeFSP.readFile(NodePath.join(copy, "tracked.txt"), "utf8")).toBe("unstaged\n");
+    expect(
+      await NodeFSP.readFile(NodePath.join(copy, "fixtures/node_modules/source.js"), "utf8"),
+    ).toBe("fixture\n");
+  });
+
+  it("refuses to silently capture unreadable Git metadata as a plain directory", async () => {
+    const f = await fixture();
+    await NodeFSP.writeFile(NodePath.join(f.path, "source.txt"), "source");
+    await NodeFSP.writeFile(NodePath.join(f.path, ".git"), "gitdir: missing-repository\n");
+    await expect(f.capture()).rejects.toThrow("Workspace Git metadata could not be read");
+  });
+
+  it("requires a readable commit before capturing a Git repository", async () => {
+    const f = await fixture();
+    await exec("git", ["init", "--initial-branch=main"], { cwd: f.path });
+    await NodeFSP.writeFile(NodePath.join(f.path, "source.txt"), "source");
+    await exec("git", ["add", "."], { cwd: f.path });
+    await expect(f.capture()).rejects.toThrow("Workspace Git history could not be read");
+  });
+
   it("prefetches remote chunks with bounded concurrency and verifies before restoration", async () => {
     const source = await fixture();
     for (let i = 0; i < 12; i++)
