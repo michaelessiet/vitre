@@ -8,7 +8,8 @@ describe("mobile model selection without a running conversation", () => {
     (provider) => {
       const models = composerModels(null, provider);
       expect(models.length).toBeGreaterThan(1);
-      const selected = composerModel(models);
+      expect(composerModel(models)).toBeUndefined();
+      const selected = composerModel(models, models[0]!.slug);
       expect(selected?.capabilities?.optionDescriptors?.[0]?.id).toBe(
         provider === "codex" ? "reasoningEffort" : "effort",
       );
@@ -27,9 +28,9 @@ describe("mobile model selection without a running conversation", () => {
       providers: [{ driver: "codex", instanceId: "codex", models: [live] }],
     } as unknown as ServerConfig;
     expect(composerModels(config, "codex")).toEqual([live]);
-    expect(composerModel(composerModels(config, "codex"))?.capabilities?.optionDescriptors).toEqual(
-      [],
-    );
+    expect(
+      composerModel(composerModels(config, "codex"), "live")?.capabilities?.optionDescriptors,
+    ).toEqual([]);
     expect(composerModels(config, "claude").length).toBeGreaterThan(0);
     expect(composerModel([live], "unknown")).toBeUndefined();
   });

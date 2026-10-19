@@ -64,7 +64,5 @@ export function composerModels(config: ServerConfig | null, provider: CloudProvi
   return live?.length ? live : builtIn[provider];
 }
 export function composerModel(models: readonly ServerProviderModel[], slug?: string) {
-  return slug
-    ? models.find((model) => model.slug === slug)
-    : (models.find((model) => model.isDefault) ?? models[0]);
+  return models.find((model) => model.slug === slug);
 }

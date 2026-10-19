@@ -268,6 +268,12 @@ export function Composer({
               Built-in models are available now. Choices refresh when a cloud conversation connects.
             </Text>
           )}
+          {!settings.model && (
+            <Text style={styles.muted}>
+              Choose a model to set its reasoning level. Cloud default uses the deployment’s model
+              settings.
+            </Text>
+          )}
           {descriptors.map((descriptor) => (
             <View key={descriptor.id}>
               <Text style={styles.label}>{descriptor.label}</Text>
@@ -292,7 +298,6 @@ export function Composer({
                     onPress={() =>
                       onSettings({
                         ...settings,
-                        model: model?.slug ?? settings.model,
                         modelOptions: [
                           ...settings.modelOptions.filter(
                             (selection) => selection.id !== descriptor.id,
