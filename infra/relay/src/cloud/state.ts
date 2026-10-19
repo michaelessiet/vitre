@@ -11,7 +11,7 @@ import type {
   CloudProject,
   CloudProjectSnapshot,
 } from "@t3tools/contracts/cloud";
-import { backfillProjects, projectSnapshot } from "./projects.ts";
+import { backfillProjects, projectSnapshot, projectIdentity } from "./projects.ts";
 import { requestHandoff, advanceHandoff, stopHandoff, type HandoffState } from "./handoff.ts";
 import { CLOUD_POLICY, CloudError, iso, month, runReservation } from "./policy.ts";
 import { accrueJobs, activeJobs, type CloudJob, type PublicationInput } from "./jobs.ts";
@@ -34,6 +34,7 @@ export type MutableCloudTask = Mutable<CloudTask>;
 
 export interface CloudState {
   projects?: Record<string, CloudProject>;
+  deletedProjects?: string[];
   projectSnapshots?: Record<string, Record<string, CloudProjectSnapshot>>;
   /** Supplied from the SQL account row on load/CAS; never an independent counter. */
   revision?: number;
@@ -211,7 +212,12 @@ export function publicOverview(state: CloudState, enabled: boolean, now: number)
   const spent = state.usage[month(now)] ?? 0;
   return {
     projects: Object.values(state.projects ?? {}),
-    capabilities: { projectCreation: true, followUpSettings: true, mobileNotifications: true },
+    capabilities: {
+      projectDeletion: true,
+      projectCreation: true,
+      followUpSettings: true,
+      mobileNotifications: true,
+    },
     ...(state.revision !== undefined ? { revision: state.revision } : {}),
     bindings: Object.values(state.bindings ?? {}),
     handoffs: Object.values(state.handoffs ?? {}),
@@ -248,12 +254,58 @@ export function applyCommand(
       throw new CloudError("idempotency_conflict", "Idempotency key was used for another request");
     return receipt.entityId;
   }
-  if (!enabled && !["task.cancel", "task.delete", "provider.disconnect"].includes(command.type)) {
+  if (
+    !enabled &&
+    !["task.cancel", "task.delete", "project.delete", "provider.disconnect"].includes(command.type)
+  ) {
     throw new CloudError("disabled", "Cloud execution is disabled", 503);
   }
   let entityId = id;
   backfillProjects(state);
   switch (command.type) {
+    case "project.delete": {
+      const project = state.projects?.[command.projectId];
+      if (!project) throw new CloudError("not_found", "Cloud project not found", 404);
+      if (project.revision !== command.expectedRevision)
+        throw new CloudError(
+          "revision_conflict",
+          "Project changed. Refresh and review before deleting.",
+          409,
+        );
+      const tasks = Object.values(state.tasks).filter(
+        (task) => projectIdentity(task) === project.id && !state.deletedTasks.includes(task.id),
+      );
+      if (
+        tasks.some((task) =>
+          Object.values(state.handoffs ?? {}).some(
+            (operation) =>
+              !["completed", "cancelled", "failed"].includes(operation.phase) &&
+              (operation.conversationId === task.handoff?.conversationId ||
+                state.bindings?.[operation.conversationId]?.cloudTaskId === task.id),
+          ),
+        )
+      )
+        throw new CloudError(
+          "switch_pending",
+          "Wait for conversations to finish moving before deleting this project.",
+          409,
+        );
+      for (const task of tasks) {
+        applyCommand(
+          state,
+          { type: "task.delete", taskId: task.id, idempotencyKey: `${id}-${task.id}` },
+          id,
+          fingerprint,
+          now,
+          enabled,
+        );
+      }
+      (state.deletedProjects ??= []).push(project.id);
+      delete state.projects![project.id];
+      delete state.projectSnapshots?.[project.id];
+      entityId = project.id;
+      break;
+    }
     case "task.createFromProject": {
       const { project, snapshot } = projectSnapshot(state, command.projectId, command.snapshotId);
       const repositoryId = project.repository?.id ?? project.id;
@@ -425,6 +477,12 @@ export function applyCommand(
       if (!repository) throw new CloudError("not_found", "Repository not configured", 404);
       if (command.kind === "investigate" && command.issueNumber === null)
         throw new CloudError("issue_required", "Choose an issue to investigate", 400);
+      const projectId =
+        command.projectId ?? (command.source?.kind === "local" ? id : `github-${repository.id}`);
+      // An explicit new conversation/hoist can start a fresh registry after deletion.
+      // Deleted tasks remain tombstoned and cannot repopulate its old snapshots.
+      if (state.deletedProjects?.includes(projectId))
+        state.deletedProjects = state.deletedProjects.filter((deleted) => deleted !== projectId);
       state.tasks[id] = {
         id,
         ...(command.projectId ? { projectId: command.projectId } : {}),

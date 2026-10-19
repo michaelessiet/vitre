@@ -551,7 +551,9 @@ export function Conversation({
             <Text style={styles.heading}>{taskStatus(task)}</Text>
             <Text style={styles.text}>{task.prompt}</Text>
             <Text style={styles.muted}>
-              {cloud.progress || "Your cloud conversation will appear here."}
+              {cloud.progress === task.error
+                ? ""
+                : cloud.progress || "Your cloud conversation will appear here."}
             </Text>
           </View>
         }

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Animated,
   BackHandler,
   KeyboardAvoidingView,
@@ -15,6 +16,7 @@ import {
 } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
+import * as Crypto from "expo-crypto";
 import * as WebBrowser from "expo-web-browser";
 import * as ExpoLinking from "expo-linking";
 import { ClerkProvider, useAuth, useSSO } from "@clerk/expo";
@@ -293,6 +295,62 @@ export function CloudScreen({
   const [filter, setFilter] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [projectMenu, setProjectMenu] = useState<string | null>(null);
+  const [deletingProject, setDeletingProject] = useState(false);
+  const [projectError, setProjectError] = useState<string | null>(null);
+  const deleteRequest = useRef<{
+    type: "project.delete";
+    projectId: string;
+    expectedRevision: number;
+    idempotencyKey: string;
+  } | null>(null);
+  const deleteProject = () => {
+    const project = cloud.overview?.projects?.find((project) => project.id === projectMenu);
+    if (!project || deletingProject) return;
+    const count = cloud.overview?.tasks.filter((task) => task.projectId === project.id).length ?? 0;
+    Alert.alert(
+      `Delete ${project.title}?`,
+      `Delete this saved cloud project and its ${count} cloud conversation${count === 1 ? "" : "s"}? Running work will stop and saved snapshots will no longer be available. Your GitHub repository and desktop files will not be deleted.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete project",
+          style: "destructive",
+          onPress: () => {
+            if (
+              deleteRequest.current?.projectId !== project.id ||
+              deleteRequest.current.expectedRevision !== project.revision
+            )
+              deleteRequest.current = {
+                type: "project.delete",
+                projectId: project.id,
+                expectedRevision: project.revision,
+                idempotencyKey: Crypto.randomUUID(),
+              };
+            setDeletingProject(true);
+            setProjectError(null);
+            void cloud
+              .command(deleteRequest.current)
+              .then((result) => {
+                if (
+                  cloud.selectedId &&
+                  !result.overview.tasks.some((task) => task.id === cloud.selectedId)
+                )
+                  cloud.select(null);
+                deleteRequest.current = null;
+                setProjectMenu(null);
+              })
+              .catch((error: unknown) => {
+                setProjectError(
+                  error instanceof Error ? error.message : "Could not delete project. Retry.",
+                );
+                void cloud.refresh().catch(() => {});
+              })
+              .finally(() => setDeletingProject(false));
+          },
+        },
+      ],
+    );
+  };
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const groups = useMemo(() => {
     const groups = new Map<
@@ -607,7 +665,12 @@ export function CloudScreen({
               cloud.overview?.projects?.find((project) => project.id === projectMenu)?.title ??
               "Project"
             }
-            onClose={() => setProjectMenu(null)}
+            onClose={() => {
+              if (!deletingProject) {
+                setProjectMenu(null);
+                setProjectError(null);
+              }
+            }}
           >
             <Button
               disabled={
@@ -623,6 +686,28 @@ export function CloudScreen({
             >
               New cloud conversation
             </Button>
+            <Button
+              disabled={
+                deletingProject ||
+                !cloud.online ||
+                !cloud.overview?.capabilities?.projectDeletion ||
+                !cloud.overview.projects?.some((project) => project.id === projectMenu)
+              }
+              onPress={deleteProject}
+              style={{ borderColor: colors.red }}
+            >
+              {deletingProject ? "Deleting…" : "Delete cloud project"}
+            </Button>
+            {projectError && (
+              <Text accessibilityRole="alert" style={styles.error}>
+                {projectError}
+              </Text>
+            )}
+            {!cloud.overview?.capabilities?.projectDeletion && (
+              <Text style={styles.muted}>
+                Update the cloud deployment to delete saved projects.
+              </Text>
+            )}
             {!cloud.overview?.capabilities?.projectCreation && (
               <Text style={styles.muted}>
                 Update your cloud deployment to create conversations from saved projects.

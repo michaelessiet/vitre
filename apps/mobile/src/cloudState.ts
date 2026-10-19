@@ -1,4 +1,4 @@
-import type { CloudOverview, CloudTask } from "@t3tools/contracts/cloud";
+import type { CloudOverview, CloudTask, CloudTaskFeed } from "@t3tools/contracts/cloud";
 import type { OrchestrationThread } from "@t3tools/contracts";
 import { historicalActivityIds } from "@t3tools/shared/historyActivities";
 
@@ -114,4 +114,19 @@ export function diffFiles(diff: string) {
         deletions: lines.filter((line) => line.startsWith("-") && !line.startsWith("---")).length,
       };
     });
+}
+
+export function taskProgress(
+  events: (typeof CloudTaskFeed.Type)["events"],
+  task: CloudTask | null,
+): string {
+  return (
+    events.findLast(
+      (event) =>
+        event.detail &&
+        event.attemptId === task?.attempt?.id &&
+        (!["failed", "needs_auth", "usage_limited"].includes(event.phase) ||
+          event.phase === task?.state),
+    )?.detail ?? ""
+  );
 }

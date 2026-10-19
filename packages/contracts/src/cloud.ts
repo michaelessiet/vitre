@@ -441,6 +441,7 @@ export const CloudOverview = Schema.Struct({
   capabilities: Schema.optionalKey(
     Schema.Struct({
       projectCreation: Schema.optionalKey(Schema.Boolean),
+      projectDeletion: Schema.optionalKey(Schema.Boolean),
       followUpSettings: Schema.optionalKey(Schema.Boolean),
       mobileNotifications: Schema.optionalKey(Schema.Boolean),
     }),
@@ -521,6 +522,12 @@ export const CloudTaskFeed = Schema.Struct({
   conversation: Schema.Unknown,
 });
 export const CloudCommand = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("project.delete"),
+    idempotencyKey: Id,
+    projectId: Id,
+    expectedRevision: Revision,
+  }),
   Schema.Struct({
     type: Schema.Literal("task.createFromProject"),
     idempotencyKey: Id,

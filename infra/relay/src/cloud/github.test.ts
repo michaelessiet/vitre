@@ -187,7 +187,7 @@ it("resolves public repositories without app credentials or Authorization header
   const publicRepo = await client.publicRepository("owner", "repo");
   expect(publicRepo?.installationId).toBe("public");
   expect(await client.resolve(publicRepo!, "main", 0)).toEqual({ sha: "a".repeat(40), token: "" });
-  expect(await client.resolve(repository, "main", 0)).toEqual({ sha: "a".repeat(40), token: "" });
+  await expect(client.resolve(repository, "main", 0)).rejects.toThrow("not allowlisted");
   expect(calls.some((url) => url.includes("/app/"))).toBe(false);
   await expect(client.repositoryToken(publicRepo!, 0, "write")).rejects.toThrow("not allowlisted");
 });
@@ -235,5 +235,32 @@ it("still uses an installation token for private repository access", async () =>
     sha: "b".repeat(40),
     token: "private-read-token",
   });
-  expect(anonymous).toBe(1);
+  expect(anonymous).toBe(0);
+});
+
+it("uses connected access even when anonymous GitHub requests are rate limited", async () => {
+  const keys = NodeCrypto.generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const client = new GitHubCloudClient(
+    {
+      appId: "789",
+      privateKey: keys.privateKey.export({ format: "pem", type: "pkcs1" }).toString(),
+      installationIds: ["456"],
+    },
+    async (url, init) => {
+      const auth = new Headers(init?.headers).get("authorization");
+      if (!auth) throw new Error("Anonymous GitHub quota exhausted");
+      if (String(url).includes("access_tokens")) return Response.json({ token: "scoped-read" });
+      expect(auth).toBe("Bearer scoped-read");
+      return Response.json(
+        String(url).includes("/commits/") ? { sha: "c".repeat(40) } : { id: 123 },
+      );
+    },
+  );
+  expect(await client.resolve(repository, "main", 1_000_000)).toEqual({
+    sha: "c".repeat(40),
+    token: "scoped-read",
+  });
+  await expect(client.readAccess({ ...repository, id: "999" }, 1_000_000)).rejects.toMatchObject({
+    code: "repository_changed",
+  });
 });

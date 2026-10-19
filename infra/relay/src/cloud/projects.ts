@@ -54,7 +54,12 @@ export function recordProjectSnapshot(
   state: CloudState,
   task: CloudTask,
   input: Omit<CloudProjectSnapshot, "projectId" | "revision" | "sourceTaskId" | "sourceTitle">,
-): CloudProjectSnapshot {
+): CloudProjectSnapshot | undefined {
+  if (
+    state.deletedTasks.includes(task.id) ||
+    state.deletedProjects?.includes(projectIdentity(task))
+  )
+    return undefined;
   const project = registerProject(state, task);
   const snapshots = ((state.projectSnapshots ??= {})[project.id] ??= {});
   const existing = snapshots[input.id];
@@ -82,7 +87,11 @@ export function recordProjectSnapshot(
 export function backfillProjects(state: CloudState): void {
   const tasks = Object.values(state.tasks).sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
   for (const task of tasks) {
-    if (state.deletedTasks.includes(task.id)) continue;
+    if (
+      state.deletedTasks.includes(task.id) ||
+      state.deletedProjects?.includes(projectIdentity(task))
+    )
+      continue;
     if (task.handoff) {
       const binding = state.bindings?.[task.handoff.conversationId];
       if (!binding || binding.generation <= task.handoff.generation) continue;
@@ -143,8 +152,15 @@ export function projectSnapshots(state: CloudState, projectId: string): CloudPro
 }
 
 export function referencesTaskArtifacts(state: CloudState, taskId: string): boolean {
-  return Object.values(state.projectSnapshots ?? {}).some((snapshots) =>
-    Object.values(snapshots).some((snapshot) => snapshot.checkpoint?.taskId === taskId),
+  return (
+    Object.values(state.tasks).some(
+      (task) =>
+        !state.deletedTasks.includes(task.id) &&
+        task.projectSnapshot?.checkpoint?.taskId === taskId,
+    ) ||
+    Object.values(state.projectSnapshots ?? {}).some((snapshots) =>
+      Object.values(snapshots).some((snapshot) => snapshot.checkpoint?.taskId === taskId),
+    )
   );
 }
 

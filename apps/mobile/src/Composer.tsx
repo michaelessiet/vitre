@@ -4,6 +4,7 @@ import type { ProviderOptionSelections, RuntimeMode, ServerConfig } from "@t3too
 import type { CloudProvider } from "@t3tools/contracts/cloud";
 import { pickAttachments, type LocalAttachment } from "./attachments";
 import { Button, colors, Icon, IconButton, Sheet, styles } from "./ui";
+import { composerModels, composerModel } from "./models";
 import { useReducedMotion } from "./motion";
 
 export interface ComposerSettings {
@@ -77,14 +78,15 @@ export function Composer({
       useNativeDriver: true,
     }).start();
   };
-  const provider = config?.providers.find(
-    (provider) =>
-      provider.driver === (settings.provider === "claude" ? "claudeAgent" : "codex") ||
-      provider.instanceId === (settings.provider === "claude" ? "claudeAgent" : "codex"),
-  );
-  const model = provider?.models.find((model) => model.slug === settings.model);
+  const models = composerModels(config, settings.provider);
+  const model = composerModel(models, settings.model);
   const descriptors = model?.capabilities?.optionDescriptors ?? [];
   const reasoning = settings.modelOptions.find((option) => /reason|effort/i.test(option.id));
+  const reasoningDescriptor = descriptors.find((descriptor) => descriptor.id === reasoning?.id);
+  const reasoningLabel =
+    reasoningDescriptor?.type === "select"
+      ? reasoningDescriptor.options.find((option) => option.id === reasoning?.value)?.label
+      : undefined;
   const pick = async (images: boolean) => {
     setAttach(false);
     try {
@@ -171,7 +173,7 @@ export function Composer({
             <Icon name="flash-outline" size={16} />
             <Text numberOfLines={1} style={{ color: colors.muted, fontSize: 12, flexShrink: 1 }}>
               {reasoning
-                ? String(reasoning.value)
+                ? (reasoningLabel ?? String(reasoning.value))
                 : settings.interactionMode === "plan"
                   ? "Plan"
                   : "Reasoning"}
@@ -251,7 +253,7 @@ export function Composer({
               Cloud default
             </Button>
           )}
-          {provider?.models.map((model) => (
+          {models.map((model) => (
             <Button
               key={model.slug}
               disabled={settingsLocked}
@@ -263,7 +265,7 @@ export function Composer({
           ))}
           {!config && (
             <Text style={styles.muted}>
-              Available models appear after connecting to a cloud conversation.
+              Built-in models are available now. Choices refresh when a cloud conversation connects.
             </Text>
           )}
           {descriptors.map((descriptor) => (
@@ -290,6 +292,7 @@ export function Composer({
                     onPress={() =>
                       onSettings({
                         ...settings,
+                        model: model?.slug ?? settings.model,
                         modelOptions: [
                           ...settings.modelOptions.filter(
                             (selection) => selection.id !== descriptor.id,
@@ -337,6 +340,7 @@ export function Composer({
               </Button>
             ))}
           </View>
+          <Button onPress={() => setOptions(false)}>Done</Button>
         </Sheet>
       )}
     </>
