@@ -1,6 +1,7 @@
 import { expect, it } from "vite-plus/test";
 import { makeShowcaseClient } from "./showcase";
 import {
+  approvalDetails,
   taskProgress,
   acceptHistory,
   acceptOverview,
@@ -116,4 +117,42 @@ it("does not show a previous preparation failure while retrying", async () => {
       },
     }),
   ).toBe("GitHub unavailable");
+});
+
+it("preserves complete approval details in pending mobile requests", async () => {
+  const thread = (await makeShowcaseClient().events("session")).conversation as OrchestrationThread;
+  const detail = '/bin/bash -lc "pwd && cat README.md"\necho "finished"';
+  const requests = pendingRequests({
+    ...thread,
+    activities: [
+      {
+        ...thread.activities[0]!,
+        id: EventId.make("command-request"),
+        kind: "approval.requested",
+        payload: { requestId: "permission", requestKind: "command", detail },
+      },
+    ],
+  });
+  expect(requests[0]).toMatchObject({
+    id: "permission",
+    kind: "approval",
+    approval: { label: "Command", detail },
+  });
+});
+
+it("labels approval kinds and handles missing or malformed provider details", () => {
+  for (const [requestKind, requestType, label] of [
+    ["command", "command_execution_approval", "Command"],
+    ["file-read", "file_read_approval", "File to read"],
+    ["file-change", "file_change_approval", "File change"],
+  ]) {
+    expect(approvalDetails({ requestKind, detail: "provided detail" })).toEqual({
+      label,
+      detail: "provided detail",
+    });
+    expect(approvalDetails({ requestType })).toEqual({ label, detail: null });
+  }
+  for (const detail of [undefined, null, "", "  ", {}, 42]) {
+    expect(approvalDetails({ detail })).toEqual({ label: "Requested action", detail: null });
+  }
 });

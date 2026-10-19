@@ -121,6 +121,8 @@ export function openConversation(
   return {
     dispatch: (command: ClientOrchestrationCommand) =>
       runtime.runPromise(request(ORCHESTRATION_WS_METHODS.dispatchCommand, command)),
+    readFile: (cwd: string, relativePath: string) =>
+      runtime.runPromise(request(WS_METHODS.projectsReadFile, { cwd, relativePath })),
     diff: (cwd: string, baseRef?: string) =>
       runtime.runPromise(
         request(WS_METHODS.reviewGetDiffPreview, { cwd, ...(baseRef ? { baseRef } : {}) }),
