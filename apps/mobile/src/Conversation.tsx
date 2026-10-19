@@ -4,6 +4,7 @@ import {
   Animated,
   FlatList,
   Linking,
+  Platform,
   Pressable,
   ScrollView,
   Text,
@@ -18,6 +19,7 @@ import {
   CommandId,
   ThreadId,
   type OrchestrationMessage,
+  type ProjectReadFileResult,
 } from "@t3tools/contracts";
 import { CloudClientError } from "@t3tools/client-runtime/cloud";
 import type { CloudCommand, CloudTask } from "@t3tools/contracts/cloud";
@@ -33,6 +35,7 @@ import {
 } from "./cloudState";
 import type { MobileCloud } from "./useCloud";
 import { Button, colors, Icon, IconButton, Sheet, styles } from "./ui";
+import { messageLink } from "./messageLinks";
 import { useReducedMotion } from "./motion";
 
 function MessageEntrance({ animate, children }: { animate: boolean; children: ReactNode }) {
@@ -130,6 +133,40 @@ export function Conversation({
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activity, setActivity] = useState<string | null>(null);
+  const [linkedFile, setLinkedFile] = useState<{
+    path: string;
+    result?: ProjectReadFileResult;
+    error?: string;
+  } | null>(null);
+  const fileRequest = useRef(0);
+  const openMessageLink = async (url: string) => {
+    try {
+      const link = messageLink(url, cloud.thread?.worktreePath ?? "/workspace/repository");
+      if (link.kind === "web") {
+        await Linking.openURL(link.url);
+        return;
+      }
+      const requestId = ++fileRequest.current;
+      setLinkedFile({ path: link.relativePath });
+      try {
+        if (!cloud.live.current || cloud.connectionStatus !== "connected")
+          throw new Error("Reconnect to the cloud workspace to open this file.");
+        const result = await cloud.live.current.readFile(link.cwd, link.relativePath);
+        if (fileRequest.current === requestId) setLinkedFile({ path: link.relativePath, result });
+      } catch (error) {
+        if (fileRequest.current === requestId)
+          setLinkedFile({
+            path: link.relativePath,
+            error: error instanceof Error ? error.message : "Could not open this file.",
+          });
+      }
+    } catch (error) {
+      Alert.alert(
+        "Cannot open link",
+        error instanceof Error ? error.message : "Could not open this link.",
+      );
+    }
+  };
   const [review, setReview] = useState(false);
   const [openFile, setOpenFile] = useState<string | null>(null);
   const [answers, setAnswers] = useState<Record<string, string>>({});
@@ -373,7 +410,7 @@ export function Conversation({
                   blockquote: { backgroundColor: colors.surface, borderLeftColor: colors.dim },
                 }}
                 onLinkPress={(url) => {
-                  if (/^https?:\/\//i.test(url)) void Linking.openURL(url);
+                  void openMessageLink(url);
                   return false;
                 }}
               >
@@ -575,6 +612,32 @@ export function Conversation({
                   {request.kind === "approval" ? "Approval needed" : "Your input is needed"}
                 </Text>
                 <Text style={styles.text}>{request.summary}</Text>
+                {request.kind === "approval" && (
+                  <View
+                    style={{
+                      backgroundColor: colors.background,
+                      borderRadius: 8,
+                      padding: 12,
+                      gap: 8,
+                    }}
+                  >
+                    <Text style={styles.muted}>{request.approval.label}</Text>
+                    <Text
+                      selectable
+                      style={[
+                        styles.text,
+                        {
+                          fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+                          fontSize: 13,
+                          lineHeight: 20,
+                        },
+                      ]}
+                    >
+                      {request.approval.detail ??
+                        "The provider did not include details for this request."}
+                    </Text>
+                  </View>
+                )}
                 {request.kind === "approval" ? (
                   <View style={styles.row}>
                     <Button
@@ -725,6 +788,40 @@ export function Conversation({
           settingsLocked={!cloud.overview?.capabilities?.followUpSettings}
         />
       </View>
+      {linkedFile && (
+        <Sheet
+          title={linkedFile.path}
+          onClose={() => {
+            fileRequest.current++;
+            setLinkedFile(null);
+          }}
+        >
+          {linkedFile.error ? (
+            <Text style={styles.error}>{linkedFile.error}</Text>
+          ) : linkedFile.result ? (
+            <>
+              {linkedFile.result.truncated && (
+                <Text style={styles.muted}>This large file is truncated.</Text>
+              )}
+              <Text
+                selectable
+                style={[
+                  styles.text,
+                  {
+                    fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+                    fontSize: 13,
+                    lineHeight: 20,
+                  },
+                ]}
+              >
+                {linkedFile.result.contents || "This file is empty."}
+              </Text>
+            </>
+          ) : (
+            <Text style={styles.muted}>Loading file…</Text>
+          )}
+        </Sheet>
+      )}
       {activity && (
         <Sheet title="Work activity" onClose={() => setActivity(null)}>
           {cloud.thread?.activities

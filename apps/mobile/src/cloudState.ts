@@ -59,22 +59,55 @@ export interface Question {
   question: string;
   options?: { label: string; description?: string }[];
 }
+export function approvalDetails(payload: {
+  requestKind?: unknown;
+  requestType?: unknown;
+  detail?: unknown;
+}) {
+  const kind = payload.requestKind ?? payload.requestType;
+  const label =
+    kind === "command" || kind === "command_execution_approval"
+      ? "Command"
+      : kind === "file-read" || kind === "file_read_approval"
+        ? "File to read"
+        : kind === "file-change" || kind === "file_change_approval"
+          ? "File change"
+          : "Requested action";
+  return {
+    label,
+    detail: typeof payload.detail === "string" && payload.detail.trim() ? payload.detail : null,
+  };
+}
+
 export function pendingRequests(thread: OrchestrationThread | null) {
   const requests = new Map<
     string,
-    { id: string; kind: "approval" | "question"; summary: string; questions: Question[] }
+    {
+      id: string;
+      kind: "approval" | "question";
+      summary: string;
+      questions: Question[];
+      approval: ReturnType<typeof approvalDetails>;
+    }
   >();
   const history = historicalActivityIds(thread?.activities ?? []);
   for (const activity of thread?.activities ?? []) {
     if (history.has(activity.id) || !activity.payload || typeof activity.payload !== "object")
       continue;
-    const payload = activity.payload as { requestId?: unknown; questions?: unknown };
+    const payload = activity.payload as {
+      requestId?: unknown;
+      questions?: unknown;
+      requestKind?: unknown;
+      requestType?: unknown;
+      detail?: unknown;
+    };
     if (typeof payload.requestId !== "string") continue;
     if (activity.kind === "approval.requested" || activity.kind === "user-input.requested")
       requests.set(payload.requestId, {
         id: payload.requestId,
         kind: activity.kind === "approval.requested" ? "approval" : "question",
         summary: activity.summary,
+        approval: approvalDetails(payload),
         questions: Array.isArray(payload.questions)
           ? payload.questions.filter(
               (question): question is Question =>
