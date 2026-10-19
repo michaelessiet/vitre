@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import { iso } from "./policy.ts";
-import { applyCommand, initialState } from "./state.ts";
+import { applyCommand, initialState, publicOverview } from "./state.ts";
 import {
   backfillProjects,
   projectSnapshot,
@@ -148,5 +148,144 @@ describe("durable cloud projects", () => {
       applyCommand(state, { ...create, projectId: "another" }, "copy", "copy", now, true),
     ).toThrow("unavailable");
     expect(state.tasks.copy).toBeUndefined();
+  });
+});
+
+describe("cloud project deletion", () => {
+  it("deletes only the selected project, cancels its work, and cannot be resurrected by backfill or late checkpoints", () => {
+    const state = fixture();
+    applyCommand(state, create, "copy", "copy", now, true);
+    state.tasks.other = {
+      ...structuredClone(state.tasks.source!),
+      id: "other",
+      projectId: "other-project",
+    };
+    backfillProjects(state);
+    const other = structuredClone(state.tasks.other);
+    const project = state.projects!["stable-project"]!;
+    const command = {
+      type: "project.delete" as const,
+      projectId: project.id,
+      expectedRevision: project.revision,
+      idempotencyKey: "delete-project",
+    };
+    expect(applyCommand(state, command, "delete-op", "delete-fingerprint", now, true)).toBe(
+      project.id,
+    );
+    expect(state.deletedTasks).toEqual(expect.arrayContaining(["source", "copy"]));
+    expect(state.tasks.source!.state).toBe("cancelled");
+    expect(Object.values(state.operations).filter((op) => op.kind === "delete")).toHaveLength(2);
+    expect(state.tasks.other).toEqual(other);
+    backfillProjects(state);
+    recordProjectSnapshot(state, state.tasks.source!, { ...project.latestSnapshot!, id: "late" });
+    expect(state.projects![project.id]).toBeUndefined();
+    expect(state.projectSnapshots![project.id]).toBeUndefined();
+    expect(publicOverview(state, true, now).tasks.map((t) => t.id)).toEqual(["other"]);
+    expect(() => projectSnapshots(state, project.id)).toThrow("not found");
+    expect(() =>
+      applyCommand(state, { ...create, idempotencyKey: "after-delete" }, "new", "new", now, true),
+    ).toThrow("unavailable");
+    const before = structuredClone(state);
+    expect(applyCommand(state, command, "retry", "delete-fingerprint", now, true)).toBe(project.id);
+    expect(state).toEqual(before);
+  });
+  it("rejects a stale confirmation or a project from another account without deleting work", () => {
+    const state = fixture();
+    const command = {
+      type: "project.delete" as const,
+      projectId: "stable-project",
+      expectedRevision: 999,
+      idempotencyKey: "delete",
+    };
+    const before = structuredClone(state);
+    expect(() => applyCommand(state, command, "op", "fp", now, true)).toThrow("Project changed");
+    expect(state).toEqual(before);
+    expect(() => applyCommand(initialState(), command, "op", "fp", now, true)).toThrow("not found");
+  });
+  it("blocks deletion while a project conversation is moving", () => {
+    const state = fixture();
+    state.tasks.source!.handoff = {
+      operationId: "moving",
+      conversationId: "conversation",
+      generation: 0,
+      history: { sha256: "a".repeat(64), sizeBytes: 1, chunks: [] },
+    };
+    state.handoffs = {
+      moving: {
+        id: "moving",
+        conversationId: "conversation",
+        from: "local",
+        to: "cloud-local",
+        generation: 0,
+        phase: "transferring",
+        checkpoint: null,
+        error: null,
+      },
+    };
+    const project = state.projects!["stable-project"]!;
+    expect(() =>
+      applyCommand(
+        state,
+        {
+          type: "project.delete",
+          projectId: project.id,
+          expectedRevision: project.revision,
+          idempotencyKey: "delete",
+        },
+        "op",
+        "fp",
+        now,
+        true,
+      ),
+    ).toThrow("finish moving");
+    expect(state.deletedTasks).toEqual([]);
+    expect(state.projects![project.id]).toBeDefined();
+  });
+  it("deletes legacy tasks by identity even before a handoff has populated projectId", () => {
+    const state = fixture();
+    const source = state.tasks.source!;
+    delete source.projectId;
+    state.projects!.source = { ...state.projects!["stable-project"]!, id: "source" };
+    source.handoff = {
+      operationId: "old",
+      conversationId: "conversation",
+      generation: 0,
+      history: { sha256: "a".repeat(64), sizeBytes: 1, chunks: [] },
+    };
+    applyCommand(
+      state,
+      {
+        type: "project.delete",
+        projectId: "source",
+        expectedRevision: state.projects!.source.revision,
+        idempotencyKey: "delete",
+      },
+      "op",
+      "fp",
+      now,
+      true,
+    );
+    expect(state.deletedTasks).toContain("source");
+  });
+  it("retains an archive pinned by an independent conversation after registry references are removed", () => {
+    const state = fixture();
+    applyCommand(state, create, "copy", "copy", now, true);
+    state.tasks.copy!.projectSnapshot = {
+      ...state.tasks.copy!.projectSnapshot!,
+      checkpoint: {
+        id: "saved",
+        taskId: "source",
+        attemptId: "source-1",
+        sequence: 1,
+        objectKey: "archive",
+        sizeBytes: 100,
+        sha256: "a".repeat(64),
+        createdAt: iso(now),
+      },
+    };
+    delete state.projectSnapshots;
+    expect(referencesTaskArtifacts(state, "source")).toBe(true);
+    state.deletedTasks.push("copy");
+    expect(referencesTaskArtifacts(state, "source")).toBe(false);
   });
 });

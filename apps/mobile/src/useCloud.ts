@@ -5,7 +5,7 @@ import * as Schema from "effect/Schema";
 import { OrchestrationThread, ServerConfig } from "@t3tools/contracts";
 import { CloudOverview, type CloudCommand } from "@t3tools/contracts/cloud";
 import { makeCloudClient, type CloudClient } from "@t3tools/client-runtime/cloud";
-import { acceptHistory, acceptOverview } from "./cloudState";
+import { acceptHistory, acceptOverview, taskProgress } from "./cloudState";
 import { accountStorage } from "./storage";
 import { openConversation, type ConversationConnection } from "./runtime";
 
@@ -184,7 +184,7 @@ export function useCloud(
         if (cancelled) return;
         const decoded = decodeThread(feed.conversation);
         if (decoded._tag === "Some") receiveThread(decoded.value);
-        setProgress(feed.events.findLast((event) => event.detail)?.detail ?? "");
+        setProgress(taskProgress(feed.events, task));
         if (task?.result) {
           const result = await client.result(selectedId);
           if (!cancelled) {
@@ -205,7 +205,40 @@ export function useCloud(
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [client, selectedId, task?.result?.id, active, online, receiveThread, storage]);
+  }, [
+    client,
+    selectedId,
+    task?.attempt?.id,
+    task?.state,
+    task?.result?.id,
+    active,
+    online,
+    receiveThread,
+    storage,
+  ]);
+  // A failed/new selection must not prevent discovery from another ready worker.
+  const catalogTask = overview?.tasks.find(
+    (candidate) =>
+      candidate.worker?.state === "ready" &&
+      ["running", "waiting_for_input"].includes(candidate.state),
+  );
+  useEffect(() => {
+    if (
+      config ||
+      previewClient ||
+      !active ||
+      !online ||
+      !catalogTask ||
+      catalogTask.id === selectedId
+    )
+      return;
+    const connection = openConversation(client, catalogTask, storage, {
+      thread: () => {},
+      status: () => {},
+      config: setConfig,
+    });
+    return () => connection.dispose();
+  }, [config, previewClient, active, online, catalogTask?.id, selectedId, client, storage]);
   const command = useCallback(
     async (command: CloudCommand) => {
       if (!online || !active)

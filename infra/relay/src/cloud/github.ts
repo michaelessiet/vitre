@@ -223,20 +223,22 @@ export class GitHubCloudClient {
     return repositories;
   }
   async readAccess(repository: CloudRepository, now: number): Promise<string> {
-    const publicRepo = await this.publicRepository(repository.owner, repository.name);
-    if (repository.installationId === "public" && (!publicRepo || publicRepo.id !== repository.id))
+    // Connected repositories use their scoped installation credential. Anonymous
+    // requests share an IP quota at the edge and must not gate connected access.
+    const token =
+      repository.installationId === "public" ? "" : await this.repositoryToken(repository, now);
+    const metadata = token
+      ? ((await this.request(
+          `/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.name)}`,
+          token,
+        )) as { id?: unknown })
+      : await this.publicRepository(repository.owner, repository.name);
+    if (!metadata)
       throw new CloudError(
         "repository_private",
         "Repository is no longer public; connect GitHub access",
         403,
       );
-    const token = publicRepo ? "" : await this.repositoryToken(repository, now);
-    const metadata =
-      publicRepo ??
-      ((await this.request(
-        `/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.name)}`,
-        token,
-      )) as { id?: unknown });
     if (String(metadata.id) !== repository.id)
       throw new CloudError(
         "repository_changed",

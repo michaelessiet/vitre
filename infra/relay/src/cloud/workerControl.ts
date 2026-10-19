@@ -342,15 +342,20 @@ export const make = Effect.gen(function* () {
             ? { sha: null, token: "" }
             : snapshotHead
               ? { sha: snapshotHead, token: "" }
-              : yield* fromPromise(() =>
-                  github.resolve(
-                    task.repository,
-                    task.source?.kind === "github"
-                      ? task.source.revision
-                      : (task.baseSha ?? task.baseBranch),
-                    now,
-                  ),
-                );
+              : task.baseSha
+                ? {
+                    sha: task.baseSha,
+                    token: yield* fromPromise(() => github.readAccess(task.repository, now)),
+                  }
+                : yield* fromPromise(() =>
+                    github.resolve(
+                      task.repository,
+                      task.source?.kind === "github"
+                        ? task.source.revision
+                        : (task.baseSha ?? task.baseBranch),
+                      now,
+                    ),
+                  );
       yield* store.mutate(config.allowedUserId, (doc) => {
         const t = taskFor(doc.state, taskId);
         if (t.attempt?.id !== attempt.id || t.state !== "preparing")

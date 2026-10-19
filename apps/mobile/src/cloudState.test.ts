@@ -1,6 +1,7 @@
 import { expect, it } from "vite-plus/test";
 import { makeShowcaseClient } from "./showcase";
 import {
+  taskProgress,
   acceptHistory,
   acceptOverview,
   cloudOwned,
@@ -53,4 +54,66 @@ it("removes resolved input requests and groups unified diff files", async () => 
   expect(
     diffFiles("diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-old\n+new\n"),
   ).toMatchObject([{ name: "a.ts", additions: 1, deletions: 1 }]);
+});
+
+it("does not show a previous preparation failure while retrying", async () => {
+  const task = (await makeShowcaseClient().overview()).tasks[0]!;
+  const events = [
+    {
+      cursor: 1,
+      attemptId: "old",
+      sequence: 1,
+      phase: "failed",
+      detail: "GitHub unavailable",
+      createdAt: "",
+    },
+  ];
+  expect(
+    taskProgress(events, {
+      ...task,
+      state: "preparing",
+      attempt: {
+        id: "new",
+        generation: 2,
+        startedAt: "",
+        deadlineAt: "",
+        heartbeatAt: "",
+        lastSequence: 0,
+        reservedMicroDollars: 0,
+        billedThrough: "",
+      },
+    }),
+  ).toBe("");
+  expect(
+    taskProgress(events, {
+      ...task,
+      state: "queued",
+      attempt: {
+        id: "old",
+        generation: 1,
+        startedAt: "",
+        deadlineAt: "",
+        heartbeatAt: "",
+        lastSequence: 1,
+        reservedMicroDollars: 0,
+        billedThrough: "",
+      },
+    }),
+  ).toBe("");
+  expect(
+    taskProgress(events, {
+      ...task,
+      state: "failed",
+      attempt: {
+        id: "old",
+        generation: 1,
+        startedAt: "",
+        deadlineAt: "",
+        heartbeatAt: "",
+        lastSequence: 1,
+        reservedMicroDollars: 0,
+        billedThrough: "",
+      },
+    }),
+  ).toBe("GitHub unavailable");
 });

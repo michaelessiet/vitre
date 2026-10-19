@@ -381,6 +381,68 @@ describe("cloud account and credential boundaries", () => {
       }
     }),
   );
+  it.effect("bootstraps the accepted Git commit without resolving the branch again", () =>
+    Effect.gen(function* () {
+      const fetch = vi.fn(async (_url: string | URL | Request) =>
+        Response.json({
+          id: 123,
+          private: false,
+          owner: { login: "owner" },
+          name: "repo",
+          default_branch: "main",
+        }),
+      );
+      vi.stubGlobal("fetch", fetch);
+      const f = fixture();
+      f.state().state.accounts.codex.state = "connected";
+      f.state().state.repositories.repo = {
+        id: "123",
+        installationId: "public",
+        owner: "owner",
+        name: "repo",
+        defaultBranch: "main",
+        setupCommand: "",
+        testCommand: "",
+        revision: 1,
+      };
+      yield* f.store.mutate("user", (doc) => {
+        applyCommand(
+          doc.state,
+          {
+            type: "task.create",
+            idempotencyKey: "create",
+            repositoryId: "repo",
+            baseBranch: "main",
+            provider: "codex",
+            kind: "ask",
+            prompt: "Explain",
+            issueNumber: null,
+          },
+          "task",
+          "create",
+          0,
+          true,
+        );
+        doc.state.tasks.task!.baseSha = "a".repeat(40);
+        schedule(doc.state, 0, true, false);
+      });
+      const token = "worker-token";
+      const hash = yield* Effect.promise(() => sha256(token));
+      const vault = new CredentialVault(f.config.encryptionKey);
+      const sealed = yield* Effect.promise(() => vault.seal(token, "user:worker:task"));
+      const endpoint = yield* Effect.promise(() => vault.seal("{}", "user:endpoint:task"));
+      yield* f.store.mutate("user", (doc) => {
+        doc.private.workerTokens.task = { hash, sealed };
+        doc.private.endpoints.task = endpoint;
+      });
+      const bootstrap = yield* f.run(
+        CloudWorkerControl.pipe(Effect.flatMap((control) => control.bootstrap("task", token))),
+      );
+      expect(bootstrap.task.baseSha).toBe("a".repeat(40));
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(String(fetch.mock.calls[0]?.[0])).not.toContain("/commits/");
+    }),
+  );
   it.effect(
     "starts an owned uploaded Git repository without upstream access, preserving unpublished HEAD",
     () =>
