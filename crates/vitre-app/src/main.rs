@@ -206,6 +206,8 @@ fn main() {
         // `highlight` block is the editor half, transcribed from the
         // CodeMirror theme (codemirror/theme.ts) — without it the editor keeps
         // gpui-component's default *light* highlight theme in both modes.
+        // Editor and gutter backgrounds stay clear so the containing pane's
+        // glass tint controls their opacity along with the rest of the UI.
         ThemeRegistry::global_mut(cx)
             .load_themes_from_str(include_str!("../themes/vitre.json"))
             .expect("vitre.json parses");

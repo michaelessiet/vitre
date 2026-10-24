@@ -340,6 +340,23 @@ fn editor_gutter_bounds(
     }
 }
 
+// vitre: Clip scrolling content at the fixed gutter even when its background
+// is transparent. Keep the enclosing mask's vertical and right edges unchanged.
+fn editor_text_mask(
+    mut bounds: Bounds<Pixels>,
+    input_bounds: Bounds<Pixels>,
+    line_number_width: Pixels,
+) -> Option<gpui::ContentMask<Pixels>> {
+    if line_number_width <= px(0.) {
+        return None;
+    }
+
+    let left = (input_bounds.origin.x + line_number_width).clamp(bounds.origin.x, bounds.right());
+    bounds.size.width = bounds.right() - left;
+    bounds.origin.x = left;
+    Some(gpui::ContentMask { bounds })
+}
+
 use super::MASK_CHAR;
 
 /// Convert a byte offset in the original text to a byte offset in the masked display string.
@@ -2582,243 +2599,251 @@ impl<M: InputModeKind> Element for TextElement<M> {
             editor_style.background
         };
 
-        // Paint active line
-        let mut offset_y = px(0.);
-        if let Some(line_numbers) = prepaint.line_numbers.as_ref() {
-            offset_y += invisible_top_padding;
+        let text_mask = editor_text_mask(
+            window.content_mask().bounds,
+            input_bounds,
+            prepaint.last_layout.line_number_width,
+        );
+        let cursor_row_y = window.with_content_mask(text_mask, |window| {
+            // Paint active line
+            let mut offset_y = px(0.);
+            if let Some(line_numbers) = prepaint.line_numbers.as_ref() {
+                offset_y += invisible_top_padding;
 
-            // Each item is the normal lines.
-            for (lines, &buffer_line) in line_numbers
-                .iter()
-                .zip(prepaint.last_layout.visible_buffer_lines.iter())
-            {
-                let is_active = prepaint.current_row == Some(buffer_line);
-                let p = point(input_bounds.origin.x, origin.y + offset_y);
-                let height = line_height * lines.len() as f32;
-                // Paint the current line background
-                if is_active {
-                    if let Some(bg_color) = active_line_color {
+                // Each item is the normal lines.
+                for (lines, &buffer_line) in line_numbers
+                    .iter()
+                    .zip(prepaint.last_layout.visible_buffer_lines.iter())
+                {
+                    let is_active = prepaint.current_row == Some(buffer_line);
+                    let p = point(input_bounds.origin.x, origin.y + offset_y);
+                    let height = line_height * lines.len() as f32;
+                    // Paint the current line background
+                    if is_active {
+                        if let Some(bg_color) = active_line_color {
+                            window.paint_quad(fill(
+                                Bounds::new(p, size(bounds.size.width, height)),
+                                bg_color,
+                            ));
+                        }
+                    }
+                    offset_y += height;
+                }
+            }
+
+            // Paint the revealed-line band over the active-line fill: a line that
+            // is both takes the reveal colour, which is how the two CodeMirror
+            // theme rules resolve (`.cm-reveal-line` is declared after
+            // `.cm-activeLine`, and they have equal specificity).
+            if let Some(highlight) = line_highlight.as_ref() {
+                let mut offset_y = invisible_top_padding;
+                for (line, &buffer_line) in prepaint
+                    .last_layout
+                    .lines
+                    .iter()
+                    .zip(prepaint.last_layout.visible_buffer_lines.iter())
+                {
+                    let height = line_height * line.wrapped_lines.len().max(1) as f32;
+                    if highlight.contains(buffer_line) {
                         window.paint_quad(fill(
-                            Bounds::new(p, size(bounds.size.width, height)),
-                            bg_color,
+                            Bounds::new(
+                                point(input_bounds.origin.x, origin.y + offset_y),
+                                size(bounds.size.width, height),
+                            ),
+                            highlight.color(),
                         ));
                     }
+                    offset_y += height;
                 }
-                offset_y += height;
             }
-        }
 
-        // Paint the revealed-line band over the active-line fill: a line that
-        // is both takes the reveal colour, which is how the two CodeMirror
-        // theme rules resolve (`.cm-reveal-line` is declared after
-        // `.cm-activeLine`, and they have equal specificity).
-        if let Some(highlight) = line_highlight.as_ref() {
+            // Paint indent guides
+            if let Some(path) = prepaint.indent_guides_path.take() {
+                window.paint_path(path, editor_style.border.opacity(0.85));
+            }
+
+            // Paint selections
+            if window.is_window_active() {
+                let secondary_selection = Hsla {
+                    s: 0.1,
+                    ..editor_style.selection
+                };
+                for (path, is_active) in prepaint.search_match_paths.iter() {
+                    window.paint_path(path.clone(), secondary_selection);
+
+                    if *is_active {
+                        window.paint_path(path.clone(), editor_style.selection);
+                    }
+                }
+
+                if let Some(path) = prepaint.selection_path.take() {
+                    window.paint_path(path, editor_style.selection);
+                }
+                for range in &self.state.read(cx).secondary_selections {
+                    let visible = &prepaint.last_layout.visible_range_offset;
+                    let range = range.start.max(visible.start)..range.end.min(visible.end);
+                    if range.start < range.end
+                        && let Some(path) =
+                            Self::layout_match_range(range, &prepaint.last_layout, &bounds)
+                    {
+                        window.paint_path(path, editor_style.selection);
+                    }
+                }
+
+                // Paint hover highlight
+                if let Some(path) = prepaint.hover_highlight_path.take() {
+                    window.paint_path(path, secondary_selection);
+                }
+            }
+
+            // Paint the modal block cursor *under* the text, so the character it
+            // covers keeps its own syntax colour on top of it — the block reads as
+            // a cursor sitting on a glyph rather than as another selection. Unfocused
+            // it hollows out to an outline instead of vanishing, so the caret stays
+            // findable when the editor is not the focused pane.
+            if let Some((cursor_bounds, color)) = prepaint.block_cursor {
+                if focused && window.is_window_active() {
+                    window.paint_quad(fill(cursor_bounds, color));
+                } else {
+                    window.paint_quad(gpui::outline(
+                        cursor_bounds,
+                        color,
+                        gpui::BorderStyle::Solid,
+                    ));
+                }
+            }
+
+            // Paint document colors
+            for (path, color) in prepaint.document_color_paths.iter() {
+                let color = if disabled { color.opacity(0.5) } else { *color };
+                window.paint_path(path.clone(), color);
+            }
+
+            // Paint text with inline completion ghost line support
             let mut offset_y = invisible_top_padding;
+            let ghost_lines = &prepaint.ghost_lines;
+            let has_ghost_lines = !ghost_lines.is_empty();
+
+            // Keep scrollbar offset always be positive，Start from the left position
+            let scroll_offset = if text_align == TextAlign::Right {
+                (prepaint.scroll_size.width - prepaint.bounds.size.width).max(px(0.))
+            } else if text_align == TextAlign::Center {
+                (prepaint.scroll_size.width - prepaint.bounds.size.width)
+                    .half()
+                    .max(px(0.))
+            } else {
+                px(0.)
+            };
+
+            // Track the y-position of the cursor row for positioning the first line suffix
+            let mut cursor_row_y = None;
+
             for (line, &buffer_line) in prepaint
                 .last_layout
                 .lines
                 .iter()
                 .zip(prepaint.last_layout.visible_buffer_lines.iter())
             {
-                let height = line_height * line.wrapped_lines.len().max(1) as f32;
-                if highlight.contains(buffer_line) {
-                    window.paint_quad(fill(
-                        Bounds::new(
-                            point(input_bounds.origin.x, origin.y + offset_y),
-                            size(bounds.size.width, height),
-                        ),
-                        highlight.color(),
-                    ));
+                let row = buffer_line;
+                let line_y = origin.y + offset_y;
+                let p = point(
+                    origin.x + prepaint.last_layout.line_number_width + (scroll_offset),
+                    line_y,
+                );
+
+                // Paint the actual line
+                _ = line.paint(
+                    p,
+                    line_height,
+                    text_align,
+                    Some(prepaint.last_layout.content_width),
+                    window,
+                    cx,
+                );
+                offset_y += line.size(line_height).height;
+
+                if Some(row) == prepaint.current_row {
+                    cursor_row_y = Some(line_y);
                 }
-                offset_y += height;
-            }
-        }
 
-        // Paint indent guides
-        if let Some(path) = prepaint.indent_guides_path.take() {
-            window.paint_path(path, editor_style.border.opacity(0.85));
-        }
+                // After the cursor row, paint ghost lines (which shifts subsequent content down)
+                if has_ghost_lines && Some(row) == prepaint.current_row {
+                    let ghost_x = origin.x + prepaint.last_layout.line_number_width;
 
-        // Paint selections
-        if window.is_window_active() {
-            let secondary_selection = Hsla {
-                s: 0.1,
-                ..editor_style.selection
-            };
-            for (path, is_active) in prepaint.search_match_paths.iter() {
-                window.paint_path(path.clone(), secondary_selection);
+                    for ghost_line in ghost_lines {
+                        let ghost_p = point(ghost_x, origin.y + offset_y);
 
-                if *is_active {
-                    window.paint_path(path.clone(), editor_style.selection);
-                }
-            }
+                        // Paint semi-transparent background for ghost line
+                        let ghost_bounds = Bounds::new(
+                            ghost_p,
+                            size(
+                                bounds.size.width - prepaint.last_layout.line_number_width,
+                                line_height,
+                            ),
+                        );
+                        window.paint_quad(fill(ghost_bounds, editor_background));
 
-            if let Some(path) = prepaint.selection_path.take() {
-                window.paint_path(path, editor_style.selection);
-            }
-            for range in &self.state.read(cx).secondary_selections {
-                let visible = &prepaint.last_layout.visible_range_offset;
-                let range = range.start.max(visible.start)..range.end.min(visible.end);
-                if range.start < range.end
-                    && let Some(path) =
-                        Self::layout_match_range(range, &prepaint.last_layout, &bounds)
-                {
-                    window.paint_path(path, editor_style.selection);
-                }
-            }
-
-            // Paint hover highlight
-            if let Some(path) = prepaint.hover_highlight_path.take() {
-                window.paint_path(path, secondary_selection);
-            }
-        }
-
-        // Paint the modal block cursor *under* the text, so the character it
-        // covers keeps its own syntax colour on top of it — the block reads as
-        // a cursor sitting on a glyph rather than as another selection. Unfocused
-        // it hollows out to an outline instead of vanishing, so the caret stays
-        // findable when the editor is not the focused pane.
-        if let Some((cursor_bounds, color)) = prepaint.block_cursor {
-            if focused && window.is_window_active() {
-                window.paint_quad(fill(cursor_bounds, color));
-            } else {
-                window.paint_quad(gpui::outline(
-                    cursor_bounds,
-                    color,
-                    gpui::BorderStyle::Solid,
-                ));
-            }
-        }
-
-        // Paint document colors
-        for (path, color) in prepaint.document_color_paths.iter() {
-            let color = if disabled { color.opacity(0.5) } else { *color };
-            window.paint_path(path.clone(), color);
-        }
-
-        // Paint text with inline completion ghost line support
-        let mut offset_y = invisible_top_padding;
-        let ghost_lines = &prepaint.ghost_lines;
-        let has_ghost_lines = !ghost_lines.is_empty();
-
-        // Keep scrollbar offset always be positive，Start from the left position
-        let scroll_offset = if text_align == TextAlign::Right {
-            (prepaint.scroll_size.width - prepaint.bounds.size.width).max(px(0.))
-        } else if text_align == TextAlign::Center {
-            (prepaint.scroll_size.width - prepaint.bounds.size.width)
-                .half()
-                .max(px(0.))
-        } else {
-            px(0.)
-        };
-
-        // Track the y-position of the cursor row for positioning the first line suffix
-        let mut cursor_row_y = None;
-
-        for (line, &buffer_line) in prepaint
-            .last_layout
-            .lines
-            .iter()
-            .zip(prepaint.last_layout.visible_buffer_lines.iter())
-        {
-            let row = buffer_line;
-            let line_y = origin.y + offset_y;
-            let p = point(
-                origin.x + prepaint.last_layout.line_number_width + (scroll_offset),
-                line_y,
-            );
-
-            // Paint the actual line
-            _ = line.paint(
-                p,
-                line_height,
-                text_align,
-                Some(prepaint.last_layout.content_width),
-                window,
-                cx,
-            );
-            offset_y += line.size(line_height).height;
-
-            if Some(row) == prepaint.current_row {
-                cursor_row_y = Some(line_y);
-            }
-
-            // After the cursor row, paint ghost lines (which shifts subsequent content down)
-            if has_ghost_lines && Some(row) == prepaint.current_row {
-                let ghost_x = origin.x + prepaint.last_layout.line_number_width;
-
-                for ghost_line in ghost_lines {
-                    let ghost_p = point(ghost_x, origin.y + offset_y);
-
-                    // Paint semi-transparent background for ghost line
-                    let ghost_bounds = Bounds::new(
-                        ghost_p,
-                        size(
-                            bounds.size.width - prepaint.last_layout.line_number_width,
+                        // Paint ghost line text
+                        _ = ghost_line.paint(
+                            ghost_p,
                             line_height,
-                        ),
-                    );
-                    window.paint_quad(fill(ghost_bounds, editor_background));
-
-                    // Paint ghost line text
-                    _ = ghost_line.paint(
-                        ghost_p,
-                        line_height,
-                        text_align,
-                        Some(prepaint.last_layout.content_width),
-                        window,
-                        cx,
-                    );
-                    offset_y += line_height;
-                }
-            }
-        }
-
-        // Paint blinking cursor
-        if focused && show_cursor {
-            if let Some(cursor_bounds) = prepaint.cursor_bounds_with_scroll() {
-                window.paint_quad(fill(cursor_bounds, editor_style.caret));
-            }
-            let layout = &prepaint.last_layout;
-            for range in &self.state.read(cx).secondary_selections {
-                let mut offset_y = layout.visible_top;
-                for (&offset, line) in layout
-                    .visible_line_byte_offsets
-                    .iter()
-                    .zip(layout.lines.iter())
-                {
-                    if range.end >= offset && range.end <= offset + line.len() {
-                        if let Some(position) =
-                            line.position_for_index(range.end - offset, layout, false)
-                        {
-                            window.paint_quad(fill(
-                                Bounds::new(
-                                    bounds.origin
-                                        + point(
-                                            layout.line_number_width + position.x,
-                                            offset_y + position.y,
-                                        ),
-                                    size(px(1.5), layout.line_height),
-                                ),
-                                editor_style.caret,
-                            ));
-                        }
-                        break;
+                            text_align,
+                            Some(prepaint.last_layout.content_width),
+                            window,
+                            cx,
+                        );
+                        offset_y += line_height;
                     }
-                    offset_y += line.size(layout.line_height).height;
                 }
             }
-        }
+
+            // Paint blinking cursor
+            if focused && show_cursor {
+                if let Some(cursor_bounds) = prepaint.cursor_bounds_with_scroll() {
+                    window.paint_quad(fill(cursor_bounds, editor_style.caret));
+                }
+                let layout = &prepaint.last_layout;
+                for range in &self.state.read(cx).secondary_selections {
+                    let mut offset_y = layout.visible_top;
+                    for (&offset, line) in layout
+                        .visible_line_byte_offsets
+                        .iter()
+                        .zip(layout.lines.iter())
+                    {
+                        if range.end >= offset && range.end <= offset + line.len() {
+                            if let Some(position) =
+                                line.position_for_index(range.end - offset, layout, false)
+                            {
+                                window.paint_quad(fill(
+                                    Bounds::new(
+                                        bounds.origin
+                                            + point(
+                                                layout.line_number_width + position.x,
+                                                offset_y + position.y,
+                                            ),
+                                        size(px(1.5), layout.line_height),
+                                    ),
+                                    editor_style.caret,
+                                ));
+                            }
+                            break;
+                        }
+                        offset_y += line.size(layout.line_height).height;
+                    }
+                }
+            }
+
+            cursor_row_y
+        });
 
         // Paint line numbers
         let mut offset_y = px(0.);
         if let Some(line_numbers) = prepaint.line_numbers.as_ref() {
             offset_y += invisible_top_padding;
 
-            // The gutter is a fixed overlay above horizontally scrolling text.
-            // Always give it an opaque editor background when the theme does not
-            // provide a dedicated gutter color, and cover the complete gutter so
-            // text cannot show through its right-side spacing/fold-icon area.
+            // The gutter stays fixed while the clipped text scrolls beside it.
+            // Match the editor background when no dedicated color is supplied,
+            // including transparent themes that expose the containing surface.
             let gutter_bg = editor_style
                 .editor_gutter_background
                 .unwrap_or(editor_background);
@@ -2895,9 +2920,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
             }
         }
 
-        // Paint the git-diff marker column, on top of the gutter background
-        // painted above — that background is what keeps the column opaque
-        // while the text scrolls horizontally underneath it.
+        // Paint the git-diff marker column on top of the fixed gutter background.
         for mark in prepaint.diff_gutter.marks.iter() {
             match mark {
                 DiffGutterPaint::Bar {
@@ -2969,23 +2992,26 @@ impl<M: InputModeKind> Element for TextElement<M> {
         }
 
         // Paint inline completion first line suffix (after cursor on same line)
-        if focused {
-            if let Some(first_line) = &prepaint.ghost_first_line {
-                if let (Some(cursor_bounds), Some(cursor_row_y)) =
-                    (prepaint.cursor_bounds_with_scroll(), cursor_row_y)
-                {
-                    let first_line_x = cursor_bounds.origin.x + cursor_bounds.size.width;
-                    let p = point(first_line_x, cursor_row_y);
+        window.with_content_mask(text_mask, |window| {
+            if focused {
+                if let Some(first_line) = &prepaint.ghost_first_line {
+                    if let (Some(cursor_bounds), Some(cursor_row_y)) =
+                        (prepaint.cursor_bounds_with_scroll(), cursor_row_y)
+                    {
+                        let first_line_x = cursor_bounds.origin.x + cursor_bounds.size.width;
+                        let p = point(first_line_x, cursor_row_y);
 
-                    // Paint background to cover any existing text
-                    let bg_bounds = Bounds::new(p, size(first_line.width + px(4.), line_height));
-                    window.paint_quad(fill(bg_bounds, editor_background));
+                        // Paint background to cover any existing text
+                        let bg_bounds =
+                            Bounds::new(p, size(first_line.width + px(4.), line_height));
+                        window.paint_quad(fill(bg_bounds, editor_background));
 
-                    // Paint first line completion text
-                    _ = first_line.paint(p, line_height, text_align, None, window, cx);
+                        // Paint first line completion text
+                        _ = first_line.paint(p, line_height, text_align, None, window, cx);
+                    }
                 }
             }
-        }
+        });
 
         // The embedder's card paints last so it sits above the lines it
         // overlays, and after the state update above so a card that reads the
@@ -3343,6 +3369,29 @@ mod tests {
             ),
             Bounds::new(point(px(3.), px(18.)), size(px(55.), px(103.)))
         );
+    }
+
+    #[test]
+    fn test_editor_text_mask_keeps_scrolling_content_out_of_the_gutter() {
+        let input_bounds = Bounds::new(point(px(10.), px(20.)), size(px(300.), px(80.)));
+        let outer_mask = Bounds::new(point(px(3.), px(18.)), size(px(310.), px(103.)));
+        let mask = editor_text_mask(outer_mask, input_bounds, px(48.)).unwrap();
+
+        // The fixed gutter ends at x=58 regardless of the text's scroll offset.
+        // Keep the enclosing mask's other edges, including the editor padding.
+        assert_eq!(
+            mask.bounds,
+            Bounds::new(point(px(58.), px(18.)), size(px(255.), px(103.)))
+        );
+
+        let obscured_mask = Bounds::new(point(px(3.), px(18.)), size(px(40.), px(103.)));
+        assert_eq!(
+            editor_text_mask(obscured_mask, input_bounds, px(48.))
+                .unwrap()
+                .bounds,
+            Bounds::new(point(px(43.), px(18.)), size(px(0.), px(103.)))
+        );
+        assert_eq!(editor_text_mask(outer_mask, input_bounds, px(0.)), None);
     }
 
     #[test]
