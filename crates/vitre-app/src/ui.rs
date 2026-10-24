@@ -1,4 +1,13 @@
 //! Geometry shared by native navigation surfaces (logical pixels).
+
+#[cfg(test)]
+#[path = "ui/dialog_tests.rs"]
+mod dialog_tests;
+
+#[cfg(test)]
+#[path = "ui/frosted_surface_tests.rs"]
+mod frosted_surface_tests;
+
 pub(crate) const ICON: f32 = 16.;
 pub(crate) const TREE_ROW: f32 = 28.;
 pub(crate) const TREE_INDENT: f32 = 16.;
@@ -22,6 +31,71 @@ mod tests {
     }
 
     #[gpui::test]
+    fn quick_search_backdrop_dismissal_notifies_owner_and_allows_reopening(
+        cx: &mut TestAppContext,
+    ) {
+        use crate::palette::quick_search::{QuickSearch, QuickSearchEvent, QuickSearchMode};
+        use gpui_component::WindowExt as _;
+        use std::{cell::Cell, rc::Rc, time::Duration};
+
+        cx.update(gpui_component::init);
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let view = cx.new(|_| DialogProbe);
+            gpui_component::Root::new(view, window, cx)
+        });
+        let dismissed = Rc::new(Cell::new(0));
+        for (iteration, mode) in [QuickSearchMode::Open, QuickSearchMode::Content]
+            .into_iter()
+            .enumerate()
+        {
+            let search = cx.update(|window, cx| {
+                let search = QuickSearch::open(mode, None, None, vec![], vec![], window, cx);
+                let dismissed = dismissed.clone();
+                cx.subscribe(&search, move |_, event, _| {
+                    if matches!(event, QuickSearchEvent::Dismissed) {
+                        dismissed.set(dismissed.get() + 1);
+                    }
+                })
+                .detach();
+                search
+            });
+            cx.run_until_parked();
+            for _ in 0..20 {
+                cx.executor().advance_clock(Duration::from_millis(20));
+                cx.update(|window, cx| window.draw(cx).clear(cx));
+            }
+            let surface = cx.debug_bounds("dialog-surface-0").unwrap();
+            cx.simulate_click(surface.center(), Modifiers::default());
+            assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+            assert_eq!(dismissed.get(), iteration);
+
+            cx.simulate_click(point(px(8.), surface.center().y), Modifiers::default());
+            assert!(!cx.update(|window, cx| window.has_active_dialog(cx)));
+            assert_eq!(dismissed.get(), iteration + 1);
+            drop(search);
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+        }
+
+        // The query input owns keyboard focus; Escape must still reach the
+        // dialog after the pointer dismissal/reopen cycle.
+        let _search = cx.update(|window, cx| {
+            QuickSearch::open(
+                QuickSearchMode::Open,
+                None,
+                None,
+                vec![],
+                vec![],
+                window,
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.simulate_keystrokes("escape");
+        assert!(!cx.update(|window, cx| window.has_active_dialog(cx)));
+    }
+
+    #[gpui::test]
     fn dialog_resizes_both_axes_and_honors_reduced_motion(cx: &mut TestAppContext) {
         use gpui_component::WindowExt as _;
         use std::{cell::Cell, rc::Rc, time::Duration};
@@ -42,6 +116,10 @@ mod tests {
                     .content(move |body, _, _| body.child(div().h(px(height))))
             });
         });
+        // Appearance owns the entrance animation. The very first frame must
+        // already lay out the body at its natural height.
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(cx.debug_bounds("dialog-surface-0").unwrap().size.height >= px(120.));
         let frames = |cx: &mut gpui::VisualTestContext, count| {
             for _ in 0..count {
                 cx.executor().advance_clock(Duration::from_millis(20));
@@ -75,6 +153,22 @@ mod tests {
         let reduced = cx.debug_bounds("dialog-surface-0").unwrap();
         assert_eq!(reduced.size.width, px(360.));
         assert!(reduced.size.height < px(120.));
+
+        cx.update(|window, cx| window.close_dialog(cx));
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.update(|window, cx| {
+            window.open_dialog(cx, |dialog, _, _| {
+                dialog
+                    .p_0()
+                    .close_button(false)
+                    .content(|body, _, _| body.child(div().h(px(240.))))
+            });
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(
+            cx.debug_bounds("dialog-surface-0").unwrap().size.height >= px(240.),
+            "reduced motion opens the complete body on its first frame"
+        );
     }
 
     struct MarkdownProbe {

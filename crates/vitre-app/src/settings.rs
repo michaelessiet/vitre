@@ -1003,6 +1003,7 @@ pub fn apply_theme(theme: ThemeSetting, window: Option<&mut Window>, cx: &mut Ap
         ThemeSetting::Light => Theme::change(ThemeMode::Light, window, cx),
         ThemeSetting::Dark => Theme::change(ThemeMode::Dark, window, cx),
     }
+    crate::glass::apply_popup_theme(cx);
     if refresh_all {
         cx.refresh_windows();
     }

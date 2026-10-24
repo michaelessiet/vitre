@@ -1,5 +1,10 @@
 # AGENTS.md
 
+## GitHub Account
+
+- This is a personal project. Use only the `michaelessiet` GitHub account for repository access, pushes, pull requests, and other GitHub actions.
+- Verify the authenticated account before a GitHub action. Do not use work accounts for this repository.
+
 ## Default Application Target
 
 - Target Vitre (`crates/vitre-app`) for application changes unless the user explicitly specifies another application. Shared backend changes may be made when required to support Vitre.

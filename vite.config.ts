@@ -22,6 +22,10 @@ export default defineConfig({
     ignorePatterns: [
       ".reference",
       ".repos/**",
+      "third_party/gpui-frost/gpui/**",
+      "third_party/gpui-frost/gpui_apple/**",
+      "third_party/gpui-frost/gpui_macos/**",
+      "third_party/gpui-frost/gpui_platform/**",
       ".plans",
       ".alchemy",
       "dist",

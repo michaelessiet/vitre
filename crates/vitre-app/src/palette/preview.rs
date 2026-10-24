@@ -71,31 +71,24 @@ pub(super) enum PreviewFile {
     Error(SharedString),
 }
 
-/// The pane's outer column. Always mounted, zero-width when there is nothing
-/// to show, so the width transition has something to animate.
+/// The pane's outer column. Its width follows the dialog in the same frame,
+/// keeping result rows from reflowing through a separate opening animation.
 pub(super) fn pane(
     kind: PreviewKind,
     body: Option<AnyElement>,
-    window: &mut gpui::Window,
+    _window: &mut gpui::Window,
     cx: &mut App,
 ) -> AnyElement {
-    let width = gpui_base::motion::spring(
-        "quick-search-preview-width",
-        f32::from(kind.pane_width()),
-        gpui_base::motion::Spring::new(std::time::Duration::from_millis(260)),
-        window,
-        cx,
-    );
     let column = v_flex()
         .flex_none()
         .min_h_0()
-        .w(px(width.max(0.)))
+        .w(kind.pane_width())
         .overflow_hidden()
-        .bg(cx.theme().muted.opacity(0.3));
+        .bg(cx.theme().muted.opacity(0.12));
     match body {
         Some(body) if kind != PreviewKind::None => column
             .border_l_1()
-            .border_color(cx.theme().border)
+            .border_color(cx.theme().border.opacity(0.6))
             .child(body)
             .into_any_element(),
         _ => column.into_any_element(),
@@ -117,34 +110,47 @@ pub(super) fn thread_card(
         .and_then(|at| relative_time(&at.0));
 
     v_flex()
-        .gap_3()
+        .gap_4()
         .p_4()
-        .text_size(px(12.))
+        .text_xs()
         .child(
-            div()
-                .text_size(px(14.))
-                .font_medium()
-                .child(thread.title.0.clone()),
+            v_flex()
+                .gap_2()
+                .child(
+                    h_flex()
+                        .gap_1p5()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(Icon::new(IconName::MessageSquare).size_3())
+                        .child("Chat"),
+                )
+                .child(div().text_sm().font_medium().child(thread.title.0.clone())),
         )
         .child(
             v_flex()
-                .gap_1p5()
-                .text_color(cx.theme().muted_foreground)
-                .children(project_title.map(|title| div().child(format!("Project: {title}"))))
-                .children(branch.map(|branch| {
-                    h_flex()
-                        .gap_1()
-                        .child(Icon::new(IconName::GitBranch).size_3())
-                        .child(branch)
-                }))
-                .children(updated.map(|updated| div().child(format!("Updated {updated}"))))
-                .children(last_message.map(|at| div().child(format!("Last message {at}")))),
+                .gap_2()
+                .children(project_title.map(|title| metadata("Project", title.to_owned(), cx)))
+                .children(branch.map(|branch| metadata("Branch", branch, cx)))
+                .children(updated.map(|updated| metadata("Updated", updated, cx)))
+                .children(last_message.map(|at| metadata("Last message", at, cx))),
         )
         .into_any_element()
 }
 
-/// Electron's `MessagePreview`: thread title, a small uppercase role/time
-/// line, then the snippet with the query highlighted.
+fn metadata(label: &'static str, value: String, cx: &App) -> impl IntoElement {
+    h_flex()
+        .gap_3()
+        .justify_between()
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_color(cx.theme().muted_foreground)
+                .child(label),
+        )
+        .child(div().min_w_0().truncate().child(value))
+}
+
+/// A message preview: thread title, a quiet role/time line, then the snippet
+/// with the query highlighted.
 pub(super) fn message_card(
     hit: &OrchestrationMessageSearchMatch,
     query: &str,
@@ -164,18 +170,17 @@ pub(super) fn message_card(
     v_flex()
         .gap_3()
         .p_4()
-        .text_size(px(12.))
+        .text_xs()
         .child(
             div()
-                .text_size(px(14.))
+                .text_sm()
                 .font_medium()
                 .child(hit.thread_title.0.clone()),
         )
         .child(
             div()
-                .text_size(px(10.))
                 .text_color(cx.theme().muted_foreground)
-                .child(format!("{} · {when}", role.to_uppercase())),
+                .child(format!("{role} · {when}")),
         )
         .child(div().text_color(cx.theme().muted_foreground).child(
             StyledText::new(snippet).with_highlights(matched.map(|range| {

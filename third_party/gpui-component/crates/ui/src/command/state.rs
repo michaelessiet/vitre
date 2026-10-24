@@ -698,7 +698,8 @@ impl CommandState {
         div()
             .w_full()
             .px_2()
-            .py_1p5()
+            .pt_2()
+            .pb_1p5()
             .text_xs()
             .font_medium()
             .text_color(cx.theme().muted_foreground)
@@ -944,8 +945,9 @@ impl Render for CommandState {
                     div()
                         .flex_none()
                         .px_3()
+                        .py_1()
                         .border_b_1()
-                        .border_color(cx.theme().border)
+                        .border_color(cx.theme().border.opacity(0.6))
                         .child(
                             Input::new(&self.query_input)
                                 .map(|input| match prefix {

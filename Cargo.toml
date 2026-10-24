@@ -15,7 +15,7 @@ members = [
 default-members = ["crates/vitre-app"]
 # Vendored fork with its own inner workspace (see third_party/gpui-component/VENDOR.md);
 # its crates are consumed via path deps, sharing our resolution + [patch].
-exclude = ["third_party/gpui-component"]
+exclude = ["third_party/gpui-component", "third_party/gpui-frost"]
 
 [workspace.package]
 edition = "2024"
@@ -24,8 +24,11 @@ publish = false
 
 [workspace.dependencies]
 # --- zed pin (Apache-2.0 island only; see docs/vitre-licensing.md) ---
-gpui = { git = "https://github.com/zed-industries/zed", rev = "f66ed399cdde86092af8af3dc7b418abf45f37f8" }
+gpui = { git = "https://github.com/zed-industries/zed", rev = "f66ed399cdde86092af8af3dc7b418abf45f37f8", features = [
+  "scene-capture",
+] }
 gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "f66ed399cdde86092af8af3dc7b418abf45f37f8", features = [
+  "scene-capture",
   "font-kit",
   "runtime_shaders",
 ] }
@@ -135,6 +138,11 @@ tracing = "0.1"
 # The GPL `ztracing` crate inside the zed monorepo is replaced by a local MIT
 # no-op stub so no GPL code enters the build (zed issue #55470).
 [patch."https://github.com/zed-industries/zed"]
+# Production scene readback for frosted popups; no test-support feature.
+gpui = { path = "third_party/gpui-frost/gpui" }
+gpui_apple = { path = "third_party/gpui-frost/gpui_apple" }
+gpui_macos = { path = "third_party/gpui-frost/gpui_macos" }
+gpui_platform = { path = "third_party/gpui-frost/gpui_platform" }
 ztracing = { path = "third_party/ztracing" }
 
 [profile.dev]

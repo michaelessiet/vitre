@@ -189,6 +189,7 @@ fn main() {
     app.run(move |cx: &mut App| {
         gpui_tokio::init(cx);
         gpui_component::init(cx);
+        glass::install_popup_effect(cx);
 
         // T3 parity: the Electron app renders in DM Sans (OFL, vendored).
         if let Err(error) = cx.text_system().add_fonts(vec![

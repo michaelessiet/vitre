@@ -1,2 +1,11 @@
 # git autocrlf=true converts LF to CRLF on Windows, causing issues with oxfmt
 * text=auto eol=lf
+
+# Preserve upstream formatting and collapse copied GPUI sources in GitHub diffs.
+# Review the local renderer changes in gpui-frost/scene-capture.patch.
+third_party/gpui-frost/gpui/** linguist-vendored -whitespace
+third_party/gpui-frost/gpui_apple/** linguist-vendored -whitespace
+third_party/gpui-frost/gpui_macos/** linguist-vendored -whitespace
+third_party/gpui-frost/gpui_platform/** linguist-vendored -whitespace
+# Unified diffs use a single space for empty context lines.
+third_party/gpui-frost/scene-capture.patch whitespace=-blank-at-eol

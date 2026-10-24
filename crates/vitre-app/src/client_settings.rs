@@ -238,10 +238,15 @@ impl ClientSettings {
         if values == settings.values {
             return;
         }
+        let glass_changed = values.glass_opacity != settings.values.glass_opacity;
         cx.set_global(Self {
             values: values.clone(),
             path: path.clone(),
         });
+        if glass_changed {
+            crate::glass::apply_popup_theme(cx);
+            cx.refresh_windows();
+        }
         // Best-effort, like every other Vitre UI preference: a failed write is
         // not worth interrupting the session over.
         match serde_json::to_string_pretty(&values) {

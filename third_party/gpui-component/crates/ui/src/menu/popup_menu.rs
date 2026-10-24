@@ -1,6 +1,7 @@
 use crate::ThemeStyled as _;
 use crate::actions::{Cancel, Confirm, SelectDown, SelectUp};
 use crate::actions::{SelectLeft, SelectRight};
+use crate::frosted_surface::FrostedSurface;
 use crate::menu::menu_item::MenuItemElement;
 use crate::scroll::ScrollableElement;
 use crate::{ActiveTheme, ElementExt, Icon, IconName, Sizable as _, h_flex, v_flex};
@@ -1473,6 +1474,7 @@ impl Render for PopupMenu {
                 // TODO: When the menu is limited by `overflow_y_scroll`, the sub-menu will cannot be displayed.
                 this.vertical_scrollbar(&self.scroll_handle)
             })
+            .map(|surface| FrostedSurface::new("popup-menu-frosted-surface", surface, cx))
     }
 }
 
