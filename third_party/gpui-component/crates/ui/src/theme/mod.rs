@@ -90,6 +90,9 @@ pub struct Theme {
     /// rather than extending this legacy surface.
     #[serde(default)]
     pub tokens: ThemeTokens,
+    /// Optional application surface color for ordinary input fields.
+    #[serde(default)]
+    pub input_background_override: Option<Hsla>,
     pub highlight_theme: Arc<HighlightTheme>,
     pub light_theme: Rc<ThemeConfig>,
     pub dark_theme: Rc<ThemeConfig>,
@@ -315,6 +318,9 @@ impl Theme {
     /// otherwise use the `cx.theme().background` color.
     #[inline]
     pub fn input_background(&self) -> Hsla {
+        if let Some(background) = self.input_background_override {
+            return background;
+        }
         if self.is_dark() {
             self.input.mix_oklab(self.transparent, 0.3)
         } else {
@@ -581,6 +587,7 @@ impl From<&ThemeColor> for Theme {
             tokens: ThemeTokens::from(colors),
             light_theme: Rc::new(ThemeConfig::default()),
             dark_theme: Rc::new(ThemeConfig::default()),
+            input_background_override: None,
             highlight_theme: HighlightTheme::default_light(),
             sheet: SheetSettings::default(),
         }

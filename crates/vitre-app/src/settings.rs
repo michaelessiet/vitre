@@ -1003,7 +1003,7 @@ pub fn apply_theme(theme: ThemeSetting, window: Option<&mut Window>, cx: &mut Ap
         ThemeSetting::Light => Theme::change(ThemeMode::Light, window, cx),
         ThemeSetting::Dark => Theme::change(ThemeMode::Dark, window, cx),
     }
-    crate::glass::apply_popup_theme(cx);
+    crate::glass::apply_theme(cx);
     if refresh_all {
         cx.refresh_windows();
     }
@@ -1073,6 +1073,88 @@ impl gpui::EventEmitter<SettingsClosed> for SettingsPanel {}
 mod tests {
     use super::*;
     use gpui::TestAppContext;
+
+    #[gpui::test]
+    fn opacity_number_field_allows_partial_edits_and_commits_on_enter_or_blur(
+        cx: &mut TestAppContext,
+    ) {
+        use gpui_component::setting::{AnySettingField, RenderOptions};
+        use std::{cell::Cell, rc::Rc};
+
+        struct NumberProbe(Rc<dyn AnySettingField>);
+        impl Render for NumberProbe {
+            fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                div()
+                    .flex()
+                    .w(px(150.))
+                    .h(px(36.))
+                    .debug_selector(|| "opacity-field".into())
+                    .child(SettingItem::render_field(
+                        self.0.clone(),
+                        RenderOptions::new(),
+                        window,
+                        cx,
+                    ))
+            }
+        }
+
+        cx.update(gpui_component::init);
+        let value = Rc::new(Cell::new(80.));
+        let read = value.clone();
+        let write = value.clone();
+        let field = Rc::new(SettingField::number_input(
+            NumberFieldOptions {
+                min: 40.,
+                max: 100.,
+                step: 5.,
+            },
+            move |_| read.get(),
+            move |next, _| write.set(next),
+        ));
+        let (_probe, cx) = cx.add_window_view(|_, _| NumberProbe(field));
+        cx.update(|window, _| window.activate_window());
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let bounds = cx.debug_bounds("opacity-field").unwrap();
+        cx.simulate_click(bounds.center(), Default::default());
+        cx.update(|window, cx| {
+            assert!(
+                window.focused(cx).is_some(),
+                "input should be focused: {bounds:?}"
+            )
+        });
+        cx.simulate_keystrokes("cmd-a backspace");
+        assert_eq!(value.get(), 80., "clearing must not save the minimum");
+        cx.simulate_input("6");
+        assert_eq!(value.get(), 80., "a partial digit must remain editable");
+        cx.simulate_input("5");
+        assert_eq!(value.get(), 65., "typing 65 must not become 405 or 100");
+        cx.simulate_keystrokes("enter up");
+        assert_eq!(value.get(), 70., "step uses the configured five points");
+        cx.simulate_keystrokes("cmd-a backspace");
+        cx.simulate_input("2");
+        assert_eq!(value.get(), 70.);
+        cx.simulate_keystrokes("enter");
+        assert_eq!(value.get(), 40., "Enter clamps the completed value");
+        cx.simulate_keystrokes("cmd-a backspace");
+        cx.simulate_input("75");
+        cx.simulate_keystrokes("cmd-a backspace");
+        cx.update(|window, cx| {
+            window.blur(cx);
+            window.draw(cx).clear(cx);
+        });
+        assert_eq!(
+            value.get(),
+            75.,
+            "empty blur preserves the last accepted value"
+        );
+        cx.simulate_click(bounds.center(), Default::default());
+        cx.simulate_keystrokes("up");
+        assert_eq!(
+            value.get(),
+            80.,
+            "empty blur restores the displayed value too"
+        );
+    }
 
     /// With no environment attached there is nothing to read, and the rows the
     /// sidecar owns must not present contract defaults as the server's answer:
