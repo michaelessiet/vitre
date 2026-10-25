@@ -64,7 +64,7 @@ use super::add_project::{
     AddProjectStage, RemoteSource, SourceReadiness, ordered_provider_sources,
 };
 use super::rank::{normalize_search_text, rank_indices};
-use super::relative_time;
+use super::{chrome, relative_time};
 
 /// Electron's `RECENT_THREAD_LIMIT`.
 const RECENT_THREAD_LIMIT: usize = 12;
@@ -1122,6 +1122,7 @@ impl CommandPalette {
 
         let mut command = Command::new(&self.state)
             .bordered(false)
+            .bg(cx.theme().popover.opacity(0.))
             // Every row on screen already passed the Electron ranking; the
             // built-in substring filter would re-filter on the rendered label,
             // which our rows do not even carry.
@@ -1564,36 +1565,18 @@ fn footer_element(
     let picking = palette.picking;
     let owner = owner.clone();
 
-    let hint = |keys: &'static str, label: &'static str, cx: &App| {
-        h_flex()
-            .gap_1()
-            .items_center()
-            .child(
-                div()
-                    .rounded(px(3.))
-                    .px_1()
-                    .bg(cx.theme().muted)
-                    .text_color(cx.theme().foreground)
-                    .child(keys),
-            )
-            .child(label)
-    };
-    h_flex()
-        .w_full()
-        .gap_3()
-        .px_5()
-        .py_3()
-        .text_size(px(11.))
-        .text_color(cx.theme().muted_foreground)
-        .border_t_1()
-        .border_color(cx.theme().border)
-        .child(hint("↑↓", "Navigate", cx))
+    chrome::footer(cx)
+        .child(chrome::key_hint("↑↓", "Navigate", cx))
         .map(|this| match repo_label {
-            Some(label) => this.child(hint("Enter", label, cx)),
-            None => this.when(enter_select, |this| this.child(hint("Enter", "Select", cx))),
+            Some(label) => this.child(chrome::key_hint("Enter", label, cx)),
+            None => this.when(enter_select, |this| {
+                this.child(chrome::key_hint("Enter", "Select", cx))
+            }),
         })
-        .when(in_submenu, |this| this.child(hint("Backspace", "Back", cx)))
-        .child(hint("Esc", "Close", cx))
+        .when(in_submenu, |this| {
+            this.child(chrome::key_hint("Backspace", "Back", cx))
+        })
+        .child(chrome::key_hint("Esc", "Close", cx))
         .when(show_finder, |this| {
             this.child(
                 div().ml_auto().child(

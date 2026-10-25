@@ -13,6 +13,7 @@ use gpui_base::{
 use crate::{
     ActiveTheme, Placement, StyledExt,
     animation::{EffectTransition, ease_in_out_cubic, ease_out_cubic},
+    frosted_surface::FrostedSurface,
     kbd::Kbd,
     root::Root,
     text::Text,
@@ -138,7 +139,8 @@ impl Render for Tooltip {
                             .text_color(cx.theme().muted_foreground)
                             .child(kbd.appearance(false)),
                     )
-                }),
+                })
+                .map(|surface| FrostedSurface::new("tooltip-frosted-surface", surface, cx)),
         )
     }
 }

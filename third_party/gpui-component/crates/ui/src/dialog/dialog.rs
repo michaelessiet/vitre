@@ -11,14 +11,14 @@ use rust_i18n::t;
 
 use crate::{
     ActiveTheme as _, IconName, Root, Sizable as _, StyledExt, TITLE_BAR_HEIGHT, WindowExt as _,
-    animation::cubic_bezier,
+    animation::ease_out_cubic,
     button::{Button, ButtonVariant, ButtonVariants as _},
     dialog::{DialogContent, DialogTitle},
     scroll::ScrollableElement as _,
     v_flex,
 };
 
-pub static ANIMATION_DURATION: LazyLock<Duration> = LazyLock::new(|| Duration::from_secs_f64(0.25));
+pub static ANIMATION_DURATION: LazyLock<Duration> = LazyLock::new(|| Duration::from_millis(160));
 pub use gpui_base::actions::{Cancel, Confirm};
 
 /// Dialog button props.
@@ -529,7 +529,7 @@ impl RenderOnce for Dialog {
         let base_size = window.text_style().font_size;
         let rem_size = window.rem_size();
 
-        let mut paddings = Edges::all(px(16.));
+        let mut paddings = Edges::all(px(20.));
         if let Some(pl) = self.style.padding.left {
             paddings.left = pl.to_pixels(base_size, rem_size);
         }
@@ -542,22 +542,9 @@ impl RenderOnce for Dialog {
         if let Some(pb) = self.style.padding.bottom {
             paddings.bottom = pb.to_pixels(base_size, rem_size);
         }
-        // GPUI clips descendants to a rectangle, not the parent's rounded
-        // corners. Inset child backgrounds inside the curved edge, including
-        // dialogs whose caller requests zero padding (command/preview views).
-        let corner_inset = cx.theme().radius_lg * 0.3 + px(1.);
-        paddings = paddings.map(|padding| (*padding).max(corner_inset));
-
-        // x1 = 1/3, x2 = 2/3 make the bezier's time mapping the identity,
-        // preserving the trajectory this dialog was tuned with before
-        // `cubic_bezier` solved for x; vaul's (0.32, 0.72, 0., 1.) is far
-        // more front-loaded under the CSS-correct solver.
-        let animation = Animation::new(*ANIMATION_DURATION).with_easing(cubic_bezier(
-            1. / 3.,
-            0.72,
-            2. / 3.,
-            1.,
-        ));
+        // Borderless content owns its inner corners. Honoring zero padding
+        // avoids a second frame around command palettes and previews.
+        let animation = Animation::new(*ANIMATION_DURATION).with_easing(ease_out_cubic);
 
         anchored()
             .position(point(window_paddings.left, window_paddings.top))
@@ -605,9 +592,10 @@ impl RenderOnce for Dialog {
                                 v_flex()
                                     .id(layer_ix)
                                     .debug_selector(move || format!("dialog-surface-{layer_ix}"))
-                                    .bg(cx.theme().tokens.background)
+                                    .bg(cx.theme().popover)
+                                    .text_color(cx.theme().popover_foreground)
                                     .border_1()
-                                    .border_color(cx.theme().border)
+                                    .border_color(cx.theme().border.opacity(0.7))
                                     .rounded(cx.theme().radius_lg)
                                     .min_h_24()
                                     .pt(paddings.top)
@@ -625,53 +613,56 @@ impl RenderOnce for Dialog {
                                     .left(x)
                                     .top(y)
                                     .w(width)
-                                    .child(crate::animated_height::AnimatedHeight::new(
-                                        ("dialog-body", layer_ix),
-                                        v_flex()
-                                            .w_full()
-                                            .min_w_0()
-                                            .overflow_hidden()
-                                            .gap_y_2()
-                                            .when_some(self.header, |this, header| {
-                                                this.child(
-                                                    div()
-                                                        .pl(paddings.left)
-                                                        .pr(paddings.right)
-                                                        .child(header),
-                                                )
-                                            })
-                                            .when_some(self.title, |this, title| {
-                                                this.child(
-                                                    DialogTitle::new()
-                                                        .pl(paddings.left)
-                                                        .pr(paddings.right)
-                                                        .child(title),
-                                                )
-                                            })
-                                            .when_some(self.content_builder, |this, builder| {
-                                                this.child(builder(
-                                                    DialogContent::new()
-                                                        .gap(paddings.bottom)
-                                                        .pl(paddings.left)
-                                                        .pr(paddings.right),
-                                                    window,
-                                                    cx,
-                                                ))
-                                            })
-                                            .when(!self.children.is_empty(), |this| {
-                                                this.child(
-                                                    div().flex_1().overflow_hidden().child(
-                                                        // Body
-                                                        v_flex()
-                                                            .size_full()
-                                                            .overflow_y_scrollbar()
+                                    .child(
+                                        crate::animated_height::AnimatedHeight::new(
+                                            ("dialog-body", layer_ix),
+                                            v_flex()
+                                                .w_full()
+                                                .min_w_0()
+                                                .overflow_hidden()
+                                                .gap_y_2()
+                                                .when_some(self.header, |this, header| {
+                                                    this.child(
+                                                        div()
                                                             .pl(paddings.left)
                                                             .pr(paddings.right)
-                                                            .children(self.children),
-                                                    ),
-                                                )
-                                            }),
-                                    ))
+                                                            .child(header),
+                                                    )
+                                                })
+                                                .when_some(self.title, |this, title| {
+                                                    this.child(
+                                                        DialogTitle::new()
+                                                            .pl(paddings.left)
+                                                            .pr(paddings.right)
+                                                            .child(title),
+                                                    )
+                                                })
+                                                .when_some(self.content_builder, |this, builder| {
+                                                    this.child(builder(
+                                                        DialogContent::new()
+                                                            .gap(paddings.bottom)
+                                                            .pl(paddings.left)
+                                                            .pr(paddings.right),
+                                                        window,
+                                                        cx,
+                                                    ))
+                                                })
+                                                .when(!self.children.is_empty(), |this| {
+                                                    this.child(
+                                                        div().flex_1().overflow_hidden().child(
+                                                            // Body
+                                                            v_flex()
+                                                                .size_full()
+                                                                .overflow_y_scrollbar()
+                                                                .pl(paddings.left)
+                                                                .pr(paddings.right)
+                                                                .children(self.children),
+                                                        ),
+                                                    )
+                                                }),
+                                        )
+                                        .animate_initial(false),
+                                    )
                                     .when_some(self.footer, |this, footer| {
                                         this.child(
                                             div()
@@ -696,30 +687,40 @@ impl RenderOnce for Dialog {
                                             )
                                     }))
                                     .with_animation(
-                                        "slide-down",
+                                        "dialog-enter",
                                         animation.clone(),
                                         move |this, delta| {
-                                            // This is equivalent to `shadow_xl` with an extra opacity.
+                                            // GPUI fades primitives separately: keep the
+                                            // shadow faint until the glass surface settles.
+                                            let ink = 0.1 * delta * delta * delta;
                                             let shadow = vec![
                                                 BoxShadow {
-                                                    color: hsla(0., 0., 0., 0.1 * delta),
-                                                    offset: point(px(0.), px(20.)),
-                                                    blur_radius: px(25.),
+                                                    color: hsla(0., 0., 0., ink),
+                                                    offset: point(px(0.), px(12.)),
+                                                    blur_radius: px(12.),
                                                     spread_radius: px(-5.),
                                                     inset: false,
                                                 },
                                                 BoxShadow {
-                                                    color: hsla(0., 0., 0., 0.1 * delta),
-                                                    offset: point(px(0.), px(8.)),
-                                                    blur_radius: px(10.),
-                                                    spread_radius: px(-6.),
+                                                    color: hsla(0., 0., 0., ink),
+                                                    offset: point(px(0.), px(3.)),
+                                                    blur_radius: px(3.),
+                                                    spread_radius: px(-2.),
                                                     inset: false,
                                                 },
                                             ];
-                                            this.top(y * delta).shadow(shadow)
+                                            this.top(y + px(6. * (1. - delta))).shadow(shadow)
                                         },
                                     )
-                                    .text_selection_scope(selection_scope),
+                                    .text_selection_scope(selection_scope)
+                                    .map(|surface| {
+                                        crate::frosted_surface::FrostedSurface::new(
+                                            "dialog-frost",
+                                            surface,
+                                            cx,
+                                        )
+                                        .radius(cx.theme().radius_lg)
+                                    }),
                             ),
                     )
                     .with_animation("fade-in", animation, move |this, delta| this.opacity(delta)),

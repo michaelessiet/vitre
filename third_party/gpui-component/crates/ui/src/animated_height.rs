@@ -10,6 +10,7 @@ pub struct AnimatedHeight {
     id: ElementId,
     child: AnyElement,
     expanded: bool,
+    animate_initial: bool,
 }
 
 impl AnimatedHeight {
@@ -18,7 +19,15 @@ impl AnimatedHeight {
             id: id.into(),
             child: child.into_any_element(),
             expanded: true,
+            animate_initial: true,
         }
+    }
+
+    /// Whether the first measured height grows from zero. Disable this for
+    /// surfaces that already have their own appearance transition.
+    pub fn animate_initial(mut self, animate: bool) -> Self {
+        self.animate_initial = animate;
+        self
     }
 
     /// Collapse to zero while retaining content through the closing animation.
@@ -34,7 +43,7 @@ impl IntoElement for AnimatedHeight {
     }
 }
 impl Element for AnimatedHeight {
-    type RequestLayoutState = ();
+    type RequestLayoutState = Option<LayoutId>;
     type PrepaintState = ();
     fn id(&self) -> Option<ElementId> {
         Some(self.id.clone())
@@ -48,11 +57,26 @@ impl Element for AnimatedHeight {
         _: Option<&InspectorElementId>,
         window: &mut Window,
         cx: &mut App,
-    ) -> (LayoutId, ()) {
+    ) -> (LayoutId, Self::RequestLayoutState) {
         let height = window.with_element_state(id.unwrap(), |state: Option<Option<Pixels>>, _| {
             let height = state.flatten();
             (height, height)
         });
+        let mut style = Style::default();
+        style.size.width = relative(1.).into();
+        style.flex_shrink = 0.;
+
+        if height.is_none() && self.expanded && (!self.animate_initial || cx.reduce_motion()) {
+            // Include the content in the first layout so the surface opens at
+            // its natural size, even when reduced motion skips the fade. Do
+            // not initialize a spring at zero before this size is known.
+            let child_layout = self.child.request_layout(window, cx);
+            return (
+                window.request_layout(style, [child_layout], cx),
+                Some(child_layout),
+            );
+        }
+
         let height = gpui_base::motion::spring(
             self.id.clone(),
             if self.expanded {
@@ -64,29 +88,30 @@ impl Element for AnimatedHeight {
             window,
             cx,
         );
-        let mut style = Style::default();
-        style.size.width = relative(1.).into();
         style.size.height = px(height.max(0.)).into();
-        style.flex_shrink = 0.;
-        (window.request_layout(style, None, cx), ())
+        (window.request_layout(style, None, cx), None)
     }
     fn prepaint(
         &mut self,
         id: Option<&GlobalElementId>,
         _: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
-        _: &mut (),
+        child_layout: &mut Self::RequestLayoutState,
         window: &mut Window,
         cx: &mut App,
     ) {
-        let measured = self.child.layout_as_root(
-            size(
-                AvailableSpace::Definite(bounds.size.width),
-                AvailableSpace::MinContent,
-            ),
-            window,
-            cx,
-        );
+        let measured = if let Some(child_layout) = *child_layout {
+            window.layout_bounds(child_layout).size
+        } else {
+            self.child.layout_as_root(
+                size(
+                    AvailableSpace::Definite(bounds.size.width),
+                    AvailableSpace::MinContent,
+                ),
+                window,
+                cx,
+            )
+        };
         let changed = window.with_element_state(id.unwrap(), |state: Option<Option<Pixels>>, _| {
             (
                 state.flatten() != Some(measured.height),
@@ -97,7 +122,11 @@ impl Element for AnimatedHeight {
             window.request_animation_frame();
         }
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
-            self.child.prepaint_at(bounds.origin, window, cx)
+            if child_layout.is_some() {
+                self.child.prepaint(window, cx)
+            } else {
+                self.child.prepaint_at(bounds.origin, window, cx)
+            }
         });
     }
     fn paint(
@@ -105,7 +134,7 @@ impl Element for AnimatedHeight {
         _: Option<&GlobalElementId>,
         _: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
-        _: &mut (),
+        _: &mut Self::RequestLayoutState,
         _: &mut (),
         window: &mut Window,
         cx: &mut App,

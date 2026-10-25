@@ -9,6 +9,7 @@ use crate::ThemeStyled as _;
 use crate::{
     Selectable, StyledExt as _,
     animation::ease_out_cubic,
+    frosted_surface::FrostedSurface,
     styled::{popover_ring, popover_shadow},
     v_flex,
 };
@@ -89,15 +90,19 @@ pub(crate) fn dropdown_popup(
     // Read out here: the animation runs long after `cx` is gone.
     let ring = popover_ring(cx);
 
-    dropdown_positioner(bounds).child(surface.with_animation(
-        id,
-        Animation::new(DROPDOWN_ENTER_DURATION).with_easing(ease_out_cubic),
-        move |surface, delta| {
-            surface
-                .top(px(travel * (1. - delta)))
-                .opacity(delta)
-                .shadow(popover_shadow(ring, delta * delta * delta))
-        },
+    dropdown_positioner(bounds).child(FrostedSurface::new(
+        "dropdown-frosted-surface",
+        surface.with_animation(
+            id,
+            Animation::new(DROPDOWN_ENTER_DURATION).with_easing(ease_out_cubic),
+            move |surface, delta| {
+                surface
+                    .top(px(travel * (1. - delta)))
+                    .opacity(delta)
+                    .shadow(popover_shadow(ring, delta * delta * delta))
+            },
+        ),
+        cx,
     ))
 }
 
@@ -335,6 +340,14 @@ impl RenderOnce for Popover {
                                 })
                         },
                     )
+                    .map(|surface| {
+                        if appearance {
+                            FrostedSurface::new("popover-frosted-surface", surface, cx)
+                                .into_any_element()
+                        } else {
+                            surface.into_any_element()
+                        }
+                    })
             })
             .when_some(self.trigger, |this, trigger| this.trigger_with(trigger))
             .when_some(self.open, |this, open| this.open(open))

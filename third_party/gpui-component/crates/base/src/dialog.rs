@@ -544,6 +544,12 @@ impl RenderOnce for Dialog {
                         let request_close = request_close.clone();
                         this.child(
                             div()
+                                // The backdrop is commonly absolutely positioned.
+                                // Give its event owner a viewport-sized hitbox too.
+                                .absolute()
+                                .top_0()
+                                .left_0()
+                                .size_full()
                                 .on_any_mouse_down(move |event, window, cx| {
                                     if event.position.y < dismiss_below_y {
                                         return;

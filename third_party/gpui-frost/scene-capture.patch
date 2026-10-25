@@ -1,0 +1,287 @@
+--- a/crates/gpui/Cargo.toml
++++ b/crates/gpui/Cargo.toml
+@@ -17,6 +17,8 @@
+ workspace = true
+ 
+ [features]
++# vitre: capture our rendered scene without test-support or screen permissions.
++scene-capture = []
+ default = ["font-kit", "wayland", "x11", "windows-manifest"]
+ test-support = [
+     "leak-detection",
+@@ -167,95 +169,3 @@
+ ]
+ ignored-paths = ["src/_ownership_and_data_flow.rs"]
+ 
+-[[example]]
+-name = "hello_world"
+-path = "examples/hello_world.rs"
+-
+-[[example]]
+-name = "move_entity_between_windows"
+-path = "examples/move_entity_between_windows.rs"
+-
+-[[example]]
+-name = "image"
+-path = "examples/image/image.rs"
+-
+-[[example]]
+-name = "input"
+-path = "examples/input.rs"
+-
+-[[example]]
+-name = "on_window_close_quit"
+-path = "examples/on_window_close_quit.rs"
+-
+-[[example]]
+-name = "window_movable"
+-path = "examples/window_movable.rs"
+-
+-[[example]]
+-name = "opacity"
+-path = "examples/opacity.rs"
+-
+-[[example]]
+-name = "pattern"
+-path = "examples/pattern.rs"
+-
+-[[example]]
+-name = "set_menus"
+-path = "examples/set_menus.rs"
+-
+-[[example]]
+-name = "system_notifications"
+-path = "examples/system_notifications.rs"
+-
+-
+-[[example]]
+-name = "shadow"
+-path = "examples/shadow.rs"
+-
+-[[example]]
+-name = "svg"
+-path = "examples/svg/svg.rs"
+-
+-[[example]]
+-name = "tab_stop"
+-path = "examples/tab_stop.rs"
+-
+-[[example]]
+-name = "text"
+-path = "examples/text.rs"
+-
+-[[example]]
+-name = "text_wrapper"
+-path = "examples/text_wrapper.rs"
+-
+-[[example]]
+-name = "tree"
+-path = "examples/tree.rs"
+-
+-[[example]]
+-name = "uniform_list"
+-path = "examples/uniform_list.rs"
+-
+-[[example]]
+-name = "window_shadow"
+-path = "examples/window_shadow.rs"
+-
+-[[example]]
+-name = "grid_layout"
+-path = "examples/grid_layout.rs"
+-
+-[[example]]
+-name = "list_example"
+-path = "examples/list_example.rs"
+-
+-[[example]]
+-name = "mouse_pressure"
+-path = "examples/mouse_pressure.rs"
+-
+-[[example]]
+-name = "a11y"
+-path = "examples/a11y.rs"
+-
+-[[example]]
+-name = "view_example"
+-path = "examples/view_example/view_example_main.rs"
+--- a/crates/gpui/src/platform.rs
++++ b/crates/gpui/src/platform.rs
+@@ -47,7 +47,12 @@
+ use anyhow::{Context as _, Result};
+ use async_task::Runnable;
+ use futures::channel::oneshot;
+-#[cfg(any(test, feature = "test-support", feature = "bench-support"))]
++#[cfg(any(
++    test,
++    feature = "test-support",
++    feature = "bench-support",
++    feature = "scene-capture"
++))]
+ use image::RgbaImage;
+ use image::codecs::gif::GifDecoder;
+ use image::{AnimationDecoder as _, DynamicImage, Frame};
+@@ -985,9 +990,9 @@
+     }
+ 
+     /// Renders the given scene to a texture and returns the pixel data as an RGBA image.
+-    /// This does not present the frame to screen - useful for visual testing where we want
+-    /// to capture what would be rendered without displaying it or requiring the window to be visible.
+-    #[cfg(any(test, feature = "test-support"))]
++    /// This does not present the frame or capture other applications. Platforms
++    /// without scene readback retain the default unsupported error.
++    #[cfg(any(test, feature = "test-support", feature = "scene-capture"))]
+     fn render_to_image(&self, _scene: &Scene) -> Result<RgbaImage> {
+         anyhow::bail!("render_to_image not implemented for this platform")
+     }
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -2448,9 +2448,10 @@
+     }
+ 
+     /// Renders the current frame's scene to a texture and returns the pixel data as an RGBA image.
+-    /// This does not present the frame to screen - useful for visual testing where we want
+-    /// to capture what would be rendered without displaying it or requiring the window to be visible.
+-    #[cfg(any(test, feature = "test-support"))]
++    /// This does not present the frame or capture other applications. With the
++    /// `scene-capture` feature, application surfaces can reuse their completed
++    /// frame without enabling test infrastructure. Unsupported platforms return an error.
++    #[cfg(any(test, feature = "test-support", feature = "scene-capture"))]
+     pub fn render_to_image(&self) -> anyhow::Result<image::RgbaImage> {
+         self.platform_window
+             .render_to_image(&self.rendered_frame.scene)
+--- a/crates/gpui_apple/Cargo.toml
++++ b/crates/gpui_apple/Cargo.toml
+@@ -12,6 +12,8 @@
+ path = "src/gpui_apple.rs"
+ 
+ [features]
++# vitre: capture our rendered scene without test-support or screen permissions.
++scene-capture = ["gpui/scene-capture"]
+ default = []
+ bench-support = ["gpui/bench-support"]
+ test-support = ["gpui/test-support"]
+--- a/crates/gpui_apple/src/metal_renderer.rs
++++ b/crates/gpui_apple/src/metal_renderer.rs
+@@ -10,7 +10,12 @@
+     AtlasTextureId, Background, Bounds, ContentMask, DevicePixels, PaintSurface, Path, Point,
+     PrimitiveBatch, ScaledPixels, Scene, Size, point, size,
+ };
+-#[cfg(any(test, feature = "bench-support", feature = "test-support"))]
++#[cfg(any(
++    test,
++    feature = "bench-support",
++    feature = "test-support",
++    feature = "scene-capture"
++))]
+ use image::RgbaImage;
+ 
+ use core_foundation::base::TCFType;
+@@ -537,7 +542,7 @@
+     ///
+     /// Note: This requires a layer-backed renderer. For headless rendering,
+     /// use `render_scene_to_image()` instead.
+-    #[cfg(any(test, feature = "test-support"))]
++    #[cfg(any(test, feature = "test-support", feature = "scene-capture"))]
+     pub fn render_to_image(&mut self, scene: &Scene) -> Result<RgbaImage> {
+         let layer = self
+             .layer
+@@ -548,24 +553,21 @@
+             (viewport_size.width.ceil() as i32).into(),
+             (viewport_size.height.ceil() as i32).into(),
+         );
+-        let drawable = layer
+-            .next_drawable()
+-            .ok_or_else(|| anyhow::anyhow!("Failed to get drawable for render_to_image"))?;
+-
+-        let command_buffer = self.render_frame(scene, drawable.texture(), viewport_size)?;
+-
+-        // Commit and wait for completion without presenting
+-        command_buffer.commit();
+-        command_buffer.wait_until_completed();
+-
+-        read_texture_to_image(drawable.texture())
++        // vitre: capture into a dedicated texture, preserving the presentation
++        // drawable pool and the live layer's framebuffer-only optimization.
++        self.render_scene_to_image(scene, viewport_size)
+     }
+ 
+     /// Renders a scene to an image without requiring a window or CAMetalLayer.
+     ///
+     /// This is the primary method for headless rendering. It creates an offscreen
+     /// texture, renders the scene to it, and returns the pixel data as an RGBA image.
+-    #[cfg(any(test, feature = "bench-support", feature = "test-support"))]
++    #[cfg(any(
++        test,
++        feature = "bench-support",
++        feature = "test-support",
++        feature = "scene-capture"
++    ))]
+     pub fn render_scene_to_image(
+         &mut self,
+         scene: &Scene,
+@@ -1236,7 +1238,12 @@
+     command_encoder
+ }
+ 
+-#[cfg(any(test, feature = "bench-support", feature = "test-support"))]
++#[cfg(any(
++    test,
++    feature = "bench-support",
++    feature = "test-support",
++    feature = "scene-capture"
++))]
+ fn read_texture_to_image(texture: &metal::TextureRef) -> Result<RgbaImage> {
+     let width = texture.width() as u32;
+     let height = texture.height() as u32;
+--- a/crates/gpui_macos/Cargo.toml
++++ b/crates/gpui_macos/Cargo.toml
+@@ -12,6 +12,8 @@
+ path = "src/gpui_macos.rs"
+ 
+ [features]
++# vitre: capture our rendered scene without test-support or screen permissions.
++scene-capture = ["gpui/scene-capture", "gpui_apple/scene-capture"]
+ default = ["gpui/default"]
+ bench-support = ["gpui/bench-support", "gpui_apple/bench-support"]
+ test-support = ["gpui/test-support", "gpui_apple/test-support"]
+--- a/crates/gpui_macos/src/window.rs
++++ b/crates/gpui_macos/src/window.rs
+@@ -4,7 +4,7 @@
+     kTISPropertyInputSourceIsASCIICapable, kTISPropertyInputSourceType, kTISTypeKeyboardInputMode,
+     ns_string, renderer,
+ };
+-#[cfg(any(test, feature = "test-support"))]
++#[cfg(any(test, feature = "test-support", feature = "scene-capture"))]
+ use anyhow::Result;
+ use block::ConcreteBlock;
+ use cocoa::{
+@@ -32,7 +32,7 @@
+     WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowKind,
+     WindowParams, point, px, size,
+ };
+-#[cfg(any(test, feature = "test-support"))]
++#[cfg(any(test, feature = "test-support", feature = "scene-capture"))]
+ use image::RgbaImage;
+ 
+ use core_foundation::base::{CFRelease, CFTypeRef};
+@@ -2139,7 +2139,7 @@
+         NSBeep()
+     }
+ 
+-    #[cfg(any(test, feature = "test-support"))]
++    #[cfg(any(test, feature = "test-support", feature = "scene-capture"))]
+     fn render_to_image(&self, scene: &gpui::Scene) -> Result<RgbaImage> {
+         let mut this = self.0.lock();
+         this.renderer.render_to_image(scene)
+--- a/crates/gpui_platform/Cargo.toml
++++ b/crates/gpui_platform/Cargo.toml
+@@ -12,6 +12,8 @@
+ path = "src/gpui_platform.rs"
+ 
+ [features]
++# vitre: capture our rendered scene without test-support or screen permissions.
++scene-capture = ["gpui/scene-capture", "gpui_macos/scene-capture"]
+ default = []
+ bench-support = ["gpui/bench-support", "gpui_macos/bench-support"]
+ font-kit = ["gpui_macos/font-kit"]

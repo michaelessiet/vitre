@@ -14,12 +14,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, App, Context, Entity, EventEmitter, IntoElement, MouseButton, SharedString, Task,
-    WeakEntity, Window, div, prelude::*, px,
+    AnyElement, App, Context, Entity, EventEmitter, IntoElement, SharedString, Task, WeakEntity,
+    Window, div, prelude::*, px,
 };
 use gpui_component::input::EditorState;
 use gpui_component::{
-    ActiveTheme as _, Icon, IconName, StyledExt as _,
+    ActiveTheme as _, Icon, IconName, Selectable as _, Sizable as _, StyledExt as _,
+    button::{Button, ButtonVariants as _},
     command::{Command, CommandGroup, CommandItem, CommandState},
     h_flex, v_flex,
 };
@@ -38,7 +39,7 @@ use crate::chat::{QuickSearchContent, QuickSearchOpen};
 
 use super::preview::{self, PreviewFile, PreviewKind};
 use super::rank::{match_line_segments, name_segments, split_search_result_path};
-use super::relative_time;
+use super::{chrome, relative_time};
 
 /// Electron's `QUERY_DEBOUNCE_MS`.
 const QUERY_DEBOUNCE: Duration = Duration::from_millis(200);
@@ -539,6 +540,9 @@ impl QuickSearch {
 
         let mut command = Command::new(&self.state)
             .bordered(false)
+            // The dialog owns the glass surface; another popover fill here
+            // would compound its opacity and leave an inset frame.
+            .bg(cx.theme().popover.opacity(0.))
             // Every row we supply is already the answer to the query; the
             // built-in substring filter would re-filter results the server
             // ranked (and would hide content matches whose label is a path).
@@ -553,8 +557,10 @@ impl QuickSearch {
             .max_h(BODY_HEIGHT)
             .suffix(move |_, _, cx| {
                 h_flex()
-                    .gap_1()
-                    .text_size(px(10.))
+                    .gap_0p5()
+                    .p_0p5()
+                    .rounded(cx.theme().radius)
+                    .bg(cx.theme().muted.opacity(0.25))
                     .text_color(cx.theme().muted_foreground)
                     .child(mode_chip(
                         "Open",
@@ -600,6 +606,14 @@ impl QuickSearch {
                     (search.preview_kind(index), search.render_preview(index, cx))
                 });
                 preview::pane(kind, body, window, cx)
+            })
+            .footer(|state, _, cx| {
+                chrome::footer(cx)
+                    .child(chrome::key_hint("↑↓", "Navigate", cx))
+                    .when(state.selected_index().is_some(), |this| {
+                        this.child(chrome::key_hint("Enter", "Open", cx))
+                    })
+                    .child(div().ml_auto().child(chrome::key_hint("Esc", "Close", cx)))
             });
 
         // A failed ripgrep spawn must not read as "No results" — Electron
@@ -672,8 +686,7 @@ impl QuickSearch {
     /// The dialog's width, which Electron widens for a preview and widens
     /// again for a file preview.
     pub fn dialog_width(&self, cx: &App) -> gpui::Pixels {
-        self.preview_kind(self.state.read(cx).selected_index())
-            .dialog_width()
+        self.preview_kind(self.pending_index(cx)).dialog_width()
     }
 
     /// The shortcut pressed while the overlay is already up.
@@ -695,22 +708,18 @@ fn mode_chip(
     mode: QuickSearchMode,
     cx: &App,
 ) -> impl IntoElement {
-    div()
-        .id(label)
-        .px_1p5()
-        .py_0p5()
+    Button::new(label)
+        .ghost()
+        .xsmall()
+        .label(label)
+        .selected(active)
+        .toggled(active)
         .rounded(cx.theme().radius)
-        .when(active, |this| {
-            this.bg(cx.theme().accent)
-                .text_color(cx.theme().accent_foreground)
-        })
-        .when(!active, |this| {
-            this.hover(|style| style.bg(cx.theme().accent.opacity(0.6)))
-        })
-        .cursor_pointer()
-        .child(label)
-        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-            _ = owner.update(cx, |search, cx| search.set_mode(mode, window, cx));
+        .on_click(move |_, window, cx| {
+            _ = owner.update(cx, |search, cx| {
+                search.set_mode(mode, window, cx);
+                search.state.update(cx, |state, cx| state.focus(window, cx));
+            });
         })
 }
 
@@ -859,12 +868,12 @@ fn highlighted_name(text: &str, query: &str, cx: &App) -> impl IntoElement {
         })
 }
 
-/// Electron's `rounded-xs bg-amber-400/25 text-foreground` match wash.
+/// A theme-aware match wash shared with the preview snippet.
 fn highlight_span(text: String, cx: &App) -> impl IntoElement {
     div()
         .flex_shrink_0()
-        .rounded(px(2.))
-        .bg(gpui::rgba(0xfbbf2440))
+        .rounded(cx.theme().radius)
+        .bg(cx.theme().warning.opacity(0.25))
         .text_color(cx.theme().foreground)
         .child(text)
 }
