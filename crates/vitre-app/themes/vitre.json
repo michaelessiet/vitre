@@ -58,13 +58,13 @@
         "tab.active.foreground": "#18181b"
       },
       "highlight": {
-        "editor.background": "#fcfcfc",
+        "editor.background": "#fcfcfc00",
         "editor.foreground": "#27272a",
         "editor.active_line.background": "#27272a08",
         "editor.line_number": "#71717bbf",
         "editor.active_line_number": "#71717b",
         "editor.invisible": "#27272a33",
-        "editor.gutter.background": "#fcfcfc",
+        "editor.gutter.background": "#fcfcfc00",
         "error": "#fb2c36",
         "warning": "#f59e0b",
         "info": "#3b82f6",
@@ -229,13 +229,13 @@
         "tab.active.foreground": "#f7f9ff"
       },
       "highlight": {
-        "editor.background": "#000000",
+        "editor.background": "#00000000",
         "editor.foreground": "#f1f3f7",
         "editor.active_line.background": "#f1f3f708",
         "editor.line_number": "#a3a3a3bf",
         "editor.active_line_number": "#a3a3a3",
         "editor.invisible": "#f1f3f733",
-        "editor.gutter.background": "#000000",
+        "editor.gutter.background": "#00000000",
         "error": "#ff4e4d",
         "warning": "#ffb900",
         "info": "#52a2ff",
