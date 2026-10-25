@@ -5,9 +5,10 @@ import * as Schema from "effect/Schema";
 import { OrchestrationThread, ServerConfig } from "@t3tools/contracts";
 import { CloudOverview, type CloudCommand } from "@t3tools/contracts/cloud";
 import { makeCloudClient, type CloudClient } from "@t3tools/client-runtime/cloud";
-import { acceptHistory, acceptOverview, taskProgress } from "./cloudState";
+import { acceptHistory, acceptOverview, liveConversationKey, taskProgress } from "./cloudState";
 import { accountStorage } from "./storage";
 import { openConversation, type ConversationConnection } from "./runtime";
+import { observeConversation } from "./liveConversation";
 
 const decodeOverview = Schema.decodeUnknownOption(CloudOverview);
 const decodeConfig = Schema.decodeUnknownOption(ServerConfig);
@@ -36,13 +37,23 @@ export function useCloud(
   const [error, setError] = useState<string | null>(null);
   const [online, setOnline] = useState(true);
   const [active, setActive] = useState(AppState.currentState === "active");
-  const [connectionStatus, setConnectionStatus] = useState("disconnected");
+  const [connectionGeneration, setConnectionGeneration] = useState(0);
+  const [connectionState, setConnectionState] = useState<{
+    key: string;
+    status: string;
+    error: string | null;
+  } | null>(null);
   const [progress, setProgress] = useState("");
   const live = useRef<ConversationConnection | null>(null);
   const alive = useRef(true);
   const selection = useRef(selectedId);
   selection.current = selectedId;
   const task = overview?.tasks.find((task) => task.id === selectedId) ?? null;
+  const connectionKey = liveConversationKey(task, connectionGeneration);
+  const currentConnection =
+    active && online && connectionState?.key === connectionKey ? connectionState : null;
+  const connectionStatus = currentConnection?.status ?? "disconnected";
+  const connectionError = currentConnection?.error ?? null;
   const accept = useCallback(
     (next: CloudOverview) => {
       if (!alive.current) return;
@@ -132,48 +143,35 @@ export function useCloud(
       cancelled = true;
     };
   }, [selectedId, storage]);
-  const receiveThread = useCallback(
-    (incoming: OrchestrationThread) => {
-      if (incoming.id !== `cloud-${selection.current}` || !alive.current) return;
-      setThread((current) => acceptHistory(current, incoming));
-      if (!incoming.messages.some((message) => message.streaming))
-        void storage.set(`history:${selection.current}`, incoming);
-    },
-    [storage],
-  );
   useEffect(() => {
     if (
-      previewClient ||
-      !task ||
-      !active ||
-      !online ||
-      !task.worker ||
-      !["ready", "starting"].includes(task.worker.state)
+      selectedId &&
+      thread?.id === `cloud-${selectedId}` &&
+      !thread.messages.some((message) => message.streaming)
     )
-      return;
-    const connection = openConversation(client, task, storage, {
-      thread: receiveThread,
-      status: setConnectionStatus,
-      config: setConfig,
-    });
+      void storage.set(`history:${selectedId}`, thread);
+  }, [thread, selectedId, storage]);
+  const receiveThread = useCallback((incoming: OrchestrationThread) => {
+    if (incoming.id !== `cloud-${selection.current}` || !alive.current) return;
+    setThread((current) => acceptHistory(current, incoming));
+  }, []);
+  useEffect(() => {
+    if (previewClient || !task || !active || !online || !connectionKey) return;
+    const connection = observeConversation(
+      (callbacks) => openConversation(client, task, storage, callbacks),
+      {
+        thread: receiveThread,
+        status: (status, error) => setConnectionState({ key: connectionKey, status, error }),
+        config: setConfig,
+      },
+    );
     live.current = connection;
     return () => {
       connection.dispose();
       if (live.current === connection) live.current = null;
-      setConnectionStatus("disconnected");
+      setConnectionState(null);
     };
-  }, [
-    client,
-    selectedId,
-    task?.worker?.id,
-    task?.worker?.environmentId,
-    task?.worker?.state,
-    task?.attempt?.id,
-    active,
-    online,
-    storage,
-    receiveThread,
-  ]);
+  }, [client, connectionKey, previewClient, active, online, storage, receiveThread]);
   useEffect(() => {
     if (!selectedId || !active || !online) return;
     let cancelled = false;
@@ -249,6 +247,14 @@ export function useCloud(
     },
     [client, accept, online, active],
   );
+  const reconnect = useCallback(async () => {
+    if (!online || !active) throw new Error("Reconnect when the app is online and active.");
+    // Rebuild the runtime and its observers even if initialization failed. Merely
+    // retrying the old supervisor cannot revive a terminated subscription scope.
+    setConnectionGeneration((generation) => generation + 1);
+    // Reconnect from known worker data even if this overview request fails.
+    await refresh();
+  }, [online, active, refresh]);
   const review = async () => {
     if (live.current && connectionStatus === "connected" && task) {
       const result = await live.current.diff(
@@ -274,6 +280,8 @@ export function useCloud(
     setError,
     online,
     connectionStatus,
+    connectionError,
+    reconnect,
     progress,
     live,
     command,

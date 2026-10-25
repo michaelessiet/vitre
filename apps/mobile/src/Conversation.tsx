@@ -18,11 +18,9 @@ import {
   ApprovalRequestId,
   CommandId,
   ThreadId,
-  type OrchestrationMessage,
   type ProjectReadFileResult,
 } from "@t3tools/contracts";
-import { CloudClientError } from "@t3tools/client-runtime/cloud";
-import type { CloudCommand, CloudTask } from "@t3tools/contracts/cloud";
+import type { CloudTask } from "@t3tools/contracts/cloud";
 import { Composer, defaultSettings, type ComposerSettings } from "./Composer";
 import { uploadAttachments, type LocalAttachment } from "./attachments";
 import {
@@ -37,12 +35,26 @@ import type { MobileCloud } from "./useCloud";
 import { Button, colors, Icon, IconButton, Sheet, styles } from "./ui";
 import { messageLink } from "./messageLinks";
 import { useReducedMotion } from "./motion";
+import { createChatScroll } from "./chatScroll";
+import { PullRequestSheet } from "./PullRequestSheet";
+import {
+  conversationMessages,
+  deliverOutgoing,
+  outgoingMessageId,
+  restoreOutgoing,
+  type ContinueCommand,
+  type ConversationMessage,
+  type OutgoingMessage,
+} from "./outgoingMessage";
 
 function MessageEntrance({ animate, children }: { animate: boolean; children: ReactNode }) {
   const progress = useRef(new Animated.Value(animate ? 0 : 1)).current;
 
   useEffect(() => {
-    if (!animate) return;
+    if (!animate) {
+      progress.setValue(1);
+      return;
+    }
     const animation = Animated.timing(progress, {
       toValue: 1,
       duration: 200,
@@ -101,7 +113,6 @@ function WorkingIndicator({
   );
 }
 
-type PendingSend = Extract<CloudCommand, { type: "task.continue" }>;
 interface Draft {
   text: string;
   settings: ComposerSettings;
@@ -129,7 +140,11 @@ export function Conversation({
     attachments: [],
   });
   const [ready, setReady] = useState(false);
-  const [pending, setPending] = useState<PendingSend | null>(null);
+  const [outgoing, setOutgoing] = useState<OutgoingMessage[]>([]);
+  const outgoingRef = useRef<OutgoingMessage[]>([]);
+  const sendLock = useRef(false);
+  const delivery = useRef<AbortController | null>(null);
+  useEffect(() => () => delivery.current?.abort(), []);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activity, setActivity] = useState<string | null>(null);
@@ -172,77 +187,186 @@ export function Conversation({
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [responding, setResponding] = useState<string | null>(null);
   const [publish, setPublish] = useState(false);
-  const [prTitle, setPrTitle] = useState(task.title ?? task.prompt.slice(0, 100));
-  const [prBody, setPrBody] = useState("Changes prepared in Vitre Cloud.");
-  const prKey = useRef(Crypto.randomUUID());
   const stopKey = useRef<{ turn: string | undefined; key: string } | null>(null);
   const responseKeys = useRef(new Map<string, string>());
-  const list = useRef<FlatList<OrchestrationMessage>>(null);
-  const atBottom = useRef(true);
-  const openedHistory = useRef(false);
+  const list = useRef<FlatList<ConversationMessage>>(null);
+  const [chatScroll] = useState(() =>
+    createChatScroll({
+      scrollToOffset: (offset) => list.current?.scrollToOffset({ offset, animated: false }),
+      schedule: requestAnimationFrame,
+      cancel: cancelAnimationFrame,
+    }),
+  );
+  useEffect(() => () => chatScroll.dispose(), [chatScroll]);
   const knownMessageIds = useRef(new Set<string>());
   const seededHistory = useRef(false);
   const reducedMotion = useReducedMotion();
-  const patch = (changes: Partial<Draft>) => setDraft((current) => ({ ...current, ...changes }));
+  const draftEdited = useRef(false);
+  const patch = (changes: Partial<Draft>) => {
+    draftEdited.current = true;
+    setDraft((current) => ({ ...current, ...changes }));
+  };
   useEffect(() => {
     let cancelled = false;
     void Promise.all([
       cloud.storage.get<Draft>(`draft:${task.id}`),
-      cloud.storage.get<PendingSend>(`pending:${task.id}`),
-    ]).then(([saved, request]) => {
-      if (cancelled) return;
-      if (saved) setDraft(saved);
-      setPending(request);
-      setReady(true);
-    });
+      cloud.storage.get<OutgoingMessage[]>(`outgoing:${task.id}`),
+      cloud.storage.get<ContinueCommand>(`pending:${task.id}`),
+    ])
+      .then(([saved, message, legacyRequest]) => {
+        if (cancelled) return;
+        const legacyMatchesDraft =
+          !!legacyRequest &&
+          !!saved &&
+          saved.text.trim() === legacyRequest.prompt &&
+          saved.attachments.length === (legacyRequest.attachments?.length ?? 0) &&
+          saved.attachments.every((file, index) => {
+            const uploaded = legacyRequest.attachments?.[index];
+            return (
+              file.name === uploaded?.name &&
+              file.size === uploaded.sizeBytes &&
+              file.mimeType === uploaded.mimeType
+            );
+          });
+        if (saved && !draftEdited.current)
+          setDraft(
+            legacyMatchesDraft && !message ? { ...saved, text: "", attachments: [] } : saved,
+          );
+        const restored = message
+          ? message.map(restoreOutgoing)
+          : legacyRequest
+            ? [
+                {
+                  command: legacyRequest,
+                  attachments: legacyMatchesDraft ? saved!.attachments : [],
+                  createdAt: new Date().toISOString(),
+                  prepared: true,
+                  status: "uncertain" as const,
+                },
+              ]
+            : [];
+        outgoingRef.current = restored;
+        setOutgoing(restored);
+        if (legacyRequest && !message) {
+          // Older builds kept the sent text in the composer until acknowledgement.
+          void cloud.storage
+            .set(`outgoing:${task.id}`, restored)
+            .then(() => cloud.storage.set(`pending:${task.id}`, null))
+            .catch(() => setError("Could not save the pending message on this device."));
+        }
+        setReady(true);
+      })
+      .catch(() => {
+        if (!cancelled)
+          setError("Could not restore saved messages. Reopen this conversation to try again.");
+      });
     return () => {
       cancelled = true;
     };
   }, [task.id, cloud.storage]);
   useEffect(() => {
-    if (ready) void cloud.storage.set(`draft:${task.id}`, draft);
+    if (ready)
+      void cloud.storage
+        .set(`draft:${task.id}`, draft)
+        .catch(() => setError("Could not save your draft on this device."));
   }, [draft, ready, task.id, cloud.storage]);
   useEffect(() => {
-    if (pending && task.turnRequestId === pending.idempotencyKey) {
-      setPending(null);
-      patch({ text: "", attachments: [] });
-      void cloud.storage.set(`pending:${task.id}`, null);
-    }
-  }, [pending, task.turnRequestId, task.id, cloud.storage]);
-  const send = async () => {
-    if (sending || !cloud.online || !ready) return;
-    setSending(true);
+    const current = outgoingRef.current;
+    const next = current.flatMap((message) => {
+      if (cloud.thread?.messages.some((confirmed) => confirmed.id === outgoingMessageId(message)))
+        return [];
+      if (task.turnRequestId === message.command.idempotencyKey && message.status !== "sent")
+        return [{ ...message, status: "sent" as const, error: undefined }];
+      return [message];
+    });
+    if (
+      next.length === current.length &&
+      next.every((message, index) => message === current[index])
+    )
+      return;
+    outgoingRef.current = next;
+    setOutgoing(next);
+    void cloud.storage
+      .set(`outgoing:${task.id}`, next)
+      .catch(() => setError("Could not save the pending messages on this device."));
+  }, [outgoing, cloud.thread?.messages, task.turnRequestId, task.id, cloud.storage]);
+  const editFailed = (message: OutgoingMessage) => {
+    if (sendLock.current || message.status !== "failed" || draft.text || draft.attachments.length)
+      return;
+    const next = outgoingRef.current.filter((item) => item !== message);
+    outgoingRef.current = next;
+    setOutgoing(next);
+    patch({ text: message.command.prompt, attachments: message.attachments });
+    void cloud.storage
+      .set(`outgoing:${task.id}`, next)
+      .catch(() => setError("Could not save the pending messages on this device."));
+  };
+  const send = async (retryKey?: string) => {
+    if (sendLock.current || sending || !cloud.online || !ready || !cloudOwned(cloud.overview, task))
+      return;
+    if (
+      !retryKey &&
+      (outgoingRef.current.some((message) => message.status !== "sent") || !draft.text.trim())
+    )
+      return;
+    const previous = retryKey
+      ? outgoingRef.current.find((message) => message.command.idempotencyKey === retryKey)
+      : null;
+    if (retryKey && (!previous || previous.status === "sending")) return;
+    const { model, provider: _provider, ...settings } = draft.settings;
+    const message: OutgoingMessage = previous
+      ? {
+          ...previous,
+          // A definite rejection was never accepted. Ambiguous retries must reuse the key.
+          command:
+            previous.status === "failed"
+              ? { ...previous.command, idempotencyKey: Crypto.randomUUID() }
+              : previous.command,
+        }
+      : {
+          command: {
+            type: "task.continue",
+            taskId: task.id,
+            idempotencyKey: Crypto.randomUUID(),
+            prompt: draft.text.trim(),
+            attachments: [],
+            ...(cloud.overview?.capabilities?.followUpSettings
+              ? { ...settings, ...(model ? { model } : {}) }
+              : {}),
+          },
+          attachments: draft.attachments,
+          createdAt: new Date().toISOString(),
+          prepared: false,
+          status: "sending",
+        };
+    sendLock.current = true;
+    const abort = new AbortController();
+    delivery.current = abort;
+    outgoingRef.current = [...outgoingRef.current.filter((item) => item !== previous), message];
     setError(null);
+    chatScroll.followLatest();
+    if (!retryKey) patch({ text: "", attachments: [] });
     try {
-      const { model, provider: _provider, ...settings } = draft.settings;
-      const command: PendingSend = pending ?? {
-        type: "task.continue",
-        taskId: task.id,
-        idempotencyKey: Crypto.randomUUID(),
-        prompt: draft.text.trim(),
-        attachments: await uploadAttachments(cloud.client, draft.attachments),
-        ...(cloud.overview?.capabilities?.followUpSettings
-          ? { ...settings, ...(model ? { model } : {}) }
-          : {}),
-      };
-      await cloud.storage.set(`pending:${task.id}`, command);
-      setPending(command);
-      await cloud.command(command);
-      setPending(null);
-      patch({ text: "", attachments: [] });
-      await cloud.storage.set(`pending:${task.id}`, null);
-    } catch (error) {
-      setError(
-        error instanceof Error
-          ? error.message
-          : "The message response was interrupted. Retry the same request.",
-      );
-      if (error instanceof CloudClientError && error.requestDisposition === "rejected") {
-        setPending(null);
-        await cloud.storage.set(`pending:${task.id}`, null);
-      }
+      await deliverOutgoing(message, {
+        signal: abort.signal,
+        publish: (next) => {
+          const current = outgoingRef.current.find(
+            (item) => item.command.idempotencyKey === next.command.idempotencyKey,
+          );
+          // A snapshot/receipt can arrive before the HTTP request settles.
+          if (!current || (current.status === "sent" && next.status !== "sent"))
+            return Promise.resolve();
+          const messages = outgoingRef.current.map((item) => (item === current ? next : item));
+          outgoingRef.current = messages;
+          setOutgoing(messages);
+          return cloud.storage.set(`outgoing:${task.id}`, messages);
+        },
+        upload: (attachments) => uploadAttachments(cloud.client, attachments),
+        dispatch: cloud.command,
+      });
     } finally {
-      setSending(false);
+      sendLock.current = false;
+      if (delivery.current === abort) delivery.current = null;
     }
   };
   const stop = async () => {
@@ -303,40 +427,18 @@ export function Conversation({
       setError(error instanceof Error ? error.message : "Showing the last saved diff");
     }
   };
-  const createPr = async () => {
-    if (!task.result) return;
-    setSending(true);
-    setError(null);
-    try {
-      await cloud.command({
-        type: "publication.create",
-        idempotencyKey: prKey.current,
-        taskId: task.id,
-        resultId: task.result.id,
-        resultSha256: task.result.sha256,
-        kind: "pull_request",
-        title: prTitle.trim(),
-        body: prBody.trim(),
-      });
-      setPublish(false);
-    } catch (error) {
-      setError(error instanceof Error ? error.message : "Could not create pull request");
-    } finally {
-      setSending(false);
-    }
-  };
   const files = diffFiles(cloud.diff);
   const busy = busyTask(task);
   const owned = cloudOwned(cloud.overview, task);
-  const requests = pendingRequests(cloud.thread);
-  const messages = cloud.thread?.messages ?? [];
-  if (!seededHistory.current && messages.length) {
-    for (const message of messages) knownMessageIds.current.add(message.id);
+  const requests = pendingRequests(cloud.thread, task);
+  const messages = conversationMessages(cloud.thread?.messages ?? [], outgoing);
+  if (!seededHistory.current && cloud.thread?.messages.length) {
+    for (const message of cloud.thread.messages) knownMessageIds.current.add(message.id);
     seededHistory.current = true;
   }
-  const changedFiles = (message: OrchestrationMessage) =>
+  const changedFiles = (message: ConversationMessage) =>
     cloud.thread?.checkpoints.find((checkpoint) => checkpoint.assistantMessageId === message.id);
-  const renderMessage = ({ item }: { item: OrchestrationMessage }) => {
+  const renderMessage = ({ item }: { item: ConversationMessage }) => {
     const animate = !reducedMotion && !knownMessageIds.current.has(item.id);
     knownMessageIds.current.add(item.id);
     const user = item.role === "user";
@@ -456,8 +558,45 @@ export function Conversation({
                 void Clipboard.setStringAsync(item.text);
               }}
             />
-            <Text style={{ color: colors.dim, fontSize: 12 }}>{relativeTime(item.createdAt)}</Text>
+            <Text accessibilityLiveRegion="polite" style={{ color: colors.dim, fontSize: 12 }}>
+              {item.outgoing
+                ? {
+                    sending: "Sending…",
+                    sent: "Sent",
+                    uncertain: "Not confirmed",
+                    failed: "Not sent",
+                  }[item.outgoing.status]
+                : relativeTime(item.createdAt)}
+            </Text>
           </View>
+          {item.outgoing && ["failed", "uncertain"].includes(item.outgoing.status) && (
+            <View style={{ alignItems: "flex-end", gap: 6, marginTop: 6 }}>
+              <Text accessibilityRole="alert" style={styles.error}>
+                {item.outgoing.error ?? "The send was interrupted."}
+              </Text>
+              {item.outgoing.status === "uncertain" && (
+                <Text style={styles.muted}>
+                  Retry checks the same message without sending a copy.
+                </Text>
+              )}
+              <Button
+                disabled={!cloud.online || !owned || sending}
+                onPress={() => {
+                  void send(item.outgoing!.command.idempotencyKey);
+                }}
+              >
+                {item.outgoing.status === "uncertain" ? "Check and retry" : "Retry message"}
+              </Button>
+              {item.outgoing.status === "failed" && (
+                <Button
+                  disabled={sending || !!draft.text || draft.attachments.length > 0}
+                  onPress={() => editFailed(item.outgoing!)}
+                >
+                  Edit message
+                </Button>
+              )}
+            </View>
+          )}
         </View>
       </MessageEntrance>
     );
@@ -568,20 +707,14 @@ export function Conversation({
         renderItem={renderMessage}
         contentContainerStyle={{ paddingHorizontal: 18, paddingBottom: 18, flexGrow: 1 }}
         keyboardShouldPersistTaps="handled"
-        onScroll={(event) => {
-          atBottom.current =
-            event.nativeEvent.contentSize.height -
-              event.nativeEvent.layoutMeasurement.height -
-              event.nativeEvent.contentOffset.y <
-            100;
-        }}
-        scrollEventThrottle={100}
-        onContentSizeChange={() => {
-          if (messages.length && (!openedHistory.current || atBottom.current)) {
-            openedHistory.current = true;
-            list.current?.scrollToEnd({ animated: false });
-          }
-        }}
+        onLayout={(event) => chatScroll.viewportChanged(event.nativeEvent.layout.height)}
+        onContentSizeChange={(_width, height) => chatScroll.contentChanged(height)}
+        onScroll={(event) => chatScroll.scroll(event.nativeEvent)}
+        onScrollBeginDrag={() => chatScroll.beginInteraction()}
+        onScrollEndDrag={(event) => chatScroll.endInteraction(event.nativeEvent)}
+        onMomentumScrollBegin={() => chatScroll.beginInteraction()}
+        onMomentumScrollEnd={(event) => chatScroll.endInteraction(event.nativeEvent)}
+        scrollEventThrottle={16}
         ListEmptyComponent={
           <View style={{ paddingTop: 38, gap: 14 }}>
             <Icon name="cloud-outline" color={colors.cyan} size={32} />
@@ -612,6 +745,23 @@ export function Conversation({
                   {request.kind === "approval" ? "Approval needed" : "Your input is needed"}
                 </Text>
                 <Text style={styles.text}>{request.summary}</Text>
+                {cloud.connectionStatus !== "connected" && (
+                  <View style={{ gap: 8 }}>
+                    <Text accessibilityLiveRegion="polite" style={styles.muted}>
+                      {!cloud.online
+                        ? "You're offline. Reconnect to respond."
+                        : (cloud.connectionError ?? "Connecting to the cloud workspace…")}
+                    </Text>
+                    <Button
+                      disabled={!cloud.online || !owned}
+                      onPress={() => {
+                        void cloud.reconnect().catch((error: Error) => setError(error.message));
+                      }}
+                    >
+                      Retry connection
+                    </Button>
+                  </View>
+                )}
                 {request.kind === "approval" && (
                   <View
                     style={{
@@ -659,7 +809,7 @@ export function Conversation({
                         void respond(request.id, "accept");
                       }}
                     >
-                      Allow
+                      {responding === request.id ? "Submitting…" : "Allow"}
                     </Button>
                   </View>
                 ) : (
@@ -698,7 +848,7 @@ export function Conversation({
                         void respond(request.id);
                       }}
                     >
-                      Send answers
+                      {responding === request.id ? "Submitting…" : "Send answers"}
                     </Button>
                   </>
                 )}
@@ -745,21 +895,6 @@ export function Conversation({
             {error ?? cloud.error}
           </Text>
         )}
-        {pending && (
-          <View style={[styles.row, { marginBottom: 8 }]}>
-            <Text style={[styles.muted, { flex: 1 }]}>
-              Send interrupted. Retry checks the same message.
-            </Text>
-            <Button
-              disabled={!cloud.online || sending}
-              onPress={() => {
-                void send();
-              }}
-            >
-              Retry
-            </Button>
-          </View>
-        )}
         <View style={[styles.row, { paddingHorizontal: 7, paddingBottom: 8 }]}>
           <Icon name="cloud-outline" size={14} color={colors.dim} />
           <Text style={[styles.muted, { flex: 1 }]}>Cloud workspace</Text>
@@ -783,7 +918,14 @@ export function Conversation({
             void stop();
           }}
           busy={busy}
-          disabled={sending || !ready || !cloud.online || !owned || !!pending}
+          disabled={
+            sending ||
+            !ready ||
+            !cloud.online ||
+            !owned ||
+            (outgoing.some((message) => message.status !== "sent") && !busy)
+          }
+          activeRuntimeMode={busy ? (cloud.thread?.runtimeMode ?? task.runtimeMode) : undefined}
           providerLocked
           settingsLocked={!cloud.overview?.capabilities?.followUpSettings}
         />
@@ -890,48 +1032,7 @@ export function Conversation({
           )}
         </Sheet>
       )}
-      {publish && (
-        <Sheet title="Create pull request" onClose={() => setPublish(false)}>
-          <Text style={styles.muted}>
-            Publish the latest saved result for review. GitHub publication requires connected write
-            access.
-          </Text>
-          {!task.result && (
-            <Text style={styles.error}>Wait for a verified result before publishing.</Text>
-          )}
-          <Text style={styles.label}>Title</Text>
-          <TextInput
-            accessibilityLabel="Pull request title"
-            style={styles.input}
-            value={prTitle}
-            onChangeText={(title) => {
-              setPrTitle(title);
-              prKey.current = Crypto.randomUUID();
-            }}
-          />
-          <Text style={styles.label}>Description</Text>
-          <TextInput
-            accessibilityLabel="Pull request description"
-            style={[styles.input, { minHeight: 130 }]}
-            multiline
-            value={prBody}
-            onChangeText={(body) => {
-              setPrBody(body);
-              prKey.current = Crypto.randomUUID();
-            }}
-          />
-          {error && <Text style={styles.error}>{error}</Text>}
-          <Button
-            primary
-            disabled={!task.result || sending || !cloud.online || !prTitle.trim() || !prBody.trim()}
-            onPress={() => {
-              void createPr();
-            }}
-          >
-            Create PR
-          </Button>
-        </Sheet>
-      )}
+      {publish && <PullRequestSheet cloud={cloud} task={task} onClose={() => setPublish(false)} />}
     </>
   );
 }

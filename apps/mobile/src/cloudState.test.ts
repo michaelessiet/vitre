@@ -6,10 +6,43 @@ import {
   acceptHistory,
   acceptOverview,
   cloudOwned,
+  liveConversationKey,
   diffFiles,
   pendingRequests,
 } from "./cloudState";
 import { EventId, type OrchestrationThread } from "@t3tools/contracts";
+
+it("keeps the live socket through worker startup but replaces changed endpoints and attempts", async () => {
+  const task = (await makeShowcaseClient().overview()).tasks[0]!;
+  const worker = {
+    id: "worker",
+    environmentId: "environment",
+    state: "starting" as const,
+    sandboxId: null,
+    cpu: 2,
+    memoryGiB: 4,
+    diskGiB: 20,
+    stoppedAt: null,
+  };
+  const key = liveConversationKey({ ...task, worker });
+  expect(key).not.toBeNull();
+  expect(liveConversationKey({ ...task, worker: { ...worker, state: "ready" } })).toBe(key);
+  expect(
+    liveConversationKey({ ...task, worker: { ...worker, environmentId: "replacement" } }),
+  ).not.toBe(key);
+  expect(liveConversationKey({ ...task, id: "other-task", worker })).not.toBe(key);
+  expect(liveConversationKey({ ...task, worker }, 1)).not.toBe(key);
+  expect(
+    liveConversationKey({
+      ...task,
+      worker,
+      attempt: { ...task.attempt!, id: "replacement-attempt" },
+    }),
+  ).not.toBe(key);
+  expect(liveConversationKey({ ...task, worker: { ...worker, state: "paused" } })).toBeNull();
+  expect(liveConversationKey({ ...task, worker: null })).toBeNull();
+  expect(liveConversationKey(null)).toBeNull();
+});
 
 it("keeps newer cloud state when a cached or delayed response arrives", async () => {
   const client = makeShowcaseClient();

@@ -7,6 +7,7 @@ import { HttpClient } from "effect/unstable/http";
 import {
   bootstrapRemoteBearerSession,
   resolveRemoteWebSocketConnectionUrl,
+  type RemoteEnvironmentAuthError,
 } from "../authorization/remote.ts";
 import { ConnectionDriver } from "../connection/driver.ts";
 import {
@@ -17,6 +18,56 @@ import {
 import * as Supervisor from "../connection/supervisor.ts";
 import * as Session from "../rpc/session.ts";
 import type { CloudClient } from "./index.ts";
+
+/** Keep protocol diagnostics without exposing request bodies, tokens, or response payloads. */
+export function cloudEnvironmentConnectionError(
+  error: RemoteEnvironmentAuthError,
+  stage: "authentication" | "connection",
+): ConnectionTransientError {
+  let detail: string;
+  switch (error._tag) {
+    case "EnvironmentAuthInvalidError":
+      detail = `The cloud computer rejected its connection credential (HTTP 401; ${error.reason}).`;
+      break;
+    case "EnvironmentRequestInvalidError":
+      detail = `The cloud computer rejected the ${stage} request (HTTP 400; ${error.reason}).`;
+      break;
+    case "EnvironmentScopeRequiredError":
+      detail = `The cloud computer requires ${error.requiredScope} access (HTTP 403).`;
+      break;
+    case "EnvironmentOperationForbiddenError":
+      detail = `The cloud computer denied the ${stage} request (HTTP 403; ${error.reason}).`;
+      break;
+    case "EnvironmentResourceNotFoundError":
+      detail = `The cloud computer ${stage} endpoint was not found (HTTP 404).`;
+      break;
+    case "EnvironmentInternalError":
+      detail = `The cloud computer could not complete ${stage} (HTTP 500; ${error.reason}).`;
+      break;
+    case "RemoteEnvironmentAuthUndeclaredStatusError":
+      detail = `The cloud computer ${stage} endpoint returned HTTP ${error.status}.`;
+      break;
+    case "RemoteEnvironmentAuthTimeoutError":
+      detail = `The cloud computer ${stage} request timed out.`;
+      break;
+    case "RemoteEnvironmentAuthInvalidJsonError":
+      detail = `The cloud computer returned an invalid ${stage} response. Its runtime may need updating.`;
+      break;
+    case "RemoteEnvironmentAuthFetchError":
+      detail = `Could not reach the cloud computer for ${stage}. Check the connection and cloud tunnel.`;
+      break;
+  }
+  return new ConnectionTransientError({
+    reason:
+      error._tag === "RemoteEnvironmentAuthTimeoutError"
+        ? "timeout"
+        : error._tag === "RemoteEnvironmentAuthFetchError"
+          ? "network"
+          : "remote-unavailable",
+    detail,
+    ...("traceId" in error ? { traceId: error.traceId } : {}),
+  });
+}
 
 /** One foreground cloud task, using the same scoped transport/retry owner as desktop. */
 export function cloudConversationLayer(client: CloudClient, task: CloudTask) {
@@ -51,26 +102,14 @@ export function cloudConversationLayer(client: CloudClient, task: CloudTask) {
               credential: connection.bootstrapToken,
               clientMetadata: { label: "Vitre Mobile", deviceType: "mobile" },
             }).pipe(
-              Effect.mapError(
-                () =>
-                  new ConnectionTransientError({
-                    reason: "remote-unavailable",
-                    detail: "Could not authenticate the cloud computer",
-                  }),
-              ),
+              Effect.mapError((error) => cloudEnvironmentConnectionError(error, "authentication")),
             );
             const socketUrl = yield* resolveRemoteWebSocketConnectionUrl({
               httpBaseUrl: connection.httpBaseUrl,
               wsBaseUrl: connection.httpBaseUrl.replace(/^https:/, "wss:"),
               bearerToken: credentials.access_token,
             }).pipe(
-              Effect.mapError(
-                () =>
-                  new ConnectionTransientError({
-                    reason: "remote-unavailable",
-                    detail: "Could not open the cloud connection",
-                  }),
-              ),
+              Effect.mapError((error) => cloudEnvironmentConnectionError(error, "connection")),
             );
             const prepared = {
               environmentId: target.environmentId,

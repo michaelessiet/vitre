@@ -375,6 +375,9 @@ export const CloudDependencySetup = Schema.Struct({
 });
 export type CloudDependencySetup = typeof CloudDependencySetup.Type;
 export const CloudTask = Schema.Struct({
+  publicationPreparation: Schema.optionalKey(
+    Schema.Struct({ id: Id, turnRequestId: Schema.NullOr(Id), requestedAt: Timestamp }),
+  ),
   turnSettings: Schema.optionalKey(
     Schema.Struct({
       model: Schema.optionalKey(Text),
@@ -443,6 +446,7 @@ export const CloudOverview = Schema.Struct({
       projectCreation: Schema.optionalKey(Schema.Boolean),
       projectDeletion: Schema.optionalKey(Schema.Boolean),
       followUpSettings: Schema.optionalKey(Schema.Boolean),
+      publicationPreparation: Schema.optionalKey(Schema.Boolean),
       mobileNotifications: Schema.optionalKey(Schema.Boolean),
     }),
   ),
@@ -625,6 +629,12 @@ export const CloudCommand = Schema.Union([
     type: Schema.Literal("provider.disconnect"),
     idempotencyKey: Id,
     provider: CloudProvider,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("publication.prepare"),
+    idempotencyKey: Id,
+    taskId: Id,
+    expectedTurnRequestId: Schema.NullOr(Id),
   }),
   Schema.Struct({
     type: Schema.Literal("publication.create"),

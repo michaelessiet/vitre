@@ -31,6 +31,16 @@ turn installs the latest credential before resuming its provider session. Native
 clients retain their connections across navigation. Fresh provisioning and model
 response time remain separate from reconnect latency.
 
+Resident workers opt into a process-lifetime bootstrap grant through the backend's
+trusted launch pipe. This lets a mobile client reconnect after a workspace has
+been running for several days. The cloud grant uses standard client scopes;
+ordinary desktop bootstrap grants still expire after 24 hours, and one-time
+pairing links retain their short expiry. Existing backends must be recreated
+after an idle checkpoint to adopt this policy.
+
+Follow-up permission and interaction changes are persisted before the next turn
+starts. Changing permissions does not resolve an approval from an active turn.
+
 Resident Codex backends set `VITRE_CLOUD_RESIDENT_PROVIDER=codex`, retaining their
 first successful provider probe so background health checks cannot refresh
 credentials outside the lease. Deploy the relay, worker, machine agent and backend
@@ -155,6 +165,13 @@ The local workspace stays separate throughout.
 **Review publication** binds the entered title/body to the displayed result
 revision. A separate worker verifies and pushes its checkpoint without running
 an agent or repository hooks; the service creates the draft PR or exact comment.
+On mobile, **Create PR → Save changes for review** captures a ready resident
+workspace, including uncommitted changes. New turns are held until the snapshot
+is saved; the worker closes after saving, and the conversation can resume with
+the next message. Review the saved diff, enter a title and description, then
+choose **Create draft PR**. Saving does not publish anything or rerun tests;
+the review identifies this explicitly. Local-only and anonymous GitHub workspaces
+must first be connected to a personal GitHub App installation with write access.
 Publication retries first reconcile GitHub. An uncertain write that cannot be
 found is reported as failed rather than posting again. **Retry / reconcile
 publication** can recheck that outcome without creating a duplicate.

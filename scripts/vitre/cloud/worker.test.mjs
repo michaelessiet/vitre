@@ -5,7 +5,7 @@ import * as NodeOS from "node:os";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeUtil from "node:util";
 import { Schema } from "effect";
-import { ClientOrchestrationCommand } from "@t3tools/contracts";
+import { ClientOrchestrationCommand, DesktopBackendBootstrap } from "@t3tools/contracts";
 import {
   childEnvironment,
   workerProgressUpdate,
@@ -14,14 +14,18 @@ import {
   classifyWorkerTurn,
   createProviderLease,
   settleResidentTurn,
+  preparePublicationSnapshot,
+  cloudTurnContext,
   atomicJson,
   retryControlRequest,
   bootstrapWorker,
   providerEnvironment,
   workerModelSelection,
   workerTurnSettings,
+  dispatchWorkerTurn,
   WorkerControlClient,
   makeLocalBackendClient,
+  backendBootstrapEnvelope,
   providerFailurePhase,
   checkpointSettledRun,
   moveDirectory,
@@ -37,7 +41,71 @@ import {
 import { captureWorkspace, restoreWorkspace, digest } from "./workspace.mjs";
 
 const decodeCommand = Schema.decodeUnknownSync(ClientOrchestrationCommand);
+const decodeBackendBootstrap = Schema.decodeUnknownSync(DesktopBackendBootstrap);
 const exec = NodeUtil.promisify(NodeChildProcess.execFile);
+
+describe("publication snapshot preparation", () => {
+  const task = {
+    turnRequestId: "turn",
+    publicationPreparation: { id: "review", turnRequestId: "turn" },
+  };
+  it("claims the same settled turn before saving and does not publish anything", async () => {
+    const events = [];
+    expect(
+      await preparePublicationSnapshot(
+        task,
+        "turn",
+        async () => events.push("claim"),
+        async () => events.push("snapshot"),
+      ),
+    ).toBe(true);
+    expect(events).toEqual(["claim", "snapshot"]);
+    expect(
+      await preparePublicationSnapshot(
+        {},
+        "turn",
+        async () => events.push("bad"),
+        async () => events.push("bad"),
+      ),
+    ).toBe(false);
+    expect(events).toEqual(["claim", "snapshot"]);
+  });
+  it("never stops or snapshots a replaced turn or failed claim", async () => {
+    let saved = false;
+    const save = async () => {
+      saved = true;
+    };
+    await expect(
+      preparePublicationSnapshot(task, "old-turn", async () => {}, save),
+    ).rejects.toThrow("another turn");
+    await expect(
+      preparePublicationSnapshot(
+        { ...task, turnRequestId: "new-turn" },
+        "turn",
+        async () => {},
+        save,
+      ),
+    ).rejects.toThrow("another turn");
+    await expect(
+      preparePublicationSnapshot(
+        task,
+        "turn",
+        async () => {
+          throw new Error("cancelled");
+        },
+        save,
+      ),
+    ).rejects.toThrow("cancelled");
+    expect(saved).toBe(false);
+  });
+  it("explains the supported PR flow instead of claiming cloud PRs are forbidden", () => {
+    const context = cloudTurnContext("build");
+    expect(context).toContain("Create PR");
+    expect(context).toContain("draft PR");
+    expect(context).toContain("credentials are read-only");
+    expect(context).not.toContain("Do not publish branches, PRs, or comments");
+  });
+});
 
 it("applies explicit follow-up settings without overwriting imported thread defaults", () => {
   const thread = {
@@ -70,6 +138,100 @@ it("applies explicit follow-up settings without overwriting imported thread defa
     modelSelection: { instanceId: "codex", model: "new", options: [] },
     runtimeMode: "auto-accept-edits",
     interactionMode: "default",
+  });
+});
+
+describe("follow-up turn mode dispatch", () => {
+  const thread = {
+    modelSelection: { instanceId: "codex", model: "existing" },
+    runtimeMode: "approval-required",
+    interactionMode: "plan",
+  };
+  const turn = {
+    type: "thread.turn.start",
+    commandId: "follow-up-turn",
+    threadId: "cloud-task",
+    message: { messageId: "follow-up-message", role: "user", text: "Continue", attachments: [] },
+    createdAt: "2026-10-25T00:00:00.000Z",
+  };
+
+  it("commits Full access and interaction changes before the backend reads the turn modes", async () => {
+    const storedThread = structuredClone(thread);
+    const commands = [];
+    const dispatch = async (input) => {
+      const command = decodeCommand(input);
+      commands.push(command);
+      if (command.type === "thread.runtime-mode.set")
+        storedThread.runtimeMode = command.runtimeMode;
+      if (command.type === "thread.interaction-mode.set")
+        storedThread.interactionMode = command.interactionMode;
+      if (command.type === "thread.turn.start") {
+        // The orchestration decider uses stored modes, not the fields on this command.
+        expect(storedThread.runtimeMode).toBe("full-access");
+        expect(storedThread.interactionMode).toBe("default");
+      }
+      return { sequence: commands.length };
+    };
+    await expect(
+      dispatchWorkerTurn(
+        { turnSettings: { runtimeMode: "full-access", interactionMode: "default" } },
+        thread,
+        {},
+        turn,
+        dispatch,
+      ),
+    ).resolves.toEqual({ sequence: 3 });
+    expect(commands.map((command) => command.type)).toEqual([
+      "thread.runtime-mode.set",
+      "thread.interaction-mode.set",
+      "thread.turn.start",
+    ]);
+  });
+
+  it.each([
+    { runtimeMode: "full-access", interactionMode: "default" },
+    { turnSettings: {} },
+    { turnSettings: { runtimeMode: "approval-required", interactionMode: "plan" } },
+  ])(
+    "preserves existing modes when follow-up overrides are absent or unchanged: %j",
+    async (task) => {
+      const commands = [];
+      await dispatchWorkerTurn(task, thread, {}, turn, async (command) => {
+        commands.push(decodeCommand(command));
+      });
+      expect(commands).toEqual([{ ...turn, ...thread }]);
+    },
+  );
+
+  it("uses stable, separate command IDs when a turn request is retried", async () => {
+    const task = { turnSettings: { runtimeMode: "full-access", interactionMode: "default" } };
+    const commands = [];
+    const dispatch = async (command) => commands.push(decodeCommand(command));
+    await dispatchWorkerTurn(task, thread, {}, turn, dispatch);
+    await dispatchWorkerTurn(task, thread, {}, turn, dispatch);
+    expect(commands.slice(0, 3)).toEqual(commands.slice(3));
+    expect(commands.slice(0, 3).map((command) => command.commandId)).toEqual([
+      "follow-up-turn-runtime-mode",
+      "follow-up-turn-interaction-mode",
+      "follow-up-turn",
+    ]);
+  });
+
+  it("does not start a turn when a permission change fails", async () => {
+    const commands = [];
+    await expect(
+      dispatchWorkerTurn(
+        { turnSettings: { runtimeMode: "full-access" } },
+        thread,
+        {},
+        turn,
+        async (command) => {
+          commands.push(decodeCommand(command));
+          throw new Error("Permission update rejected");
+        },
+      ),
+    ).rejects.toThrow("Permission update rejected");
+    expect(commands.map((command) => command.type)).toEqual(["thread.runtime-mode.set"]);
   });
 });
 
@@ -1025,6 +1187,19 @@ describe("cloud worker isolation", () => {
     expect(options.redirect).toBe("error");
   });
 });
+
+it.each([true, false, undefined, "true"])(
+  "limits managed bootstrap lifetime to explicit resident workers (%s)",
+  (resident) => {
+    const envelope = decodeBackendBootstrap(
+      backendBootstrapEnvelope({ resident, backendBootstrapToken: "backend-seed" }, 20042),
+    );
+    expect(envelope.residentCloudBootstrap).toBe(resident === true);
+    expect(envelope.desktopBootstrapToken).toBe("backend-seed");
+    expect(envelope.port).toBe(20042);
+    expect(envelope.host).toBe("127.0.0.1");
+  },
+);
 
 it("routes a persistent machine worker to its allocated backend port", async () => {
   const urls = [];

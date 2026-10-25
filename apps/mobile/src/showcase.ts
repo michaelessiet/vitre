@@ -289,9 +289,9 @@ export function makeShowcaseClient(): CloudClient {
           id,
           thread(found, [
             ...histories.get(id)!.messages,
-            message(`${++sequence}-user`, "user", command.prompt, id),
+            message(`${command.idempotencyKey}-message`, "user", command.prompt, id),
             message(
-              `${sequence}-assistant`,
+              `${++sequence}-assistant`,
               "assistant",
               "Your draft was submitted in this interface preview.",
               id,
