@@ -26,7 +26,8 @@ export interface BootstrapGrant {
   readonly subject: string;
   readonly label?: string;
   readonly proofKeyThumbprint?: string;
-  readonly expiresAt: DateTime.DateTime;
+  /** Absent only for the explicitly managed resident cloud process lifetime. */
+  readonly expiresAt: DateTime.DateTime | undefined;
 }
 
 export class UnknownBootstrapCredentialError extends Schema.TaggedErrorClass<UnknownBootstrapCredentialError>()(
@@ -239,14 +240,9 @@ type ConsumeResult =
     };
 
 const DEFAULT_ONE_TIME_TOKEN_TTL_MINUTES = Duration.minutes(5);
-// The desktop-bootstrap grant rides on a trusted IPC channel (fd3 or
-// stdin) at backend launch, so it doesn't have to be short-lived the
-// way a user-facing pairing link does. Letting it live for the
-// lifetime of the backend process (24h is more than long enough for
-// practical desktop use, and well under "forever" in case the seed
-// gets logged anywhere by accident) means a page reload past the 5-min
-// window can still recover by re-bootstrapping rather than locking
-// the user out of the backend.
+// Trusted desktop IPC seeds permit reloads for 24h without changing the shorter
+// user-facing pairing window. Resident cloud workers explicitly opt into their
+// managed backend process lifetime instead: these can remain running for days.
 const DESKTOP_BOOTSTRAP_TTL_HOURS = Duration.hours(24);
 // A dev server's startup token is read off a log by whoever (or whatever) is
 // driving the session, often minutes later — after a `node --watch` restart, a
@@ -313,18 +309,20 @@ export const make = Effect.gen(function* () {
 
   if (config.desktopBootstrapToken) {
     const now = yield* DateTime.now;
+    const residentCloudBootstrap =
+      config.mode === "desktop" && config.residentCloudBootstrap === true;
     yield* seedGrant(config.desktopBootstrapToken, {
       method: "desktop-bootstrap",
-      scopes: AuthAdministrativeScopes,
-      subject: "desktop-bootstrap",
-      expiresAt: DateTime.add(now, {
-        milliseconds: Duration.toMillis(DESKTOP_BOOTSTRAP_TTL_HOURS),
-      }),
-      // Unbounded uses so the renderer can re-exchange the seed for a
-      // fresh bearer session after a page reload (or after the prior
-      // bearer expires). The seed itself stays inside the desktop
-      // process and the rendered page, both of which the user already
-      // implicitly trusts.
+      scopes: residentCloudBootstrap ? AuthStandardClientScopes : AuthAdministrativeScopes,
+      subject: residentCloudBootstrap ? "resident-cloud-bootstrap" : "desktop-bootstrap",
+      expiresAt: residentCloudBootstrap
+        ? undefined
+        : DateTime.add(now, {
+            milliseconds: Duration.toMillis(DESKTOP_BOOTSTRAP_TTL_HOURS),
+          }),
+      // A reconnect can exchange the same seed again. Only the resident cloud
+      // opt-in survives the desktop ceiling; that grant is memory-only and is
+      // discarded with the worker-owned backend, alongside its tunnel.
       remainingUses: "unbounded",
     });
   }
@@ -453,7 +451,7 @@ export const make = Effect.gen(function* () {
           }
 
           const next = new Map(current);
-          if (DateTime.isGreaterThanOrEqualTo(now, grant.expiresAt)) {
+          if (grant.expiresAt && DateTime.isGreaterThanOrEqualTo(now, grant.expiresAt)) {
             next.delete(credential);
             return [
               {

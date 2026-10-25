@@ -34,6 +34,7 @@ export function Composer({
   onStop,
   settingsLocked = false,
   providerLocked = false,
+  activeRuntimeMode,
 }: {
   text: string;
   onText: (text: string) => void;
@@ -48,6 +49,7 @@ export function Composer({
   onStop?: () => void;
   settingsLocked?: boolean;
   providerLocked?: boolean;
+  activeRuntimeMode?: RuntimeMode;
 }) {
   const [options, setOptions] = useState(false);
   const [attach, setAttach] = useState(false);
@@ -313,7 +315,7 @@ export function Composer({
               </View>
             </View>
           ))}
-          <Text style={styles.label}>Permissions</Text>
+          <Text style={styles.label}>Permissions for your next message</Text>
           <View style={[styles.row, { flexWrap: "wrap" }]}>
             {(
               [
@@ -332,6 +334,21 @@ export function Composer({
               </Button>
             ))}
           </View>
+          {activeRuntimeMode && activeRuntimeMode !== settings.runtimeMode && (
+            <Text style={styles.muted}>
+              This turn uses{" "}
+              {
+                {
+                  auto: "Automatic",
+                  "approval-required": "Ask first",
+                  "auto-accept-edits": "Allow edits",
+                  "full-access": "Full access",
+                }[activeRuntimeMode]
+              }
+              . Your selection applies to your next message. Any pending approval still needs a
+              response.
+            </Text>
+          )}
           <Text style={styles.label}>Interaction</Text>
           <View style={styles.row}>
             {(["default", "plan"] as const).map((value) => (

@@ -216,6 +216,7 @@ export function publicOverview(state: CloudState, enabled: boolean, now: number)
       projectDeletion: true,
       projectCreation: true,
       followUpSettings: true,
+      publicationPreparation: true,
       mobileNotifications: true,
     },
     ...(state.revision !== undefined ? { revision: state.revision } : {}),
@@ -380,6 +381,12 @@ export function applyCommand(
     case "handoff.request": {
       const bindings = (state.bindings ??= {});
       const handoffs = (state.handoffs ??= {});
+      const sourceId = bindings[command.conversationId]?.cloudTaskId ?? command.cloudTaskId;
+      if (sourceId && state.tasks[sourceId]?.publicationPreparation)
+        throw new CloudError(
+          "publication_preparing",
+          "Wait for the workspace to finish saving for review",
+        );
       if (!bindings[command.conversationId]) {
         if (command.expectedGeneration !== 0)
           throw new CloudError("stale_owner", "Unknown conversation generation");
@@ -545,6 +552,7 @@ export function applyCommand(
       )
         break;
       task.state = "cancelled";
+      delete task.publicationPreparation;
       task.updatedAt = iso(now);
       if (task.worker && task.worker.state !== "deleted") enqueue(state, task, "stop", now);
       // Keep the provider lease until shutdown is confirmed, even during provisioning.
@@ -580,6 +588,11 @@ export function applyCommand(
     }
     case "task.continue": {
       const task = taskFor(state, command.taskId);
+      if (task.publicationPreparation)
+        throw new CloudError(
+          "publication_preparing",
+          "Wait for the workspace to finish saving for review",
+        );
       const binding = Object.values(state.bindings ?? {}).find(
         (entry) =>
           entry.cloudTaskId === task.id ||
@@ -659,6 +672,7 @@ export function applyCommand(
       const task = taskFor(state, command.taskId);
       entityId = task.id;
       task.state = "cancelled";
+      delete task.publicationPreparation;
       task.updatedAt = iso(now);
       state.deletedTasks.push(task.id);
       for (const publication of Object.values(state.publications)) {
@@ -684,9 +698,55 @@ export function applyCommand(
         if (task.state === "queued") task.state = "needs_auth";
         if (task.worker && !["deleted", "stopped"].includes(task.worker.state)) {
           task.state = "cancelled";
+          delete task.publicationPreparation;
           enqueue(state, task, "stop", now);
         }
       }
+      break;
+    }
+    case "publication.prepare": {
+      const task = taskFor(state, command.taskId);
+      entityId = task.id;
+      if (task.source?.kind === "local" || task.repository.installationId === "local")
+        throw new CloudError("no_repository", "This workspace is not connected to GitHub");
+      if (task.repository.installationId === "public")
+        throw new CloudError(
+          "github_connection_required",
+          "Connect this repository to your personal GitHub account in Vitre before creating a pull request",
+        );
+      if ((task.turnRequestId ?? null) !== command.expectedTurnRequestId)
+        throw new CloudError(
+          "turn_replaced",
+          "The conversation changed. Review the latest turn before preparing a pull request",
+        );
+      const binding = Object.values(state.bindings ?? {}).find(
+        (entry) => entry.cloudTaskId === task.id || entry.aliases?.includes(task.id),
+      );
+      if (binding && (binding.target === "local" || binding.cloudTaskId !== task.id))
+        throw new CloudError("stale_owner", "This environment no longer owns the conversation");
+      if (
+        binding &&
+        Object.values(state.handoffs ?? {}).some(
+          (operation) =>
+            operation.conversationId === binding.conversationId &&
+            !["completed", "cancelled", "failed"].includes(operation.phase),
+        )
+      )
+        throw new CloudError("switch_pending", "Wait for the conversation to finish moving");
+      if (task.state === "completed" && task.result) break;
+      if (task.publicationPreparation) break;
+      if (task.state !== "running" || task.idle !== true || task.worker?.state !== "ready")
+        throw new CloudError(
+          "task_busy",
+          "Wait for the current work to finish before preparing a pull request",
+        );
+      task.publicationPreparation = {
+        id: command.idempotencyKey,
+        turnRequestId: command.expectedTurnRequestId,
+        requestedAt: iso(now),
+      };
+      task.result = null;
+      task.updatedAt = iso(now);
       break;
     }
     case "publication.create": {
@@ -880,6 +940,7 @@ export function schedule(
       task.checkpoint?.attemptId === task.attempt.id
     )
       enqueue(state, task, "delete", now);
+    if (!["running", "waiting_for_input"].includes(task.state)) delete task.publicationPreparation;
   }
   if (!enabled) return;
   for (const task of Object.values(state.tasks).sort((a, b) =>
@@ -966,6 +1027,12 @@ export function acceptCallback(
   if (callback.sequence <= attempt.lastSequence) return false;
   if (callback.closeIdle && callback.turnRequestId !== task.turnRequestId)
     throw new CloudError("turn_replaced", "A new turn arrived before idle shutdown");
+  if (
+    callback.phase === "completed" &&
+    task.publicationPreparation &&
+    (callback.turnRequestId ?? null) !== task.publicationPreparation.turnRequestId
+  )
+    throw new CloudError("turn_replaced", "Publication checkpoint belongs to another turn");
   if (!["preparing", "running", "waiting_for_input"].includes(task.state))
     throw new CloudError("task_settled", "Task no longer accepts worker updates");
   if (
@@ -1019,6 +1086,8 @@ export function acceptCallback(
     task.updatedAt = iso(now);
     if (task.worker) task.worker.state = "ready";
     if (callback.phase === "completed") task.result = callback.result ?? null;
+    if (["completed", "failed", "needs_auth", "usage_limited"].includes(callback.phase))
+      delete task.publicationPreparation;
     if (callback.phase === "running" || callback.phase === "waiting_for_input") task.error = null;
     if (["failed", "needs_auth", "usage_limited"].includes(callback.phase))
       task.error = callback.detail;
@@ -1043,6 +1112,14 @@ export function confirmStopped(
   accrue(state, task, now);
   task.worker.state = deleted ? "deleted" : "stopped";
   task.worker.stoppedAt = iso(now);
+  if (task.publicationPreparation) {
+    delete task.publicationPreparation;
+    if (task.state === "running") {
+      task.state = "interrupted";
+      task.error =
+        "The workspace stopped before its pull request snapshot was saved. Resume it and try again.";
+    }
+  }
   task.attempt.reservedMicroDollars = 0;
   const account = state.accounts[task.provider];
   if (account.leasedBy === attemptId) {

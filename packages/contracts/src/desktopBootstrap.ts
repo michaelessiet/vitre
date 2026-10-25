@@ -12,6 +12,8 @@ export const DesktopBackendBootstrap = Schema.Struct({
   t3Home: Schema.optional(Schema.String),
   host: Schema.String,
   desktopBootstrapToken: Schema.String,
+  // Trusted IPC only: resident cloud workers own the backend and tunnel lifecycle.
+  residentCloudBootstrap: Schema.optional(Schema.Boolean),
   tailscaleServeEnabled: Schema.Boolean,
   tailscaleServePort: PortSchema,
   otlpTracesUrl: Schema.optional(Schema.String),

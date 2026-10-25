@@ -271,6 +271,24 @@ export async function settleResidentTurn({
   await mirror();
 }
 
+export function cloudTurnContext(kind) {
+  return `This is a cloud ${kind} task. Pull requests are supported through Vitre's Create PR action, which saves the workspace for review and publishes a draft PR with the connected GitHub account. When asked to open a PR, finish the changes and validation, suggest a title and description, and direct the user to Create PR. Do not push branches or publish PRs/comments from shell tools; execution credentials are read-only. Report changes and validation accurately.`;
+}
+
+/** Claim the reviewed turn before stopping any process or reading its files. */
+export async function preparePublicationSnapshot(task, turnRequestId, claim, save) {
+  const preparation = task.publicationPreparation;
+  if (!preparation) return false;
+  if (
+    preparation.turnRequestId !== (turnRequestId ?? null) ||
+    preparation.turnRequestId !== (task.turnRequestId ?? null)
+  )
+    throw new WorkerFailure("Publication preparation belongs to another turn");
+  await claim();
+  await save();
+  return true;
+}
+
 /** Retry only explicitly transient failures on reads or idempotent operations.
  * Credential rotation and turn submission must reconcile ambiguous responses. */
 export async function retryControlRequest(operation, sleep = NodeTimersPromises.setTimeout) {
@@ -413,6 +431,27 @@ export function workerTurnSettings(task, thread, models) {
     runtimeMode: settings?.runtimeMode ?? thread.runtimeMode,
     interactionMode: settings?.interactionMode ?? thread.interactionMode,
   };
+}
+
+export async function dispatchWorkerTurn(task, thread, models, turnCommand, dispatch) {
+  const settings = workerTurnSettings(task, thread, models);
+  // Turn start reads the stored thread modes. Its compatibility fields do not
+  // update them, so persist explicit follow-up changes before starting work.
+  for (const [field, type, suffix] of [
+    ["runtimeMode", "thread.runtime-mode.set", "runtime-mode"],
+    ["interactionMode", "thread.interaction-mode.set", "interaction-mode"],
+  ]) {
+    if (settings[field] !== thread[field]) {
+      await dispatch({
+        type,
+        commandId: `${turnCommand.commandId}-${suffix}`,
+        threadId: turnCommand.threadId,
+        [field]: settings[field],
+        createdAt: turnCommand.createdAt,
+      });
+    }
+  }
+  return dispatch({ ...turnCommand, ...settings });
 }
 
 export function providerFailurePhase(message = "") {
@@ -615,6 +654,20 @@ export class WorkerControlClient {
       });
     });
   }
+}
+
+export function backendBootstrapEnvelope(bootstrap, port = BACKEND_PORT) {
+  return {
+    mode: "desktop",
+    noBrowser: true,
+    port,
+    t3Home: APP_HOME,
+    host: "127.0.0.1",
+    desktopBootstrapToken: bootstrap.backendBootstrapToken,
+    residentCloudBootstrap: bootstrap.resident === true,
+    tailscaleServeEnabled: false,
+    tailscaleServePort: 443,
+  };
 }
 
 export function makeLocalBackendClient(bootstrapToken, fetcher = fetch, port = BACKEND_PORT) {
@@ -1368,17 +1421,7 @@ export async function runWorker() {
     await reportPreparation("backend");
     backend = launch("node", ["/opt/vitre/server/dist/bin.mjs", "--bootstrap-fd", "0"], {
       env,
-      stdin:
-        JSON.stringify({
-          mode: "desktop",
-          noBrowser: true,
-          port: BACKEND_PORT,
-          t3Home: APP_HOME,
-          host: "127.0.0.1",
-          desktopBootstrapToken: bootstrap.backendBootstrapToken,
-          tailscaleServeEnabled: false,
-          tailscaleServePort: 443,
-        }) + "\n",
+      stdin: JSON.stringify(backendBootstrapEnvelope(bootstrap)) + "\n",
     });
     // Poll quickly: the backend usually listens within a couple of seconds and
     // every idle interval here is added to the user's reconnection time.
@@ -1523,22 +1566,27 @@ export async function runWorker() {
       const { thread: currentThread } = await backendRequest(
         `/api/orchestration/threads/${threadId}`,
       );
-      await dispatch({
-        type: "thread.turn.start",
-        commandId: `${turnTask.turnRequestId ?? attempt.id}-turn`,
-        threadId,
-        message: {
-          messageId: `${turnTask.turnRequestId ?? attempt.id}-message`,
-          role: "user",
-          text: `${turnTask.prompt}\n\n<vitre_cloud_context>\n${context}\n${journal.setupWarning ?? ""}\nThis is a cloud ${task.kind} task. Do not publish branches, PRs, or comments. Report changes and validation for review.\n</vitre_cloud_context>`,
-          attachments: await downloadAttachments(turnTask.attachments ?? [], async (hash) => {
-            const chunk = await control.request(`worker/${taskId}/workspace/${hash}`);
-            return Buffer.from(chunk.base64, "base64");
-          }),
+      await dispatchWorkerTurn(
+        turnTask,
+        currentThread,
+        models,
+        {
+          type: "thread.turn.start",
+          commandId: `${turnTask.turnRequestId ?? attempt.id}-turn`,
+          threadId,
+          message: {
+            messageId: `${turnTask.turnRequestId ?? attempt.id}-message`,
+            role: "user",
+            text: `${turnTask.prompt}\n\n<vitre_cloud_context>\n${context}\n${journal.setupWarning ?? ""}\n${cloudTurnContext(task.kind)}\n</vitre_cloud_context>`,
+            attachments: await downloadAttachments(turnTask.attachments ?? [], async (hash) => {
+              const chunk = await control.request(`worker/${taskId}/workspace/${hash}`);
+              return Buffer.from(chunk.base64, "base64");
+            }),
+          },
+          createdAt: journal.requestedAt,
         },
-        ...workerTurnSettings(turnTask, currentThread, models),
-        createdAt: journal.requestedAt,
-      });
+        dispatch,
+      );
       return true;
     };
     if (!journal.submitted && !task.handoff && !task.wakeOnly) await submitTurn(task);
@@ -1646,6 +1694,27 @@ export async function runWorker() {
       if (Date.now() - lastCredentialCheck >= 30_000) await persistCredential();
       if (turnObservation === "settled") {
         idleSince ??= Date.now();
+        if (
+          await preparePublicationSnapshot(
+            status.task,
+            journal.turnRequestId,
+            () =>
+              callback(
+                "heartbeat",
+                "Saving changes for pull request review",
+                undefined,
+                undefined,
+                true,
+              ),
+            () =>
+              checkpoint("completed", thread, {
+                output:
+                  "Tests were not rerun while saving this snapshot. Review the conversation for validation results.",
+                code: null,
+              }),
+          )
+        )
+          return;
         if (resident) {
           const wasIdle = idle;
           await settleResidentTurn({
@@ -1752,6 +1821,7 @@ export async function runWorker() {
           : {}),
       },
     ).catch(() => {});
+    // Raw provider failures may contain credentials; return a sanitized error.
     throw new WorkerFailure("Worker run failed; sandbox disk retained");
   } finally {
     clearInterval(heartbeatTimer);

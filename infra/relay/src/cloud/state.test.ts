@@ -64,6 +64,209 @@ const heartbeat = (sequence: number): CloudWorkerCallback => ({
 });
 
 describe("cloud task lifecycle", () => {
+  it("prepares an idle resident workspace once and fences follow-ups until its result is saved", () => {
+    const state = running();
+    const task = state.tasks.task!;
+    task.worker!.sandboxId = "machine-personal";
+    task.idle = true;
+    task.turnRequestId = "turn-one";
+    const prepare: CloudCommand = {
+      type: "publication.prepare",
+      taskId: task.id,
+      idempotencyKey: "prepare",
+      expectedTurnRequestId: "turn-one",
+    };
+    applyCommand(state, prepare, "save", "prepare", now, true);
+    applyCommand(state, prepare, "duplicate", "prepare", now + 1, true);
+    expect(task.publicationPreparation?.id).toBe("prepare");
+    expect(task.state).toBe("running");
+    expect(task.result).toBeNull();
+    expect(() =>
+      applyCommand(
+        state,
+        {
+          type: "task.continue",
+          taskId: task.id,
+          idempotencyKey: "next",
+          prompt: "Change more files",
+        },
+        "next",
+        "next",
+        now,
+        true,
+      ),
+    ).toThrow("finish saving");
+    const checkpoint = {
+      id: "saved",
+      taskId: task.id,
+      attemptId: task.attempt!.id,
+      sequence: 1,
+      objectKey: "saved-manifest",
+      sha256: "a".repeat(64),
+      sizeBytes: 100,
+      createdAt: iso(now),
+    };
+    const result = {
+      id: "saved",
+      taskId: task.id,
+      checkpointId: "saved",
+      sha256: checkpoint.sha256,
+      summary: "Finished changes",
+      createdAt: iso(now),
+    };
+    expect(() =>
+      acceptCheckpoint(
+        state,
+        { ...heartbeat(1), phase: "completed", checkpoint, result, turnRequestId: "older-turn" },
+        now,
+      ),
+    ).toThrow("another turn");
+    acceptCheckpoint(
+      state,
+      { ...heartbeat(1), phase: "completed", checkpoint, result, turnRequestId: "turn-one" },
+      now,
+    );
+    expect(task.publicationPreparation).toBeUndefined();
+    expect(task.state).toBe("completed");
+    expect(task.result).toEqual(result);
+    applyCommand(
+      state,
+      {
+        type: "publication.create",
+        taskId: task.id,
+        idempotencyKey: "publish",
+        resultId: result.id,
+        resultSha256: result.sha256,
+        kind: "pull_request",
+        title: "Fix",
+        body: "Reviewed changes",
+      },
+      "pr",
+      "publish",
+      now,
+      true,
+    );
+    expect(state.publicationInputs?.pr?.checkpoint).toEqual(checkpoint);
+    expect(state.publications.pr?.state).toBe("queued");
+  });
+
+  it("rejects stale, busy, disconnected and moved publication preparation requests", () => {
+    const prepare: CloudCommand = {
+      type: "publication.prepare",
+      taskId: "task",
+      idempotencyKey: "prepare",
+      expectedTurnRequestId: null,
+    };
+    const state = running();
+    const task = state.tasks.task!;
+    expect(() => applyCommand(state, prepare, "save", "p", now, true)).toThrow("current work");
+    task.idle = true;
+    task.turnRequestId = "new-turn";
+    expect(() => applyCommand(state, prepare, "save", "p", now, true)).toThrow(
+      "conversation changed",
+    );
+    delete task.turnRequestId;
+    task.repository.installationId = "public";
+    expect(() => applyCommand(state, prepare, "save", "p", now, true)).toThrow("personal GitHub");
+    task.repository.installationId = "local";
+    expect(() => applyCommand(state, prepare, "save", "p", now, true)).toThrow("not connected");
+    task.repository.installationId = "1";
+    state.bindings = {
+      conversation: {
+        conversationId: "conversation",
+        localThreadId: "local",
+        cloudTaskId: task.id,
+        target: "local",
+        generation: 2,
+        leaseOwner: null,
+        leaseExpiresAt: null,
+      },
+    };
+    expect(() => applyCommand(state, prepare, "save", "p", now, true)).toThrow("no longer owns");
+    expect(task.publicationPreparation).toBeUndefined();
+  });
+
+  it("cancellation during PR preparation preserves the checkpoint without publishing or reviving work", () => {
+    const state = running();
+    const task = state.tasks.task!;
+    task.idle = true;
+    applyCommand(
+      state,
+      {
+        type: "publication.prepare",
+        taskId: task.id,
+        idempotencyKey: "prepare",
+        expectedTurnRequestId: null,
+      },
+      "save",
+      "p",
+      now,
+      true,
+    );
+    applyCommand(
+      state,
+      { type: "task.cancel", taskId: task.id, idempotencyKey: "stop" },
+      "stop",
+      "stop",
+      now,
+      true,
+    );
+    expect(task.publicationPreparation).toBeUndefined();
+    const checkpoint = {
+      id: "saved",
+      taskId: task.id,
+      attemptId: task.attempt!.id,
+      sequence: 1,
+      objectKey: "saved-manifest",
+      sha256: "a".repeat(64),
+      sizeBytes: 100,
+      createdAt: iso(now),
+    };
+    acceptCheckpoint(
+      state,
+      {
+        ...heartbeat(1),
+        phase: "completed",
+        checkpoint,
+        result: {
+          id: "saved",
+          taskId: task.id,
+          checkpointId: "saved",
+          sha256: checkpoint.sha256,
+          summary: "Snapshot",
+          createdAt: iso(now),
+        },
+      },
+      now,
+    );
+    expect(task.state).toBe("cancelled");
+    expect(task.checkpoint).toEqual(checkpoint);
+    expect(task.result).toBeNull();
+    expect(Object.keys(state.publications)).toHaveLength(0);
+  });
+
+  it("clears preparation after worker loss so the workspace can be resumed", () => {
+    const state = running();
+    const task = state.tasks.task!;
+    task.idle = true;
+    applyCommand(
+      state,
+      {
+        type: "publication.prepare",
+        taskId: task.id,
+        idempotencyKey: "prepare",
+        expectedTurnRequestId: null,
+      },
+      "save",
+      "p",
+      now,
+      true,
+    );
+    confirmStopped(state, task.id, task.attempt!.id, now);
+    expect(task.publicationPreparation).toBeUndefined();
+    expect(task.state).toBe("interrupted");
+    expect(task.error).toContain("before its pull request snapshot");
+  });
   it("exposes the persisted account revision and keeps creation permissions", () => {
     const state = fixture();
     state.revision = 17;

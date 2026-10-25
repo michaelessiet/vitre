@@ -11,8 +11,6 @@ import {
   ThreadId,
   WS_METHODS,
   type ClientOrchestrationCommand,
-  type OrchestrationThread,
-  type ServerConfig,
 } from "@t3tools/contracts";
 import type { CloudTask } from "@t3tools/contracts/cloud";
 import * as Effect from "effect/Effect";
@@ -27,6 +25,7 @@ import * as Socket from "effect/unstable/socket/Socket";
 import * as Network from "expo-network";
 import { AppState } from "react-native";
 import { environmentCache, type AccountStorage } from "./storage";
+import { requestConversationResponse, type ConversationCallbacks } from "./liveConversation";
 
 const network = (state: Network.NetworkState) =>
   state.isConnected === false ? ("offline" as const) : ("online" as const);
@@ -61,11 +60,7 @@ export function openConversation(
   client: CloudClient,
   task: CloudTask,
   storage: AccountStorage,
-  callbacks: {
-    thread: (thread: OrchestrationThread) => void;
-    status: (status: string) => void;
-    config: (config: ServerConfig) => void;
-  },
+  callbacks: ConversationCallbacks,
 ) {
   const platform = Layer.mergeAll(
     connectivity,
@@ -85,6 +80,12 @@ export function openConversation(
       Effect.scoped(
         Effect.gen(function* () {
           const supervisor = yield* EnvironmentSupervisor;
+          yield* SubscriptionRef.changes(supervisor.state).pipe(
+            Stream.runForEach((state) =>
+              Effect.sync(() => callbacks.status(state.phase, state.lastFailure?.message ?? null)),
+            ),
+            Effect.forkScoped,
+          );
           const thread = yield* makeEnvironmentThreadState(ThreadId.make(`cloud-${task.id}`));
           yield* SubscriptionRef.changes(thread).pipe(
             Stream.runForEach((state) =>
@@ -92,10 +93,6 @@ export function openConversation(
                 if (Option.isSome(state.data)) callbacks.thread(state.data.value);
               }),
             ),
-            Effect.forkScoped,
-          );
-          yield* SubscriptionRef.changes(supervisor.state).pipe(
-            Stream.runForEach((state) => Effect.sync(() => callbacks.status(state.phase))),
             Effect.forkScoped,
           );
           yield* SubscriptionRef.changes(supervisor.session).pipe(
@@ -115,21 +112,23 @@ export function openConversation(
       ),
       { signal: abort.signal },
     )
-    .catch(() => {
-      if (!abort.signal.aborted) callbacks.status("disconnected");
+    .catch((error: unknown) => {
+      if (!abort.signal.aborted)
+        callbacks.status(
+          "disconnected",
+          error instanceof Error ? error.message : "Could not connect to the cloud workspace.",
+        );
     });
   return {
     dispatch: (command: ClientOrchestrationCommand) =>
-      runtime.runPromise(request(ORCHESTRATION_WS_METHODS.dispatchCommand, command)),
+      requestConversationResponse((signal) =>
+        runtime.runPromise(request(ORCHESTRATION_WS_METHODS.dispatchCommand, command), { signal }),
+      ),
     readFile: (cwd: string, relativePath: string) =>
       runtime.runPromise(request(WS_METHODS.projectsReadFile, { cwd, relativePath })),
     diff: (cwd: string, baseRef?: string) =>
       runtime.runPromise(
         request(WS_METHODS.reviewGetDiffPreview, { cwd, ...(baseRef ? { baseRef } : {}) }),
-      ),
-    retry: () =>
-      runtime.runPromise(
-        EnvironmentSupervisor.pipe(Effect.flatMap((supervisor) => supervisor.retryNow)),
       ),
     dispose() {
       abort.abort();
