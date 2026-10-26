@@ -449,26 +449,37 @@ impl FilesPanel {
             // target file after it loads. Same-document targets fall through
             // to the editor's built-in jump; out-of-workspace targets are
             // swallowed (Electron drops them).
-            editor_lsp.show_document = Some(Rc::new(move |params, window, cx| {
+            editor_lsp.show_document = Some(Rc::new(move |params, window, _cx| {
                 let Some(target) = bridge::relative_path_from_uri(&show_cwd, &params.uri) else {
                     return true;
                 };
-                if show_lsp.current_document().as_deref() == Some(target.as_str()) {
+                let source = show_lsp.current_document();
+                if source.as_deref() == Some(target.as_str()) {
                     return false;
                 }
-                let Some(panel) = panel_for_show.upgrade() else {
-                    return true;
-                };
                 let reveal = params.selection.map(|range| {
                     RevealTarget::at(WirePosition {
                         line: range.start.line,
                         character: range.start.character,
                     })
                 });
-                panel.update(cx, |panel, cx| {
-                    panel.pending_reveal =
-                        reveal.map(|target_position| (target.clone(), target_position));
-                    panel.open_file(target.clone(), window, cx);
+                // The editor invokes show_document from inside its own update
+                // (Cmd-click and its context menu). Opening the target here
+                // updates that editor again and panics on the nested borrow.
+                // Wait until the current input action has finished.
+                let panel = panel_for_show.clone();
+                window.on_next_frame(move |window, cx| {
+                    let Some(panel) = panel.upgrade() else {
+                        return;
+                    };
+                    panel.update(cx, |panel, cx| {
+                        if panel.lsp.current_document() != source {
+                            return;
+                        }
+                        panel.pending_reveal =
+                            reveal.map(|target_position| (target.clone(), target_position));
+                        panel.open_file(target, window, cx);
+                    });
                 });
                 true
             }));

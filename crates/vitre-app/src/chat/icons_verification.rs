@@ -72,7 +72,7 @@ impl ChatApp {
                     // Create a unique fixture directory before publishing the project;
                     // the favicon cache must see the finished fixture on its first read.
                     let seed_root = cwd.clone();
-                    let language_fixtures = mode == "languages";
+                    let language_fixtures = mode == "languages" || mode == "editor-shortcuts";
                     let kotlin_fixtures = mode == "kotlin";
                     let seed = Tokio::spawn_result(cx, async move {
                         tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
@@ -120,6 +120,15 @@ impl ChatApp {
                     loop { executor.timer(Duration::from_millis(80)).await; if this.update(cx,|a,cx|a.files.as_ref().and_then(|f|f.read(cx).active_file_status()).is_some_and(|(p,_)|p==path)).map_err(|e|e.to_string())? {break;} }
                 }
                 executor.timer(Duration::from_millis(500)).await;
+                if mode == "editor-shortcuts" {
+                    let task = this.update_in(cx, |app, window, cx| {
+                        app.files.as_ref().unwrap().update(cx, |panel, cx| panel.verify_languages(window, cx))
+                    }).map_err(|e| e.to_string())?;
+                    task.await?;
+                    eprintln!("[vitre-editor-shortcuts-test] PASS: native editor LSP and shortcuts");
+                    cx.update(|_, cx| cx.quit()).map_err(|e| e.to_string())?;
+                    return Ok(());
+                }
                 if mode == "project-tabs" {
                     super::ui_verification::float_fixture(cx).await?;
                     this.update_in(cx, |app, window, cx| {
@@ -431,8 +440,8 @@ impl ChatApp {
                 }
                 Ok::<_,String>(())
             };
-            let result = tokio::select! { r = run => r, _ = executor.timer(Duration::from_secs(if mode == "languages" || mode == "kotlin" || mode == "chat-perf" { 180 } else { 40 })) => Err("Icon verification timed out".into()) };
-            match result {Ok(())=>eprintln!("[vitre-icons-test] PASS: signed SVG favicon, missing/broken fallbacks, nested file tree, four file tabs, Search and Hide panel mouse hit targets, dock restoration ({mode})"),Err(e)=>eprintln!("[vitre-icons-test] FAIL: {e}")}
+            let result = tokio::select! { r = run => r, _ = executor.timer(Duration::from_secs(if mode == "languages" || mode == "editor-shortcuts" || mode == "kotlin" || mode == "chat-perf" { 180 } else { 40 })) => Err("Icon verification timed out".into()) };
+            match result {Ok(()) if mode == "editor-shortcuts" => {}, Ok(())=>eprintln!("[vitre-icons-test] PASS: signed SVG favicon, missing/broken fallbacks, nested file tree, four file tabs, Search and Hide panel mouse hit targets, dock restoration ({mode})"),Err(e)=>eprintln!("[vitre-icons-test] FAIL: {e}")}
         }).detach();
     }
 }

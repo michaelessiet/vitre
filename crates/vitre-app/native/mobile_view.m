@@ -192,6 +192,7 @@ static xpc_connection_t connectHID(id device, dispatch_queue_t queue,
   NSUUID *callbackID;
   dispatch_queue_t inputQueue;
   dispatch_queue_t frameQueue;
+  id mouseFocusMonitor;
   TouchBuilder touchBuilder;
   ButtonBuilder buttonBuilder;
   uint32_t edge;
@@ -495,6 +496,9 @@ static xpc_connection_t connectHID(id device, dispatch_queue_t queue,
 }
 - (void)keyDown:(NSEvent *)event {
   if (event.modifierFlags & NSEventModifierFlagCommand) {
+    // Commands go to GPUI. Hand AppKit focus back as well, so a shortcut
+    // that opens an input can receive the following unmodified keystrokes.
+    [self.window makeFirstResponder:self.superview];
     [self.superview keyDown:event];
     return;
   }
@@ -513,6 +517,10 @@ static xpc_connection_t connectHID(id device, dispatch_queue_t queue,
 }
 - (void)disconnect {
   self.hidden = YES;
+  if (mouseFocusMonitor) {
+    [NSEvent removeMonitor:mouseFocusMonitor];
+    mouseFocusMonitor = nil;
+  }
   [lock lock];
   stopped = YES;
   [lock unlock];
@@ -562,6 +570,26 @@ void *vitre_mobile_create(void *parent, InputCallback input,
   view->destroy = destroy;
   view->inputContext = context;
   [(__bridge NSView *)parent addSubview:view];
+  // The device becomes AppKit's first responder for direct typing. GPUI's
+  // logical focus changes on a click elsewhere, but AppKit otherwise keeps
+  // sending keyDown: to this sibling view until the device is hidden.
+  __weak VitreMobileView *weakView = view;
+  view->mouseFocusMonitor = [NSEvent
+      addLocalMonitorForEventsMatchingMask:(NSEventMaskLeftMouseDown |
+                                            NSEventMaskRightMouseDown)
+                               handler:^NSEvent *(NSEvent *event) {
+                                 VitreMobileView *strong = weakView;
+                                 if (strong && event.window == strong.window &&
+                                     event.window.firstResponder == strong &&
+                                     strong.superview) {
+                                   NSPoint point =
+                                       [strong.superview convertPoint:event.locationInWindow
+                                                            fromView:nil];
+                                   if (!NSPointInRect(point, strong.frame))
+                                     [event.window makeFirstResponder:strong.superview];
+                                 }
+                                 return event;
+                               }];
   return (__bridge_retained void *)view;
 }
 void vitre_mobile_destroy(void *handle) {
