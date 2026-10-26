@@ -16,8 +16,8 @@ feature does not enable `test-support`, `leak-detection`, or `screen-capture`.
 
 ## Local patch
 
-`scene-capture.patch` records every changed copied file against the revision
-above. The runtime changes are limited to:
+`scene-capture.patch` records the scene-capture changes against the revision
+above. Those runtime changes are limited to:
 
 1. Exposing `Window::render_to_image` and the matching `PlatformWindow` method
    under `scene-capture`, retaining the unsupported-platform default error.
@@ -37,10 +37,19 @@ GPUI primitives; it does not include native browser subviews or AppKit's
 behind-window visual effect. Other platforms currently use the unsupported
 fallback unless their normal renderer implementation supplies readback.
 
+## Transparent window blending
+
+The Metal color and path-sprite pipelines use source-over destination alpha
+(`OneMinusSourceAlpha`) as well as source-over RGB. Upstream's additive alpha
+made overlapping translucent fills opaque in a transparent native window.
+The GPU regression in `metal_renderer::transparency_tests` reads back two
+layered quads and checks their resulting alpha. Preserve this fix when
+updating the vendored packages.
+
 ## Packaging
 
 The complete normal Rust sources, shader sources, build scripts, README files,
-and Windows resources are copied unchanged except for the patch above.
+and Windows resources are copied unchanged except for the changes above.
 Examples, external test assets, and example target declarations are omitted.
 Vitre's tests compile these crates as dependencies; this is not a distribution
 of the upstream standalone GPUI test suite.

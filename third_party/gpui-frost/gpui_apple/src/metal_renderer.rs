@@ -1300,7 +1300,9 @@ fn build_pipeline_state(
     color_attachment.set_source_rgb_blend_factor(metal::MTLBlendFactor::SourceAlpha);
     color_attachment.set_source_alpha_blend_factor(metal::MTLBlendFactor::One);
     color_attachment.set_destination_rgb_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
-    color_attachment.set_destination_alpha_blend_factor(metal::MTLBlendFactor::One);
+    // Preserve source-over alpha for transparent windows. Adding destination
+    // alpha makes overlapping glass surfaces opaque even though RGB blends.
+    color_attachment.set_destination_alpha_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
 
     device
         .new_render_pipeline_state(&descriptor)
@@ -1334,7 +1336,9 @@ fn build_path_sprite_pipeline_state(
     color_attachment.set_source_rgb_blend_factor(metal::MTLBlendFactor::One);
     color_attachment.set_source_alpha_blend_factor(metal::MTLBlendFactor::One);
     color_attachment.set_destination_rgb_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
-    color_attachment.set_destination_alpha_blend_factor(metal::MTLBlendFactor::One);
+    // Preserve source-over alpha for transparent windows. Adding destination
+    // alpha makes overlapping glass surfaces opaque even though RGB blends.
+    color_attachment.set_destination_alpha_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
 
     device
         .new_render_pipeline_state(&descriptor)
@@ -1629,5 +1633,42 @@ impl gpui::PlatformHeadlessRenderer for MetalHeadlessRenderer {
 
     fn sprite_atlas(&self) -> Arc<dyn gpui::PlatformAtlas> {
         self.renderer.sprite_atlas().clone()
+    }
+}
+
+#[cfg(test)]
+mod transparency_tests {
+    use super::*;
+    use gpui::{Bounds, ContentMask, Quad, ScaledPixels, point};
+
+    #[test]
+    fn overlapping_translucent_quads_preserve_background_transparency() {
+        let mut renderer =
+            MetalRenderer::new_headless(Arc::new(Mutex::new(InstanceBufferPool::default())));
+        renderer.update_transparency(true);
+        let bounds = Bounds::new(
+            point(ScaledPixels(0.), ScaledPixels(0.)),
+            size(ScaledPixels(4.), ScaledPixels(4.)),
+        );
+        let mut scene = Scene::default();
+        for alpha in [0.4, 0.5] {
+            scene.insert_primitive(Quad {
+                order: Default::default(),
+                border_style: Default::default(),
+                bounds,
+                content_mask: ContentMask { bounds },
+                background: gpui::black().alpha(alpha).into(),
+                border_color: gpui::Hsla::transparent_black(),
+                corner_radii: Default::default(),
+                border_widths: Default::default(),
+            });
+        }
+        scene.finish();
+        let image = renderer
+            .render_scene_to_image(&scene, size(DevicePixels(4), DevicePixels(4)))
+            .expect("render translucent layers");
+        // Source-over: 0.5 + 0.4 * (1 - 0.5) = 0.7, not additive 0.9.
+        let alpha = image.get_pixel(2, 2)[3];
+        assert!((i32::from(alpha) - 179).abs() <= 1, "alpha was {alpha}");
     }
 }
