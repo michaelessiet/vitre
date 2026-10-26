@@ -247,11 +247,9 @@ impl ChatApp {
                     thread.id.0 == thread_id && !matches!(&thread.archived_at, Some(Some(Some(_))))
                 })
         });
-        if device_owner_gone {
-            if let Some((owner, panel)) = self.mobile_panel.take() {
-                panel.update(cx, |p, _| p.set_visible(false));
-                self.right_panel.map.close_surface(&owner, "devices");
-            }
+        if device_owner_gone && let Some((owner, panel)) = self.mobile_panel.take() {
+            panel.update(cx, |p, _| p.set_visible(false));
+            self.right_panel.map.close_surface(&owner, "devices");
         }
         if let Some((owner, panel)) = &self.mobile_panel {
             let visible = self.dock_thread_key().as_ref() == Some(owner)
@@ -826,10 +824,9 @@ impl ChatApp {
                 .mobile_panel
                 .as_ref()
                 .is_some_and(|(owner, _)| owner == thread_key)
+            && let Some((_, panel)) = self.mobile_panel.take()
         {
-            if let Some((_, panel)) = self.mobile_panel.take() {
-                panel.update(cx, |p, _| p.set_visible(false));
-            }
+            panel.update(cx, |p, _| p.set_visible(false));
         }
         let Some(RightPanelSurface::Preview { resource_id, .. }) = self
             .right_panel

@@ -55,7 +55,7 @@ pub async fn devices() -> anyhow::Result<Vec<Device>> {
                 }
             }
         }
-        return Ok(devices);
+        Ok(devices)
     }
     #[cfg(not(target_os = "macos"))]
     anyhow::bail!("Native Devices currently requires macOS")
@@ -83,7 +83,7 @@ impl DevicePanel {
         {
             let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
             let view = native::NativeView::new(window, sender.clone())?;
-            return Ok(cx.new(move |cx: &mut Context<Self>| {
+            Ok(cx.new(move |cx: &mut Context<Self>| {
                 let stream_view = view.clone();
                 let target = device.clone();
                 let job = gpui_tokio::Tokio::spawn_result(cx, async move {
@@ -161,7 +161,7 @@ impl DevicePanel {
                     _worker: worker,
                     _stats: stats,
                 }
-            }));
+            }))
         }
         #[cfg(not(target_os = "macos"))]
         anyhow::bail!("Native Devices requires macOS")
