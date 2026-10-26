@@ -244,7 +244,7 @@ impl ClientSettings {
             path: path.clone(),
         });
         if glass_changed {
-            crate::glass::apply_popup_theme(cx);
+            crate::glass::apply_theme(cx);
             cx.refresh_windows();
         }
         // Best-effort, like every other Vitre UI preference: a failed write is

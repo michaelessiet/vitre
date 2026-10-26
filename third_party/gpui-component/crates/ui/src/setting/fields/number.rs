@@ -7,7 +7,7 @@ use gpui::{
 
 use crate::{
     AxisExt, Disableable, Sizable, StyledExt,
-    input::{InputEvent, InputState, NumberInput, NumberInputEvent, StepAction},
+    input::{InputEvent, InputState, NumberInput},
     setting::{
         AnySettingField, RenderOptions,
         fields::{SettingFieldRender, get_value, set_value},
@@ -63,7 +63,6 @@ impl SettingFieldRender for NumberField {
     ) -> AnyElement {
         let value = get_value::<f64>(&field, cx);
         let set_value = set_value::<f64>(&field, cx);
-        let step_set_value = set_value.clone();
         let num_options = self.options.clone();
 
         let state_entity = window.use_keyed_state(
@@ -75,67 +74,48 @@ impl SettingFieldRender for NumberField {
             )),
             cx,
             |window, cx| {
-                let input =
-                    cx.new(|cx| InputState::new(window, cx).default_value(value.to_string()));
-                let _subscriptions = vec![
-                    cx.subscribe_in(&input, window, {
-                        move |state: &mut State, input, event: &NumberInputEvent, window, cx| {
-                            match event {
-                                NumberInputEvent::Step(action) => {
-                                    let value = input.read(cx).value();
-                                    if let Ok(value) = value.parse::<f64>() {
-                                        let new_value = if *action == StepAction::Increment {
-                                            value + num_options.step
-                                        } else {
-                                            value - num_options.step
-                                        };
-                                        let clamp_value =
-                                            new_value.clamp(num_options.min, num_options.max);
-
-                                        input.update(cx, |input, cx| {
-                                            input.set_value(
-                                                SharedString::from(clamp_value.to_string()),
-                                                window,
-                                                cx,
-                                            );
-                                        });
-                                        step_set_value(clamp_value, cx);
-                                        state.initial_value = clamp_value;
-                                    }
-                                }
-                            }
+                let input = cx.new(|cx| {
+                    InputState::new(window, cx)
+                        .default_value(value.to_string())
+                        .min(num_options.min)
+                        .max(num_options.max)
+                        .step(num_options.step)
+                });
+                let _subscriptions = vec![cx.subscribe_in(&input, window, {
+                    move |state: &mut State, input, event: &InputEvent, window, cx| {
+                        let commit =
+                            matches!(event, InputEvent::Blur | InputEvent::PressEnter { .. });
+                        if !commit && !matches!(event, InputEvent::Change) {
+                            return;
                         }
-                    }),
-                    cx.subscribe_in(&input, window, {
-                        move |state: &mut State, input, event: &InputEvent, window, cx| match event
-                        {
-                            InputEvent::Change => {
-                                input.update(cx, |input, cx| {
-                                    let value = input.value();
-                                    if value == state.initial_value.to_string() {
-                                        return;
-                                    }
-
-                                    if let Ok(value) = value.parse::<f64>() {
-                                        let clamp_value =
-                                            value.clamp(num_options.min, num_options.max);
-
-                                        set_value(clamp_value, cx);
-                                        state.initial_value = clamp_value;
-                                        if clamp_value != value {
-                                            input.set_value(
-                                                SharedString::from(clamp_value.to_string()),
-                                                window,
-                                                cx,
-                                            );
-                                        }
-                                    }
-                                });
-                            }
-                            _ => {}
+                        let text = input.read(cx).value();
+                        let parsed = text.parse::<f64>().ok().filter(|value| value.is_finite());
+                        let next = if commit {
+                            // Empty/unfinished edits restore the last accepted value.
+                            parsed
+                                .unwrap_or(state.initial_value)
+                                .clamp(num_options.min, num_options.max)
+                        } else {
+                            // Keep partial numbers ("", "6", "-") editable. Only a
+                            // complete in-range value updates the live setting.
+                            let Some(value) = parsed.filter(|value| {
+                                *value >= num_options.min && *value <= num_options.max
+                            }) else {
+                                return;
+                            };
+                            value
+                        };
+                        if next != state.initial_value {
+                            set_value(next, cx);
+                            state.initial_value = next;
                         }
-                    }),
-                ];
+                        if commit && text != next.to_string() {
+                            input.update(cx, |input, cx| {
+                                input.set_value(next.to_string(), window, cx);
+                            });
+                        }
+                    }
+                })];
 
                 State {
                     input,

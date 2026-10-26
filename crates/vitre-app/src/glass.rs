@@ -72,13 +72,11 @@ pub fn root(cx: &App) -> Hsla {
 pub fn background(cx: &App) -> Hsla {
     cx.theme()
         .background
-        .opacity(ClientSettings::glass_opacity(cx))
+        .alpha(ClientSettings::glass_opacity(cx))
 }
 
 pub fn sidebar(cx: &App) -> Hsla {
-    cx.theme()
-        .sidebar
-        .opacity(ClientSettings::glass_opacity(cx))
+    cx.theme().sidebar.alpha(ClientSettings::glass_opacity(cx))
 }
 
 /// Slightly denser than the main canvas so utility panes and floating controls
@@ -86,30 +84,50 @@ pub fn sidebar(cx: &App) -> Hsla {
 pub fn elevated(cx: &App) -> Hsla {
     cx.theme()
         .background
-        .opacity((ClientSettings::glass_opacity(cx) + 0.08).min(1.0))
+        .alpha((ClientSettings::glass_opacity(cx) + 0.08).min(1.0))
 }
 
 pub fn control(cx: &App) -> Hsla {
     cx.theme()
         .muted
-        .opacity((ClientSettings::glass_opacity(cx) + 0.06).min(1.0))
+        .alpha(control_opacity(ClientSettings::glass_opacity(cx)))
 }
 
-/// Keep floating surfaces on the same glass setting as the window. Both token
+// Controls are painted over an already-tinted pane. Source-over compositing
+// gives base + overlay * (1 - base), so adding 10 points needs this overlay
+// alpha rather than another full glass tint (which nearly hides the backdrop).
+fn control_opacity(opacity: f32) -> f32 {
+    if opacity >= 1.0 {
+        1.0
+    } else {
+        (0.10 / (1.0 - opacity)).clamp(0.0, 1.0)
+    }
+}
+
+/// Keep controls and floating surfaces on the same glass setting as the window. Both token
 /// forms are used by the component library (dialogs and menus use the color,
 /// while tooltips use the renderable token).
-pub fn apply_popup_theme(cx: &mut App) {
+pub fn apply_theme(cx: &mut App) {
     let opacity = ClientSettings::glass_opacity(cx);
-    apply_popup_opacity(Theme::global_mut(cx), opacity);
+    apply_surface_opacity(Theme::global_mut(cx), opacity);
     Theme::sync_base(cx);
 }
 
-fn apply_popup_opacity(theme: &mut Theme, opacity: f32) {
+fn apply_surface_opacity(theme: &mut Theme, opacity: f32) {
     // Replace alpha: repeatedly editing opacity must not compound the tint.
     // A modest elevation keeps content readable while preserving the user's
     // transparency preference, including a genuinely opaque 100% setting.
     theme.popover = theme.popover.alpha((opacity + 0.08).clamp(0.0, 1.0));
     theme.tokens.popover = theme.popover.into();
+
+    // Cover input fields and solid utility surfaces without fading their text,
+    // borders or icons. Replace alpha so slider updates never compound it.
+    let control_alpha = control_opacity(opacity);
+    theme.background = theme.background.alpha(control_alpha);
+    theme.muted = theme.muted.alpha(control_alpha);
+    theme.tokens.background = theme.background.into();
+    theme.tokens.muted = theme.muted.into();
+    theme.input_background_override = Some(theme.muted);
 }
 
 #[cfg(test)]
@@ -117,34 +135,69 @@ mod tests {
     use super::*;
 
     #[test]
+    fn control_opacity_tracks_composited_glass_across_slider_and_palette_changes() {
+        let mut theme = Theme::default();
+        for mode in [
+            gpui_component::ThemeMode::Dark,
+            gpui_component::ThemeMode::Light,
+        ] {
+            theme.mode = mode;
+            let color = if mode.is_dark() {
+                gpui::hsla(0.6, 0.3, 0.1, 1.0)
+            } else {
+                gpui::hsla(0.1, 0.05, 0.98, 1.0)
+            };
+            theme.background = color;
+            theme.muted = color;
+            for opacity in [0.4, 0.65, 0.8, 0.8, 0.9, 1.0, 0.4] {
+                apply_surface_opacity(&mut theme, opacity);
+                let alpha = control_opacity(opacity);
+                let composited = opacity + alpha * (1.0 - opacity);
+                assert!((composited - (opacity + 0.10).min(1.0)).abs() < 0.00001);
+                let expected = color.alpha(alpha);
+                assert_eq!(theme.background, expected);
+                assert_eq!(theme.muted, expected);
+                assert_eq!(theme.input_background(), expected);
+                assert_eq!(theme.tokens.background.color, expected);
+                assert_eq!(theme.tokens.muted.color, expected);
+            }
+        }
+    }
+
+    #[test]
     fn popup_opacity_tracks_glass_without_compounding_alpha() {
         let mut theme = Theme::default();
         let palette_color = gpui::hsla(0.6, 0.3, 0.2, 1.0);
         theme.popover = palette_color;
 
-        apply_popup_opacity(&mut theme, 0.4);
+        apply_surface_opacity(&mut theme, 0.4);
         assert_eq!(theme.popover, palette_color.alpha(0.4 + 0.08));
         assert_eq!(theme.tokens.popover.color, theme.popover);
         assert_eq!(theme.tokens.popover.background, theme.popover.into());
 
-        apply_popup_opacity(&mut theme, 0.4);
+        apply_surface_opacity(&mut theme, 0.4);
         assert_eq!(theme.popover, palette_color.alpha(0.4 + 0.08));
-        apply_popup_opacity(&mut theme, 0.8);
+        apply_surface_opacity(&mut theme, 0.8);
         assert_eq!(theme.popover, palette_color.alpha(0.8 + 0.08));
-        apply_popup_opacity(&mut theme, 1.0);
+        apply_surface_opacity(&mut theme, 1.0);
         assert_eq!(theme.popover, palette_color);
         assert_eq!(theme.tokens.popover.color, palette_color);
     }
 
     #[test]
     fn popup_opacity_preserves_the_new_palette_after_a_theme_change() {
-        let mut theme = Theme::default();
-        theme.popover = gpui::hsla(0.6, 0.3, 0.2, 1.0);
-        apply_popup_opacity(&mut theme, 0.8);
+        let mut theme = Theme {
+            colors: gpui_component::ThemeColor {
+                popover: gpui::hsla(0.6, 0.3, 0.2, 1.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        apply_surface_opacity(&mut theme, 0.8);
 
         let light_popup = gpui::hsla(0.1, 0.05, 0.98, 1.0);
         theme.popover = light_popup;
-        apply_popup_opacity(&mut theme, 0.8);
+        apply_surface_opacity(&mut theme, 0.8);
 
         assert_eq!(theme.popover, light_popup.alpha(0.8 + 0.08));
         assert_eq!(theme.tokens.popover.color, theme.popover);
