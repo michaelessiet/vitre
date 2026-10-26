@@ -24,7 +24,7 @@ pub(crate) fn automation_operations() -> Vec<vitre_contracts::PreviewAutomationO
         SetColorScheme,
     ];
     if CAPTURE {
-        operations.extend([Snapshot, RecordingStart, RecordingStop]);
+        operations.extend([Snapshot, RecordingStart, RecordingStop, Mobile]);
     }
     operations
 }

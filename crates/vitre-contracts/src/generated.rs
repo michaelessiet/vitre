@@ -1386,6 +1386,15 @@ pub struct CloudCheckpoint {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum CloudCommand {
+    #[serde(rename = "project.delete")]
+    ProjectDelete {
+        #[serde(rename = "expectedRevision")]
+        expected_revision: i64,
+        #[serde(rename = "idempotencyKey")]
+        idempotency_key: String,
+        #[serde(rename = "projectId")]
+        project_id: String,
+    },
     #[serde(rename = "task.createFromProject")]
     TaskCreateFromProject {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1573,6 +1582,15 @@ pub enum CloudCommand {
         #[serde(rename = "idempotencyKey")]
         idempotency_key: String,
         provider: CloudProvider,
+    },
+    #[serde(rename = "publication.prepare")]
+    PublicationPrepare {
+        #[serde(rename = "expectedTurnRequestId")]
+        expected_turn_request_id: Option<String>,
+        #[serde(rename = "idempotencyKey")]
+        idempotency_key: String,
+        #[serde(rename = "taskId")]
+        task_id: String,
     },
     #[serde(rename = "publication.create")]
     PublicationCreate {
@@ -2079,6 +2097,12 @@ pub struct CloudOverviewCapabilities {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[serde(rename = "projectCreation")]
     pub project_creation: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "projectDeletion")]
+    pub project_deletion: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "publicationPreparation")]
+    pub publication_preparation: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2573,6 +2597,9 @@ pub struct CloudTask {
     pub project_snapshot: Option<CloudTaskProjectSnapshot>,
     pub prompt: String,
     pub provider: CloudProvider,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "publicationPreparation")]
+    pub publication_preparation: Option<CloudTaskPublicationPreparation>,
     pub repository: CloudRepository,
     pub result: Option<CloudResultRevision>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2733,6 +2760,15 @@ pub struct CloudTaskProjectSnapshot {
     #[serde(rename = "sourceTitle")]
     pub source_title: String,
     pub workspace: Option<CloudSnapshotRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudTaskPublicationPreparation {
+    pub id: String,
+    #[serde(rename = "requestedAt")]
+    pub requested_at: TrimmedNonEmptyString,
+    #[serde(rename = "turnRequestId")]
+    pub turn_request_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -7513,6 +7549,8 @@ pub enum PreviewAutomationOperation {
     Resize,
     #[serde(rename = "setColorScheme")]
     SetColorScheme,
+    #[serde(rename = "mobile")]
+    Mobile,
     /// Forward compatibility: a literal this build does not know.
     #[serde(untagged)]
     Unknown(String),

@@ -34,6 +34,7 @@ mod plan_save;
 mod plan_timeline;
 mod polish;
 use feedback::CopyButton;
+mod mobile;
 #[cfg(debug_assertions)]
 mod polish_verification;
 mod preview;
@@ -424,6 +425,8 @@ pub struct ChatApp {
     preview_panels: HashMap<String, Entity<preview::PreviewPanel>>,
     preview_subscriptions: HashMap<gpui::EntityId, Subscription>,
     preview_automation_task: Option<gpui::Task<()>>,
+    mobile_opening: bool,
+    mobile_panel: Option<(String, Entity<crate::mobile::DevicePanel>)>,
     preview_mini: Option<String>,
     preview_mini_bounds: Option<gpui::Bounds<gpui::Pixels>>,
     preview_mini_drag: Option<(gpui::Point<gpui::Pixels>, gpui::Bounds<gpui::Pixels>, bool)>,
@@ -2414,6 +2417,8 @@ impl ChatApp {
             preview_panels: HashMap::new(),
             preview_subscriptions: HashMap::new(),
             preview_automation_task: None,
+            mobile_opening: false,
+            mobile_panel: None,
             preview_mini: None,
             preview_mini_bounds: None,
             preview_mini_drag: None,
@@ -2843,6 +2848,7 @@ impl ChatApp {
                 self.toggle_quick_search(QuickSearchMode::Content, window, cx);
             }
             PaletteAction::ToggleFilesPanel => self.toggle_right_panel(window, cx),
+            PaletteAction::OpenDevices => self.open_devices(window, cx),
             PaletteAction::ToggleTerminal => self.terminal_toggle(cx),
             PaletteAction::WorkspaceSearch => self.open_workspace_surface(
                 vitre_state::right_panel::SurfaceKind::Search,

@@ -22,7 +22,8 @@ use gpui::{
     SharedString, WeakEntity, Window, div, prelude::*, px,
 };
 use gpui_component::{
-    ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, WindowExt as _,
+    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, StyledExt as _,
+    WindowExt as _,
     button::{Button, ButtonVariants as _},
     h_flex,
     menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenuItem},
@@ -234,6 +235,39 @@ impl ChatApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let device_owner_gone = self.mobile_panel.as_ref().is_some_and(|(owner, _)| {
+            let Some(snapshot) = &self.shell.snapshot else {
+                return false;
+            };
+            let Some((_, thread_id)) = owner.split_once(':') else {
+                return true;
+            };
+            thread_id != "home"
+                && !snapshot.threads.iter().any(|thread| {
+                    thread.id.0 == thread_id && !matches!(&thread.archived_at, Some(Some(Some(_))))
+                })
+        });
+        if device_owner_gone {
+            if let Some((owner, panel)) = self.mobile_panel.take() {
+                panel.update(cx, |p, _| p.set_visible(false));
+                self.right_panel.map.close_surface(&owner, "devices");
+            }
+        }
+        if let Some((owner, panel)) = &self.mobile_panel {
+            let visible = self.dock_thread_key().as_ref() == Some(owner)
+                && self
+                    .right_panel
+                    .map
+                    .active_surface(owner)
+                    .is_some_and(|s| s.kind() == SurfaceKind::Devices)
+                && self.settings.is_none()
+                && self.quick_search.is_none()
+                && self.model_picker.is_none()
+                && self.command_palette.is_none()
+                && !window.has_active_dialog(cx)
+                && !window.has_active_sheet(cx);
+            panel.update(cx, |p, _| p.set_visible(visible));
+        }
         if !crate::platform_capabilities::BROWSER {
             return;
         }
@@ -787,6 +821,16 @@ impl ChatApp {
         surface_id: &str,
         cx: &mut Context<Self>,
     ) {
+        if surface_id == "devices"
+            && self
+                .mobile_panel
+                .as_ref()
+                .is_some_and(|(owner, _)| owner == thread_key)
+        {
+            if let Some((_, panel)) = self.mobile_panel.take() {
+                panel.update(cx, |p, _| p.set_visible(false));
+            }
+        }
         let Some(RightPanelSurface::Preview { resource_id, .. }) = self
             .right_panel
             .map
@@ -1459,6 +1503,7 @@ impl ChatApp {
     fn render_dock_add_button(&self, cx: &mut Context<Self>) -> AnyElement {
         let offers = self.dock_surface_offers();
         let chat = cx.entity().downgrade();
+        let devices_available = cfg!(target_os = "macos") && !self.is_cloud_thread();
         Button::new("dock-add-surface")
             .icon(Icon::new(IconName::Plus).size_4())
             .ghost()
@@ -1476,6 +1521,16 @@ impl ChatApp {
                                 let _ = chat.update(cx, |this, cx| {
                                     this.dock_add_surface(kind, window, cx);
                                 });
+                            }),
+                    );
+                }
+                if devices_available {
+                    let chat = chat.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new("Devices")
+                            .icon(IconName::Globe)
+                            .on_click(move |_, window, cx| {
+                                let _ = chat.update(cx, |app, cx| app.open_devices(window, cx));
                             }),
                     );
                 }
@@ -1572,6 +1627,15 @@ impl ChatApp {
                 Some(panel) => div().size_full().child(panel).into_any_element(),
                 None => dock_placeholder("Open a project to explore its graph.", cx),
             },
+            SurfaceKind::Devices => match &self.mobile_panel {
+                Some((owner, panel)) if self.dock_thread_key().as_ref() == Some(owner) => {
+                    panel.clone().into_any_element()
+                }
+                _ => div()
+                    .p_4()
+                    .child("Open Devices to connect a simulator or emulator.")
+                    .into_any_element(),
+            },
             SurfaceKind::Plan => self.render_dock_plan(cx),
         }
     }
@@ -1619,6 +1683,25 @@ impl ChatApp {
                     ),
             )
             .child(grid)
+            .when(
+                cfg!(target_os = "macos") && !self.is_cloud_thread(),
+                |view| {
+                    view.child(
+                        Button::new("dock-open-devices")
+                            .mt_3()
+                            .label(if self.mobile_opening {
+                                "Connecting devices…"
+                            } else {
+                                "Open Devices"
+                            })
+                            .icon(IconName::Globe)
+                            .disabled(self.mobile_opening)
+                            .on_click(
+                                cx.listener(|app, _, window, cx| app.open_devices(window, cx)),
+                            ),
+                    )
+                },
+            )
             .into_any_element()
     }
 
@@ -1752,6 +1835,7 @@ fn surface_title(surface: &RightPanelSurface) -> SharedString {
         RightPanelSurface::Search { .. } => "Search".into(),
         RightPanelSurface::Plan { .. } => "Plan".into(),
         RightPanelSurface::Graph { .. } => "Graph".into(),
+        RightPanelSurface::Devices { .. } => "Devices".into(),
         RightPanelSurface::Preview { .. } => "Browser".into(),
         RightPanelSurface::Terminal {
             active_terminal_id, ..
@@ -1773,6 +1857,7 @@ fn surface_icon(surface: &RightPanelSurface) -> Icon {
         SurfaceKind::Search => Icon::new(VitreIcon::TextSearch),
         SurfaceKind::Plan => Icon::new(IconName::BookOpen),
         SurfaceKind::Graph => Icon::new(IconName::Network),
+        SurfaceKind::Devices => Icon::new(IconName::Globe),
         SurfaceKind::Preview => Icon::new(IconName::Globe),
         SurfaceKind::Terminal => Icon::new(IconName::SquareTerminal),
         SurfaceKind::File => Icon::new(IconName::File),

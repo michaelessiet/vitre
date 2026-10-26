@@ -2245,6 +2245,41 @@
         {
           "additionalProperties": false,
           "properties": {
+            "expectedRevision": {
+              "allOf": [
+                {
+                  "minimum": 0
+                }
+              ],
+              "type": "integer"
+            },
+            "idempotencyKey": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "projectId": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "type": {
+              "enum": ["project.delete"],
+              "type": "string"
+            }
+          },
+          "required": ["type", "idempotencyKey", "projectId", "expectedRevision"],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "attachments": {
               "allOf": [
                 {
@@ -3046,6 +3081,48 @@
         {
           "additionalProperties": false,
           "properties": {
+            "expectedTurnRequestId": {
+              "anyOf": [
+                {
+                  "allOf": [
+                    {
+                      "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                    }
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "idempotencyKey": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "taskId": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "type": {
+              "enum": ["publication.prepare"],
+              "type": "string"
+            }
+          },
+          "required": ["type", "idempotencyKey", "taskId", "expectedTurnRequestId"],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "body": {
               "allOf": [
                 {
@@ -3774,6 +3851,12 @@
               "type": "boolean"
             },
             "projectCreation": {
+              "type": "boolean"
+            },
+            "projectDeletion": {
+              "type": "boolean"
+            },
+            "publicationPreparation": {
               "type": "boolean"
             }
           },
@@ -5357,6 +5440,39 @@
         },
         "provider": {
           "$ref": "#/$defs/CloudProvider"
+        },
+        "publicationPreparation": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "requestedAt": {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            },
+            "turnRequestId": {
+              "anyOf": [
+                {
+                  "allOf": [
+                    {
+                      "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                    }
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": ["id", "turnRequestId", "requestedAt"],
+          "type": "object"
         },
         "repository": {
           "$ref": "#/$defs/CloudRepository"
@@ -14639,7 +14755,8 @@
         "recordingStart",
         "recordingStop",
         "resize",
-        "setColorScheme"
+        "setColorScheme",
+        "mobile"
       ],
       "type": "string"
     },

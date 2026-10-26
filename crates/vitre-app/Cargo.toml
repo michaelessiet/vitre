@@ -52,6 +52,8 @@ image = { version = "0.25.10", default-features = false, features = [
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+tonic = { version = "0.12", default-features = false, features = ["transport", "prost", "codegen"] }
+prost = "0.13"
 objc2 = "0.6.3"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = [
   "NSAppearance",
