@@ -186,8 +186,10 @@ mod tests {
 
     #[test]
     fn popup_opacity_preserves_the_new_palette_after_a_theme_change() {
-        let mut theme = Theme::default();
-        theme.popover = gpui::hsla(0.6, 0.3, 0.2, 1.0);
+        let mut theme = Theme {
+            popover: gpui::hsla(0.6, 0.3, 0.2, 1.0),
+            ..Default::default()
+        };
         apply_surface_opacity(&mut theme, 0.8);
 
         let light_popup = gpui::hsla(0.1, 0.05, 0.98, 1.0);
