@@ -45,6 +45,7 @@ pub enum SurfaceKind {
     Terminal,
     Search,
     Graph,
+    Devices,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -79,6 +80,9 @@ pub enum RightPanelSurface {
         id: String,
     },
     Graph {
+        id: String,
+    },
+    Devices {
         id: String,
     },
     /// A browser tab. `resource_id` is the preview session's tab id; `None`
@@ -120,7 +124,8 @@ impl RightPanelSurface {
             | Self::Diff { id }
             | Self::Files { id }
             | Self::Search { id }
-            | Self::Graph { id } => id,
+            | Self::Graph { id }
+            | Self::Devices { id } => id,
             Self::Preview { id, .. } | Self::Terminal { id, .. } | Self::File { id, .. } => id,
         }
     }
@@ -133,6 +138,7 @@ impl RightPanelSurface {
             Self::Files { .. } => SurfaceKind::Files,
             Self::Search { .. } => SurfaceKind::Search,
             Self::Graph { .. } => SurfaceKind::Graph,
+            Self::Devices { .. } => SurfaceKind::Devices,
             Self::Preview { .. } => SurfaceKind::Preview,
             Self::Terminal { .. } => SurfaceKind::Terminal,
             Self::File { .. } => SurfaceKind::File,
@@ -147,6 +153,7 @@ impl RightPanelSurface {
             SurfaceKind::Files => "files",
             SurfaceKind::Search => "search",
             SurfaceKind::Graph => "graph",
+            SurfaceKind::Devices => "devices",
             _ => return None,
         };
         Some(match kind {
@@ -156,6 +163,7 @@ impl RightPanelSurface {
             SurfaceKind::Files => Self::Files { id: id.into() },
             SurfaceKind::Search => Self::Search { id: id.into() },
             SurfaceKind::Graph => Self::Graph { id: id.into() },
+            SurfaceKind::Devices => Self::Devices { id: id.into() },
             _ => unreachable!(),
         })
     }
@@ -860,6 +868,21 @@ mod tests {
     use serde_json::json;
 
     const KEY: &str = "env-1:thread-1";
+
+    #[test]
+    fn devices_panel_lifecycle_and_persistence() {
+        let mut map = RightPanelMap::default();
+        map.open(KEY, SurfaceKind::Devices);
+        map.open(KEY, SurfaceKind::Devices);
+        assert_eq!(map.thread(KEY).surfaces.len(), 1);
+        let mut restored = RightPanelMap::from_persisted(&map.to_persisted());
+        assert_eq!(restored.active_kind(KEY), Some(SurfaceKind::Devices));
+        restored.close(KEY);
+        assert_eq!(restored.active_kind(KEY), None);
+        assert_eq!(restored.thread(KEY).surfaces.len(), 1);
+        restored.close_surface(KEY, "devices");
+        assert!(restored.thread(KEY).surfaces.is_empty());
+    }
 
     #[test]
     fn cloud_tests_surface_is_singleton_and_round_trips() {

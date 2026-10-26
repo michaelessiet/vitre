@@ -27,6 +27,7 @@ pub(crate) mod fixtures {
 
     pub(crate) fn task(id: &str, state: CloudTaskState, with_result: bool) -> CloudTask {
         CloudTask {
+            publication_preparation: None,
             project_snapshot: None,
             turn_settings: None,
             runtime_mode: None,

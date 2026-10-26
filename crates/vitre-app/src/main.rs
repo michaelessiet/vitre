@@ -14,6 +14,7 @@ mod icons;
 mod image_render;
 mod keymap;
 mod lsp;
+mod mobile;
 mod palette;
 mod platform_capabilities;
 mod search;

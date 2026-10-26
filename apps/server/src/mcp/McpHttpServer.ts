@@ -17,6 +17,7 @@ import packageJson from "../../package.json" with { type: "json" };
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
+import { MobileToolkitRegistrationLive } from "./toolkits/mobile/registration.ts";
 import { GraphToolkitHandlersLive } from "./toolkits/graph/handlers.ts";
 import { GraphToolkit } from "./toolkits/graph/tools.ts";
 import {
@@ -238,4 +239,5 @@ export const layer = Layer.mergeAll(
   PreviewToolkitRegistrationLive,
   GraphToolkitRegistrationLive,
   SystemBrowserToolkitRegistrationLive,
+  MobileToolkitRegistrationLive,
 ).pipe(Layer.provideMerge(McpTransportLive));

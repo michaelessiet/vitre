@@ -91,6 +91,7 @@ pub enum PaletteAction {
     QuickSearchOpen,
     QuickSearchContent,
     ToggleFilesPanel,
+    OpenDevices,
     ToggleTerminal,
     WorkspaceSearch,
     KnowledgeGraph,
@@ -1738,6 +1739,22 @@ fn action_items(
             )
             .shortcut(shortcut_for(&RightPanelToggle, window))
             .action(PaletteAction::ToggleFilesPanel),
+        );
+        items.push(
+            PaletteItem::new(
+                "Open Devices",
+                IconName::Globe,
+                &[
+                    "devices",
+                    "open devices",
+                    "mobile",
+                    "ios",
+                    "android",
+                    "simulator",
+                    "emulator",
+                ],
+            )
+            .action(PaletteAction::OpenDevices),
         );
         items.push(
             PaletteItem::new(

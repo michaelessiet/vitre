@@ -57,6 +57,7 @@ impl ChatApp {
                         let executor=cx.background_executor().clone();
                         let timeout=executor.timer(std::time::Duration::from_millis(request.timeout_ms.clamp(1,60000) as u64));
                         let run=async {
+                            if request.operation==PreviewAutomationOperation::Mobile {return super::mobile::automation(&this,&request,cx).await;}
                             let list=client.call::<PreviewList>(&PreviewListInput{thread_id:request.thread_id.clone()}).await.map_err(|e|e.user_message())?;
                             let explicit=request.tab_id.as_ref().and_then(|v|v.as_ref());
                             let existing=if let Some(id)=explicit {list.sessions.into_iter().find(|s|&s.tab_id==id)}else{list.sessions.into_iter().next()};
