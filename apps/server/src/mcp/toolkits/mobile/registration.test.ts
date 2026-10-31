@@ -2,6 +2,7 @@ import { expect, it } from "@effect/vitest";
 import { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import { McpSchema, McpServer } from "effect/unstable/ai";
 import { McpInvocationContext, type McpCapability } from "../../McpInvocationContext.ts";
 import {
@@ -9,6 +10,8 @@ import {
   type PreviewAutomationInvokeInput,
 } from "../../PreviewAutomationBroker.ts";
 import { MobileToolkitRegistrationLive } from "./registration.ts";
+
+const encodeJson = Schema.encodeSync(Schema.UnknownFromJsonString);
 
 it.effect("routes native device tools to the authorized thread and returns screenshot images", () =>
   Effect.gen(function* () {
@@ -20,6 +23,12 @@ it.effect("routes native device tools to the authorized thread and returns scree
           invoke: <A>(request: PreviewAutomationInvokeInput) =>
             Effect.sync(() => {
               calls.push(request);
+              if ((request.input as { action: string }).action === "open") {
+                return { connected: false, starting: true } as A;
+              }
+              if ((request.input as { action: string }).action === "stop") {
+                return { connected: false, stopped: true } as A;
+              }
               return { mimeType: "image/png", data: "AQID" } as A;
             }),
         }),
@@ -51,9 +60,11 @@ it.effect("routes native device tools to the authorized thread and returns scree
         "mobile_swipe",
         "mobile_type",
         "mobile_press",
+        "mobile_stop",
         "mobile_close",
       ]);
       expect((yield* invoke("mobile_devices", {}, false)).isError).toBe(true);
+      expect((yield* invoke("mobile_stop", {}, false)).isError).toBe(true);
       expect(calls).toHaveLength(0);
       for (const args of [
         { x: -1, y: 0 },
@@ -83,6 +94,15 @@ it.effect("routes native device tools to the authorized thread and returns scree
       expect(
         (calls[0]?.input as { parameters: unknown } | undefined)?.parameters,
       ).not.toHaveProperty("threadId");
+      const starting = yield* invoke("mobile_open", { deviceId: "avd:Pixel_10" });
+      expect(starting.isError).toBe(false);
+      expect(starting.content).toEqual([
+        { type: "text", text: encodeJson({ connected: false, starting: true }) },
+      ]);
+      expect(calls.at(-1)?.input).toEqual({
+        action: "open",
+        parameters: { deviceId: "avd:Pixel_10" },
+      });
       const screenshot = yield* invoke("mobile_screenshot", {});
       expect(screenshot.isError).toBe(false);
       expect(screenshot.content).toEqual([
@@ -90,6 +110,19 @@ it.effect("routes native device tools to the authorized thread and returns scree
       ]);
       expect((yield* invoke("mobile_tap", { x: 0.2, y: 0.8 })).isError).toBe(false);
       expect(calls.at(-1)?.input).toEqual({ action: "tap", parameters: { x: 0.2, y: 0.8 } });
+      const stopped = yield* invoke("mobile_stop", { threadId: "other-thread" });
+      expect(stopped.isError).toBe(false);
+      expect(stopped.content).toEqual([
+        { type: "text", text: encodeJson({ connected: false, stopped: true }) },
+      ]);
+      expect(calls.at(-1)).toMatchObject({
+        scope: { threadId: "authorized-thread" },
+        operation: "mobile",
+        input: { action: "stop", parameters: {} },
+      });
+      expect(
+        server.tools.find(({ tool }) => tool.name === "mobile_stop")?.tool.annotations,
+      ).toMatchObject({ readOnlyHint: false, destructiveHint: true });
     }).pipe(
       Effect.provide(layer),
       Effect.provideService(

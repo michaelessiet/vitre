@@ -1,6 +1,7 @@
 # Documentation
 
 - [Getting started](./getting-started/quick-start.md)
+- [Vitre design language](./design-language/README.md)
 - Architecture
   - [Overview](./architecture/overview.md)
   - [Connection runtime](./architecture/connection-runtime.md)

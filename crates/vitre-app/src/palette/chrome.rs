@@ -3,7 +3,7 @@
 use gpui::{App, Div, IntoElement, div, prelude::*};
 use gpui_component::{ActiveTheme as _, h_flex};
 
-pub(super) fn footer(cx: &App) -> Div {
+pub(crate) fn footer(cx: &App) -> Div {
     h_flex()
         .w_full()
         .flex_none()
@@ -16,7 +16,7 @@ pub(super) fn footer(cx: &App) -> Div {
         .border_color(cx.theme().border.opacity(0.6))
 }
 
-pub(super) fn key_hint(keys: &'static str, label: &'static str, cx: &App) -> impl IntoElement {
+pub(crate) fn key_hint(keys: &'static str, label: &'static str, cx: &App) -> impl IntoElement {
     h_flex()
         .gap_1()
         .child(

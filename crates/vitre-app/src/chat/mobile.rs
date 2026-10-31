@@ -1,8 +1,14 @@
 //! Native Devices picker and thread-owned dock surface.
 use super::ChatApp;
 use crate::mobile::{Device, DevicePanel};
-use gpui::{Context, IntoElement, ParentElement, Styled, Window, div};
-use gpui_component::{WindowExt as _, button::Button, notification::Notification, v_flex};
+use gpui::{Context, Window, div, prelude::*, px};
+use gpui_component::{
+    ActiveTheme as _, Icon, IconName, StyledExt as _, WindowExt as _,
+    command::{Command, CommandItem, CommandState},
+    h_flex,
+    notification::Notification,
+    v_flex,
+};
 use vitre_state::right_panel::SurfaceKind;
 impl ChatApp {
     pub(super) fn open_devices(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -29,33 +35,56 @@ impl ChatApp {
                 match result {
                     Ok(devices) => {
                         let owner = cx.weak_entity();
-                        window.open_dialog(cx, move |dialog, window, _| {
-                            let body = if devices.is_empty() {
-                                div().py_4()
-                                    .child("Start a device in Xcode or Android Studio, then reopen Devices.")
-                                    .into_any_element()
-                            } else {
-                                v_flex().gap_2().children(devices.iter().enumerate().map(|(index, device)| {
-                                    let device = device.clone();
+                        let state = cx.new(|cx| CommandState::new(window, cx));
+                        let focus = state.clone();
+                        window.open_dialog(cx, move |dialog, _, _| {
+                            let state = state.clone();
+                            let devices = devices.clone();
+                            let owner = owner.clone();
+                            let thread = thread.clone();
+                            dialog.close_button(false).p_0().margin_top(px(72.))
+                                .w(px(576.)).max_w(px(576.))
+                                .content(move |content, _, cx| {
+                                    let selected = devices.clone();
                                     let owner = owner.clone();
                                     let thread = thread.clone();
-                                    Button::new(("native-device", index)).w_full()
-                                        .label(device.name.clone())
-                                        .on_click(move |_, window, cx| {
+                                    let empty = devices.is_empty();
+                                    content.child(Command::new(&state)
+                                        .bordered(false).bg(cx.theme().popover.opacity(0.))
+                                        .cancel_clears_query(false)
+                                        .placeholder("Search devices…")
+                                        .max_h(px(300.))
+                                        .header(|_, _, cx| {
+                                            v_flex().px_3().pt_3().pb_1().gap_1()
+                                                .child(div().text_sm().font_semibold().child("Devices"))
+                                                .child(div().text_xs().text_color(cx.theme().muted_foreground)
+                                                    .child("Choose a device to connect. Stopped devices start automatically."))
+                                        })
+                                        .items(devices.iter().map(|device| device_item(device, &devices)))
+                                        .empty(move |_, _, cx| {
+                                            div().px_4().py_8().text_sm().text_color(cx.theme().muted_foreground)
+                                                .child(if empty {
+                                                    "Create a simulator in Xcode or a virtual device in Android Studio, then reopen Devices."
+                                                } else { "No devices match your search." })
+                                        })
+                                        .footer(|_, _, cx| {
+                                            crate::palette::chrome::footer(cx)
+                                                .child(crate::palette::chrome::key_hint("↑↓", "navigate", cx))
+                                                .child(crate::palette::chrome::key_hint("↵", "connect", cx))
+                                                .child(crate::palette::chrome::key_hint("esc", "close", cx))
+                                        })
+                                        .on_confirm(move |index, window, cx| {
+                                            let Some(device) = selected.get(index.row).cloned() else { return; };
                                             window.close_dialog(cx);
                                             let _ = owner.update(cx, |app, cx| {
-                                                if let Err(error) = app.connect_native_device(thread.clone(), device.clone(), window, cx) {
+                                                if let Err(error) = app.connect_native_device(thread.clone(), device, window, cx) {
                                                     window.push_notification(Notification::error(error), cx);
                                                 }
                                             });
-                                        })
-                                })).into_any_element()
-                            };
-                            dialog.title("Connect a device").w(window.rem_size() * 38.)
-                                .child(v_flex().gap_2()
-                                    .child(div().text_sm().child("Choose a running iOS simulator or Android emulator."))
-                                    .child(body))
+                                        }))
+                                })
                         });
+                        window.defer(cx, move |window, cx| { focus.update(cx, |state, cx| state.focus(window, cx)); });
                     }
                     Err(error) => { window.push_notification(Notification::error(error.to_string()), cx); }
                 }
@@ -81,6 +110,13 @@ impl ChatApp {
         {
             return Err("Close Devices in the other thread first.".into());
         }
+        if self.mobile_panel.as_ref().is_some_and(|(_, panel)| {
+            let panel = panel.read(cx);
+            panel.device.same_target(&device) && panel.can_reuse()
+        }) {
+            self.open_workspace_surface(SurfaceKind::Devices, window, cx);
+            return Ok(());
+        }
         self.mobile_panel = None;
         let panel = DevicePanel::open(device, window, cx).map_err(|e| e.to_string())?;
         self.mobile_panel = Some((thread.clone(), panel));
@@ -88,6 +124,68 @@ impl ChatApp {
         self.open_workspace_surface(SurfaceKind::Devices, window, cx);
         Ok(())
     }
+}
+
+fn device_item(device: &Device, devices: &[Device]) -> CommandItem {
+    let device = device.clone();
+    let duplicate_name = devices
+        .iter()
+        .filter(|d| {
+            d.name == device.name && d.runtime == device.runtime && d.platform == device.platform
+        })
+        .count()
+        > 1;
+    let mut detail = device
+        .runtime
+        .clone()
+        .unwrap_or_else(|| "Android emulator".into());
+    if duplicate_name {
+        let id = if device.platform == "ios" {
+            device.id.chars().take(8).collect::<String>()
+        } else {
+            device.id.clone()
+        };
+        detail.push_str(&format!(" · {id}"));
+    }
+    CommandItem::new()
+        .label(device.name.clone())
+        .keywords([device.id.clone(), detail.clone(), device.platform.clone()])
+        .child(move |_, cx| {
+            let muted = cx.theme().muted_foreground;
+            h_flex()
+                .w_full()
+                .gap_2()
+                .child(Icon::new(IconName::Globe).size_4().text_color(muted))
+                .child(
+                    v_flex()
+                        .min_w_0()
+                        .flex_1()
+                        .child(div().truncate().child(device.name.clone()))
+                        .child(
+                            div()
+                                .truncate()
+                                .text_xs()
+                                .text_color(muted)
+                                .child(detail.clone()),
+                        ),
+                )
+                .child(
+                    h_flex()
+                        .flex_shrink_0()
+                        .gap_1()
+                        .text_xs()
+                        .text_color(muted)
+                        .child(
+                            Icon::new(if device.running {
+                                IconName::CircleCheck
+                            } else {
+                                IconName::Play
+                            })
+                            .size_3(),
+                        )
+                        .child(if device.running { "Running" } else { "Start" }),
+                )
+        })
 }
 
 /// The broker already authenticates the environment/capability. The desktop
@@ -120,7 +218,7 @@ pub(super) async fn automation(
         let device = devices
             .into_iter()
             .find(|d| d.id == id)
-            .ok_or("Device is no longer running")?;
+            .ok_or("Device is no longer available. Refresh mobile_devices.")?;
         this.update_in(cx, |app, window, cx| {
             if app.execution_thread_id().as_ref() != Some(&request.thread_id) {
                 return Err("Switch to this thread in Vitre before connecting Devices.".into());
@@ -170,9 +268,32 @@ pub(super) async fn automation(
                     .timer(std::time::Duration::from_millis(50))
                     .await;
             }
-            Err("Device connected but no display frame arrived within 15 seconds".into())
+            let status = panel.update(cx, |p, _| p.status());
+            if status["starting"] == true {
+                // Cold boots can exceed an automation request's lifetime.
+                // The panel owns startup; callers can follow it with status.
+                Ok(status)
+            } else {
+                Err("Device connected but no display frame arrived within 15 seconds".into())
+            }
         }
         "close" => Ok(json!({"closed":true})),
+        "stop" => {
+            panel.update(cx, |p, cx| p.stop(cx))?;
+            for _ in 0..300 {
+                let status = panel.update(cx, |p, _| p.status());
+                if let Some(error) = status["error"].as_str() {
+                    return Err(error.into());
+                }
+                if status["stopping"] != true {
+                    return Ok(status);
+                }
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(50))
+                    .await;
+            }
+            Ok(panel.update(cx, |p, _| p.status()))
+        }
         "status" => Ok(panel.update(cx, |p, _| p.status())),
         "screenshot" => {
             let bytes = panel
@@ -232,7 +353,7 @@ pub(super) async fn automation(
                         .filter(|v| (50..=5000).contains(v))
                         .ok_or("durationMs must be 50–5000")?
                 };
-                let sender = panel.update(cx, |p, _| p.controller());
+                let sender = panel.update(cx, |p, _| p.controller())?;
                 struct Release {
                     sender: tokio::sync::mpsc::UnboundedSender<Input>,
                     x: f64,

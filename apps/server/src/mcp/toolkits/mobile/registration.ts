@@ -13,13 +13,13 @@ const definitions = [
   {
     action: "devices",
     description:
-      "List running iOS simulators and Android emulators on the connected Vitre desktop.",
+      "List configured iOS simulators and Android emulators on the connected Vitre desktop, including stopped devices and their running state.",
     schema: empty,
   },
   {
     action: "open",
     description:
-      "Connect a listed device to Vitre's native Devices panel in this thread. One thread owns the device at a time.",
+      "Start a listed device if stopped and connect it to Vitre's native Devices panel in this thread. A cold boot may return starting: true; poll mobile_status until connected or error. One thread owns the device at a time.",
     schema: Schema.Struct({
       deviceId: Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(256)),
     }),
@@ -71,6 +71,12 @@ const definitions = [
     schema: Schema.Struct({ key: Schema.Literals(["GoHome", "GoBack", "AppSwitch", "Power"]) }),
   },
   {
+    action: "stop",
+    description:
+      "Shut down this thread's selected simulator/emulator and release its display. Wait for startup to finish first. If stopping: true is returned, poll mobile_status until stopped or error. Use mobile_open to start it again.",
+    schema: empty,
+  },
+  {
     action: "close",
     description:
       "Disconnect this thread's native Devices panel, leaving the simulator/emulator running.",
@@ -94,7 +100,7 @@ export const register = Effect.gen(function* () {
         inputSchema: Schema.toJsonSchemaDocument(schema).schema,
         annotations: {
           readOnlyHint: ["devices", "status", "screenshot"].includes(definition.action),
-          destructiveHint: false,
+          destructiveHint: definition.action === "stop",
           openWorldHint: false,
         },
       }),
