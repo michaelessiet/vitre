@@ -1,3 +1,4 @@
+import { makeLensPreview } from "@t3tools/shared/lensPreview";
 import { CloudOverview, CloudTask } from "@t3tools/contracts/cloud";
 import { OrchestrationThread } from "@t3tools/contracts";
 import { makeCloudClient, type CloudClient } from "@t3tools/client-runtime/cloud";
@@ -208,6 +209,7 @@ export function makeShowcaseClient(): CloudClient {
   let sequence = 0;
   return {
     ...makeCloudClient({ baseUrl: "https://preview.invalid", accessToken: async () => "" }),
+    ...makeLensPreview(),
     overview: async () => overview,
     repositories: async () => overview.repositories,
     publicRepository: async (owner, name) => ({ ...repository, owner, name, revision: 0 }),

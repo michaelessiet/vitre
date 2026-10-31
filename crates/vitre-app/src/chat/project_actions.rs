@@ -481,6 +481,7 @@ impl ChatApp {
     ) {
         self.dispatch_project_command(
             ClientOrchestrationCommand::ProjectDelete {
+                expected_updated_at: None,
                 command_id: CommandId(fresh_id("vitre-cmd")),
                 force: force.then_some(Some(true)),
                 project_id: member.project_id.clone(),

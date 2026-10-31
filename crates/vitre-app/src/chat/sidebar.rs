@@ -617,7 +617,10 @@ impl ChatApp {
     /// `ChatView`'s visit effect: while a thread is open, its last-visited
     /// stamp tracks the thread's `updatedAt`, which is what keeps the
     /// "Completed" pill off the row you are looking at.
-    pub(super) fn sync_thread_visit(&mut self) -> bool {
+    pub(super) fn sync_thread_visit(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.lens_open || self.settings.is_some() {
+            return false;
+        }
         let Some(open) = self.thread.as_ref() else {
             return false;
         };
@@ -625,7 +628,45 @@ impl ChatApp {
             return false;
         };
         let (id, updated_at) = (thread.id.0.clone(), thread.updated_at.0.clone());
-        self.sidebar.mark_thread_visited(&id, &updated_at)
+        let changed = self.sidebar.mark_thread_visited(&id, &updated_at);
+        if changed {
+            if let Some(client) = self.client.clone() {
+                let source = if self.is_cloud_thread() {
+                    Some("cloud".to_owned())
+                } else {
+                    client.sessions().borrow().as_ref().map(|session| {
+                        format!("local:{}", session.config.environment.environment_id.0)
+                    })
+                };
+                if let Some(source_id) = source {
+                    let target_id = if source_id == "cloud" {
+                        self.open_cloud_task_id()
+                            .unwrap_or_else(|| id.strip_prefix("cloud-").unwrap_or(&id).to_owned())
+                    } else {
+                        id.clone()
+                    };
+                    let command = vitre_contracts::LensCommand::Read {
+                        idempotency_key: format!("read:{source_id}:{target_id}:{updated_at}"),
+                        source_id,
+                        target_id,
+                        through: updated_at,
+                    };
+                    cx.spawn(async move |_, cx| {
+                        let _ = cx
+                            .update(|cx| {
+                                gpui_tokio::Tokio::spawn_result(cx, async move {
+                                    Ok(vitre_client::cloud::CloudClient::new(client)
+                                        .lens_command(&command)
+                                        .await?)
+                                })
+                            })
+                            .await;
+                    })
+                    .detach();
+                }
+            }
+        }
+        changed
     }
 
     /// Land a manual reorder drag: move `dragged`'s keys to where `target`'s
@@ -691,6 +732,7 @@ impl ChatApp {
             return;
         };
         let command = ClientOrchestrationCommand::ThreadArchive {
+            expected_updated_at: None,
             command_id: CommandId(fresh_id("vitre-cmd")),
             thread_id: id,
             r#type: Default::default(),
@@ -1643,6 +1685,17 @@ impl ChatApp {
                                 }),
                             ),
                     ),
+            )
+            .child(
+                div().px_2().py_1().child(
+                    Button::new("open-lens")
+                        .ghost()
+                        .small()
+                        .w_full()
+                        .justify_start()
+                        .label("Lens")
+                        .on_click(cx.listener(|this, _, window, cx| this.open_lens(window, cx))),
+                ),
             )
             .child(
                 div()

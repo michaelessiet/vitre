@@ -472,6 +472,9 @@ pub struct ChatApp {
     settings: Option<Entity<crate::settings::SettingsPanel>>,
     /// Live while `settings` is: closes the surface when it asks to leave.
     settings_subscription: Option<Subscription>,
+    lens_open: bool,
+    lens_panel: Option<Entity<crate::lens::LensPanel>>,
+    lens_subscription: Option<Subscription>,
     cloud_store: Entity<crate::cloud::CloudStore>,
     cloud_shells: Vec<OrchestrationThreadShell>,
     cloud_shell_index: HashMap<ThreadId, usize>,
@@ -1588,7 +1591,8 @@ fn assistant_markdown_view(
         .w_full()
         .when(scrollable, |this| this.h_full())
         .child(
-            view.scrollable(scrollable)
+            view.markdown_extensions(crate::visuals::markdown_extensions())
+                .scrollable(scrollable)
                 .on_link_click(move |url, _, window, cx| {
                     if let Some(chat) = &chat {
                         let _ = chat.update(cx, |chat, cx| chat.open_chat_link(url, window, cx));
@@ -2147,7 +2151,21 @@ impl ChatApp {
                             app.select_thread(cloud_thread::cloud_thread_id(id), cx);
                         }
                     }
-                    crate::cloud::store::CloudEvent::Changed => {}
+                    crate::cloud::store::CloudEvent::Changed => {
+                        let preview = cfg!(debug_assertions)
+                            && std::env::var("VITRE_LENS_PREVIEW").as_deref() == Ok("1");
+                        if !preview
+                            && matches!(
+                                app.cloud_store.read(cx).session,
+                                crate::cloud::store::SessionState::SignedOut
+                                    | crate::cloud::store::SessionState::Disabled
+                            )
+                        {
+                            app.lens_open = false;
+                            app.lens_panel = None;
+                            app.lens_subscription = None;
+                        }
+                    }
                 }
                 cx.notify();
             },
@@ -2221,6 +2239,9 @@ impl ChatApp {
                             settings
                                 .update(cx, |panel, cx| panel.attach_client(client.clone(), cx));
                         }
+                        if let Some(lens) = app.lens_panel.clone() {
+                            lens.update(cx, |panel, cx| panel.attach(client.clone(), cx));
+                        }
                         // The cloud store probes the saved session as soon as the
                         // sidecar is up, so cloud conversations appear in the
                         // shared sidebar before anyone opens them.
@@ -2255,7 +2276,7 @@ impl ChatApp {
                             // The open thread's row keeps its "seen" stamp current
                             // so a turn finishing under your eyes doesn't light up
                             // as unread.
-                            app.sync_thread_visit();
+                            app.sync_thread_visit(cx);
                             app.rebuild_sidebar();
                             app.maybe_open_debug_thread(cx);
                             cx.notify();
@@ -2441,6 +2462,9 @@ impl ChatApp {
             command_palette: None,
             settings: None,
             settings_subscription: None,
+            lens_open: false,
+            lens_panel: None,
+            lens_subscription: None,
             cloud_store,
             cloud_pending_send: None,
             cloud_pending_sends: HashMap::new(),
@@ -3046,6 +3070,7 @@ impl ChatApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.lens_open = false;
         let Some(client) = self.client.clone() else {
             return;
         };
@@ -3268,7 +3293,50 @@ impl ChatApp {
         cx.notify();
     }
 
+    fn open_lens(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.settings = None;
+        if self.lens_panel.is_none() {
+            let panel = cx.new(|cx| crate::lens::LensPanel::new(self.client.clone(), window, cx));
+            self.lens_subscription = Some(cx.subscribe_in(
+                &panel,
+                window,
+                |app, _, target: &crate::lens::LensOpenTarget, window, cx| {
+                    if cfg!(debug_assertions) && target.source == "qa:devices" {
+                        app.lens_open = false;
+                        app.open_devices(window, cx);
+                        return;
+                    }
+                    if target.source == "cloud" {
+                        app.select_thread(ThreadId(format!("cloud-{}", target.target)), cx);
+                    } else if app
+                        .client
+                        .as_ref()
+                        .and_then(|client| {
+                            client.sessions().borrow().as_ref().map(|session| {
+                                format!("local:{}", session.config.environment.environment_id.0)
+                            })
+                        })
+                        .as_deref()
+                        == Some(target.source.as_str())
+                    {
+                        app.select_thread(ThreadId(target.target.clone()), cx);
+                    } else {
+                        window.push_notification(
+                            Notification::info("Open this conversation on its original desktop."),
+                            cx,
+                        );
+                    }
+                },
+            ));
+            self.lens_panel = Some(panel);
+        }
+        self.lens_open = true;
+        cx.notify();
+    }
+
     fn select_thread(&mut self, id: ThreadId, cx: &mut Context<Self>) {
+        self.lens_open = false;
+        cx.notify();
         let id = self
             .cloud_bindings
             .get(&id)
@@ -3334,7 +3402,7 @@ impl ChatApp {
         self.terminal_drag = None;
         if cloud {
             self.open_cloud_thread(id, cx);
-            self.sync_thread_visit();
+            self.sync_thread_visit(cx);
             self.rebuild_sidebar();
             self.sync_git_status(cx);
             self.sync_branch_toolbar(cx);
@@ -3352,7 +3420,7 @@ impl ChatApp {
         });
         // Opening a thread clears its unread completion and re-pins it in its
         // project's preview window.
-        self.sync_thread_visit();
+        self.sync_thread_visit(cx);
         self.rebuild_sidebar();
         // Terminals the server already has for this thread appear as tabs.
         self.reconcile_drawer_terminals(cx);
@@ -8086,6 +8154,9 @@ impl Render for ChatApp {
         let mut dock_panel = dock_key
             .as_deref()
             .map(|key| self.render_right_panel(key, cx));
+        if self.lens_open {
+            dock_panel = None;
+        }
         // Tab activation changes the dock's contents, not its presentation.
         // Retain the entrance animation while switching or closing tabs.
         let presentation = dock_key
@@ -8360,20 +8431,21 @@ impl Render for ChatApp {
                                 .reveal(sidebar_reveal)
                                 .child(self.render_sidebar(cx).into_any_element()),
                         )
-                        .child(
-                            resizable_panel().child(
-                                v_flex()
-                                    .size_full()
-                                    .when(ClientSettings::get(cx).project_tabs_enabled, |view| {
-                                        view.child(self.render_project_tabs(header_inset, cx))
-                                    })
-                                    .child(div().flex_1().min_h_0().child(self.render_chat(
-                                        header_inset,
-                                        window,
-                                        cx,
-                                    ))),
-                            ),
-                        )
+                        .child(resizable_panel().child(if self.lens_open {
+                            self.lens_panel.as_ref().unwrap().clone().into_any_element()
+                        } else {
+                            v_flex()
+                                .size_full()
+                                .when(ClientSettings::get(cx).project_tabs_enabled, |view| {
+                                    view.child(self.render_project_tabs(header_inset, cx))
+                                })
+                                .child(div().flex_1().min_h_0().child(self.render_chat(
+                                    header_inset,
+                                    window,
+                                    cx,
+                                )))
+                                .into_any_element()
+                        }))
                         .child(
                             // Hidden (not unmounted) when the dock is
                             // closed: the state slot keeps the width,

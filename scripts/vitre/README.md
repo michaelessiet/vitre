@@ -42,3 +42,10 @@ measures three five-minute release idle runs with disposable homes. Run
 `cargo run --release -p vitre-state --example performance` for repeatable terminal
 and conversation publication microbenchmarks. See
 [the optimization status and measurement limits](../../docs/operations/vitre-performance.md).
+
+## Lens preview
+
+`node scripts/vitre/lens-preview.ts` serves sample Lens data on loopback port 4897.
+A debug native build with `VITRE_LENS_PREVIEW=1` uses it for Lens only. See
+[the Lens development guide](../../docs/lens.md#development-and-rollout) for both
+desktop and mobile preview commands and rollout requirements.

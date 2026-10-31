@@ -226,6 +226,9 @@ importers:
       '@pierre/diffs':
         specifier: 'catalog:'
         version: 1.3.0-beta.5(patch_hash=7cb6da88544119adda056b2f46f43956f99326227732da0b345081e285a6c53a)(@shikijs/themes@4.3.0)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
+      '@t3tools/client-runtime':
+        specifier: workspace:*
+        version: link:../../packages/client-runtime
       '@vscode/ripgrep':
         specifier: ^1.15.9
         version: 1.18.0

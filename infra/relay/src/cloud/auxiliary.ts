@@ -1,3 +1,5 @@
+import type { LensModelReply } from "@t3tools/contracts/lens";
+import { completeLens, tickLens } from "./lens.ts";
 // @effect-diagnostics preferSchemaOverJson:off - Immutable checkpoint manifests and encrypted credential envelopes.
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -115,6 +117,34 @@ export const make = Effect.gen(function* () {
       if (job.state === "completed") return { kind: job.kind, done: true };
       if (job.kind === "login")
         return { kind: "login", done: false, deadlineAt: job.deadlineAt, sequence: job.sequence };
+      if (job.kind === "lens") {
+        const provider = job.provider ?? "codex";
+        const account = doc.state.accounts[provider];
+        const credential = doc.private.credentials[provider];
+        const run = doc.state.lens?.run;
+        if (
+          !run ||
+          run.id !== id ||
+          !credential ||
+          account.leasedBy !== id ||
+          account.credentialVersion !== job.credentialVersion
+        )
+          return yield* Effect.fail(new CloudError("stale_worker", "Lens model access changed."));
+        return {
+          kind: "lens",
+          done: false,
+          deadlineAt: job.deadlineAt,
+          sequence: job.sequence,
+          prompt: run.prompt,
+          model: run.model,
+          credential: yield* fromPromise(() =>
+            vault().open(
+              credential.sealed,
+              `${config.allowedUserId}:${provider}:${credential.version}`,
+            ),
+          ),
+        };
+      }
       const { task, manifest } = yield* manifestFor(id);
       const publication = doc.state.publications[job.publicationId!]!;
       const now = yield* currentMillis;
@@ -160,6 +190,7 @@ export const make = Effect.gen(function* () {
       id: string,
       token: string,
       input: {
+        reply?: LensModelReply;
         sequence: number;
         phase: "code" | "completed" | "failed";
         verificationUrl?: string;
@@ -170,10 +201,20 @@ export const make = Effect.gen(function* () {
     ) {
       const { job } = yield* authenticate(id, token);
       if (input.sequence <= job.sequence) return;
+      if (job.kind === "lens" && input.phase === "code")
+        return yield* Effect.fail(
+          new CloudError("invalid_reply", "Lens jobs cannot request device login.", 400),
+        );
+      const callbackTime = yield* currentMillis;
       let sealed: import("./crypto.ts").SealedCredential | undefined;
-      if (job.kind === "login" && input.phase === "completed") {
+      if (
+        (job.kind === "login" || job.kind === "lens") &&
+        input.phase === "completed" &&
+        (job.kind === "login" || input.credential)
+      ) {
         yield* Effect.try({
-          try: () => validateSubscriptionCredential("codex", input.credential ?? ""),
+          try: () =>
+            validateSubscriptionCredential(job.provider ?? "codex", input.credential ?? ""),
           catch: () =>
             new CloudError(
               "invalid_credential",
@@ -183,7 +224,7 @@ export const make = Effect.gen(function* () {
         sealed = yield* fromPromise(() =>
           vault().seal(
             input.credential!,
-            `${config.allowedUserId}:codex:${job.credentialVersion + 1}`,
+            `${config.allowedUserId}:${job.provider ?? "codex"}:${job.credentialVersion + 1}`,
           ),
         );
       }
@@ -196,11 +237,12 @@ export const make = Effect.gen(function* () {
           current.sequence >= input.sequence
         )
           throw new CloudError("stale_worker", "Login or publication callback is stale");
-        if (job.kind === "login") {
-          const account = doc.state.accounts.codex;
+        if (job.kind === "login" || job.kind === "lens") {
+          const provider = job.provider ?? "codex";
+          const account = doc.state.accounts[provider];
           if (account.leasedBy !== id || account.credentialVersion !== job.credentialVersion)
             throw new CloudError("stale_worker", "Provider account was replaced");
-          if (input.phase === "code") {
+          if (input.phase === "code" && job.kind === "login") {
             const url = new URL(input.verificationUrl ?? "");
             if (
               url.origin !== "https://auth.openai.com" ||
@@ -214,8 +256,18 @@ export const make = Effect.gen(function* () {
           } else if (sealed) {
             account.credentialVersion++;
             account.state = "connected";
-            doc.private.credentials.codex = { version: account.credentialVersion, sealed };
+            doc.private.credentials[provider] = { version: account.credentialVersion, sealed };
           }
+        }
+        if (job.kind === "lens" && input.phase !== "code") {
+          if (input.phase === "completed" && !input.reply)
+            throw new CloudError("invalid_reply", "Lens returned no review.", 400);
+          completeLens(
+            doc.state,
+            id,
+            input.phase === "completed" ? (input.reply ?? null) : null,
+            callbackTime,
+          );
         }
         current.sequence = input.sequence;
         if (input.phase === "completed") {
@@ -237,8 +289,10 @@ export const make = Effect.gen(function* () {
       yield* own(userId);
       const now = yield* currentMillis;
       const claim = yield* crypto.randomUUIDv4.pipe(Effect.orDie);
+      const lensId = `lens-${yield* crypto.randomUUIDv4.pipe(Effect.orDie)}`;
       const jobs = yield* store.mutate(userId, (doc) => {
         accrueJobs(doc.state, now);
+        tickLens(doc.state, now, lensId, config.enabled && !!config.machine);
         if (config.enabled)
           for (const publication of Object.values(doc.state.publications)) {
             const id = `publish-${publication.id}`;
@@ -308,8 +362,8 @@ export const make = Effect.gen(function* () {
               current.deleted = true;
               current.reservedMicroDollars = 0;
               delete doc.private.workerTokens[job.id];
-              if (doc.state.accounts.codex.leasedBy === job.id)
-                doc.state.accounts.codex.leasedBy = null;
+              for (const account of Object.values(doc.state.accounts))
+                if (account.leasedBy === job.id) account.leasedBy = null;
               if (job.publicationId) {
                 const publication = doc.state.publications[job.publicationId]!;
                 if (publication.state !== "published") publication.state = "failed";

@@ -7,6 +7,7 @@ export const reconciliationKey = (userId: string) =>
 
 export function needsFrequentReconciliation(state: CloudState): boolean {
   return (
+    state.lens?.settings.enabled === true ||
     Object.keys(state.operations).length > 0 ||
     Object.values(state.accounts).some((account) => account.leasedBy !== null) ||
     Object.values(state.jobs ?? {}).some((job) => !job.deleted) ||

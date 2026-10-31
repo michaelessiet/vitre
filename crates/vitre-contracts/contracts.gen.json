@@ -1349,6 +1349,9 @@
             "commandId": {
               "$ref": "#/$defs/CommandId"
             },
+            "expectedUpdatedAt": {
+              "type": "string"
+            },
             "force": {
               "anyOf": [
                 {
@@ -1478,6 +1481,9 @@
           "properties": {
             "commandId": {
               "$ref": "#/$defs/CommandId"
+            },
+            "expectedUpdatedAt": {
+              "type": "string"
             },
             "threadId": {
               "$ref": "#/$defs/ThreadId"
@@ -9473,6 +9479,1025 @@
         }
       },
       "required": ["cwd", "editor"],
+      "type": "object"
+    },
+    "LensCommand": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expectedRevision": {
+              "type": "integer"
+            },
+            "idempotencyKey": {
+              "allOf": [
+                {
+                  "minLength": 1
+                },
+                {
+                  "maxLength": 1024
+                }
+              ],
+              "type": "string"
+            },
+            "settings": {
+              "$ref": "#/$defs/LensSettings"
+            },
+            "type": {
+              "enum": ["settings.update"],
+              "type": "string"
+            }
+          },
+          "required": ["type", "idempotencyKey", "expectedRevision", "settings"],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "idempotencyKey": {
+              "allOf": [
+                {
+                  "minLength": 1
+                },
+                {
+                  "maxLength": 1024
+                }
+              ],
+              "type": "string"
+            },
+            "type": {
+              "enum": ["sweep"],
+              "type": "string"
+            }
+          },
+          "required": ["type", "idempotencyKey"],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "idempotencyKey": {
+              "allOf": [
+                {
+                  "minLength": 1
+                },
+                {
+                  "maxLength": 1024
+                }
+              ],
+              "type": "string"
+            },
+            "message": {
+              "allOf": [
+                {
+                  "maxLength": 16000
+                },
+                {
+                  "minLength": 1
+                }
+              ],
+              "type": "string"
+            },
+            "type": {
+              "enum": ["chat"],
+              "type": "string"
+            }
+          },
+          "required": ["type", "idempotencyKey", "message"],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "decision": {
+              "enum": ["approve", "dismiss"],
+              "type": "string"
+            },
+            "idempotencyKey": {
+              "allOf": [
+                {
+                  "minLength": 1
+                },
+                {
+                  "maxLength": 1024
+                }
+              ],
+              "type": "string"
+            },
+            "recommendationId": {
+              "allOf": [
+                {
+                  "minLength": 1
+                },
+                {
+                  "maxLength": 1024
+                }
+              ],
+              "type": "string"
+            },
+            "type": {
+              "enum": ["decide"],
+              "type": "string"
+            }
+          },
+          "required": ["type", "idempotencyKey", "recommendationId", "decision"],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "idempotencyKey": {
+              "allOf": [
+                {
+                  "minLength": 1
+                },
+                {
+                  "maxLength": 1024
+                }
+              ],
+              "type": "string"
+            },
+            "sourceId": {
+              "allOf": [
+                {
+                  "minLength": 1
+                },
+                {
+                  "maxLength": 1024
+                }
+              ],
+              "type": "string"
+            },
+            "targetId": {
+              "allOf": [
+                {
+                  "minLength": 1
+                },
+                {
+                  "maxLength": 1024
+                }
+              ],
+              "type": "string"
+            },
+            "through": {
+              "allOf": [
+                {
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{3})?Z$"
+                }
+              ],
+              "type": "string"
+            },
+            "type": {
+              "enum": ["read"],
+              "type": "string"
+            }
+          },
+          "required": ["type", "idempotencyKey", "sourceId", "targetId", "through"],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "entries": {
+              "allOf": [
+                {
+                  "maxItems": 2000
+                }
+              ],
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "targetId": {
+                    "allOf": [
+                      {
+                        "minLength": 1
+                      },
+                      {
+                        "maxLength": 1024
+                      }
+                    ],
+                    "type": "string"
+                  },
+                  "through": {
+                    "allOf": [
+                      {
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{3})?Z$"
+                      }
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": ["targetId", "through"],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "idempotencyKey": {
+              "allOf": [
+                {
+                  "minLength": 1
+                },
+                {
+                  "maxLength": 1024
+                }
+              ],
+              "type": "string"
+            },
+            "sourceId": {
+              "allOf": [
+                {
+                  "minLength": 1
+                },
+                {
+                  "maxLength": 1024
+                }
+              ],
+              "type": "string"
+            },
+            "type": {
+              "enum": ["read.batch"],
+              "type": "string"
+            }
+          },
+          "required": ["type", "idempotencyKey", "sourceId", "entries"],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "idempotencyKey": {
+              "allOf": [
+                {
+                  "minLength": 1
+                },
+                {
+                  "maxLength": 1024
+                }
+              ],
+              "type": "string"
+            },
+            "inventory": {
+              "$ref": "#/$defs/LensInventory"
+            },
+            "type": {
+              "enum": ["sync"],
+              "type": "string"
+            }
+          },
+          "required": ["type", "idempotencyKey", "inventory"],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "error": {
+              "anyOf": [
+                {
+                  "allOf": [
+                    {
+                      "maxLength": 16000
+                    }
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "idempotencyKey": {
+              "allOf": [
+                {
+                  "minLength": 1
+                },
+                {
+                  "maxLength": 1024
+                }
+              ],
+              "type": "string"
+            },
+            "recommendationId": {
+              "allOf": [
+                {
+                  "minLength": 1
+                },
+                {
+                  "maxLength": 1024
+                }
+              ],
+              "type": "string"
+            },
+            "status": {
+              "enum": ["applied", "stale", "failed"],
+              "type": "string"
+            },
+            "type": {
+              "enum": ["action.result"],
+              "type": "string"
+            }
+          },
+          "required": ["type", "idempotencyKey", "recommendationId", "status", "error"],
+          "type": "object"
+        }
+      ]
+    },
+    "LensConversation": {
+      "additionalProperties": false,
+      "properties": {
+        "archived": {
+          "type": "boolean"
+        },
+        "busy": {
+          "type": "boolean"
+        },
+        "excerpt": {
+          "allOf": [
+            {
+              "maxLength": 4000
+            }
+          ],
+          "type": "string"
+        },
+        "id": {
+          "allOf": [
+            {
+              "minLength": 1
+            },
+            {
+              "maxLength": 1024
+            }
+          ],
+          "type": "string"
+        },
+        "lastAssistantAt": {
+          "anyOf": [
+            {
+              "allOf": [
+                {
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{3})?Z$"
+                }
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LensModel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "needsInput": {
+          "type": "boolean"
+        },
+        "projectId": {
+          "allOf": [
+            {
+              "minLength": 1
+            },
+            {
+              "maxLength": 1024
+            }
+          ],
+          "type": "string"
+        },
+        "readAt": {
+          "anyOf": [
+            {
+              "allOf": [
+                {
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{3})?Z$"
+                }
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "title": {
+          "allOf": [
+            {
+              "maxLength": 1000
+            }
+          ],
+          "type": "string"
+        },
+        "turns": {
+          "allOf": [
+            {
+              "maximum": 1000000,
+              "minimum": 0
+            }
+          ],
+          "type": "integer"
+        },
+        "updatedAt": {
+          "allOf": [
+            {
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{3})?Z$"
+            }
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "projectId",
+        "title",
+        "updatedAt",
+        "lastAssistantAt",
+        "readAt",
+        "busy",
+        "needsInput",
+        "archived",
+        "model",
+        "turns",
+        "excerpt"
+      ],
+      "type": "object"
+    },
+    "LensInventory": {
+      "additionalProperties": false,
+      "properties": {
+        "collectedAt": {
+          "allOf": [
+            {
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{3})?Z$"
+            }
+          ],
+          "type": "string"
+        },
+        "conversations": {
+          "allOf": [
+            {
+              "maxItems": 2000
+            }
+          ],
+          "items": {
+            "$ref": "#/$defs/LensConversation"
+          },
+          "type": "array"
+        },
+        "models": {
+          "anyOf": [
+            {
+              "allOf": [
+                {
+                  "maxItems": 200
+                }
+              ],
+              "items": {
+                "$ref": "#/$defs/LensModel"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "projects": {
+          "allOf": [
+            {
+              "maxItems": 500
+            }
+          ],
+          "items": {
+            "$ref": "#/$defs/LensProject"
+          },
+          "type": "array"
+        },
+        "sourceId": {
+          "allOf": [
+            {
+              "minLength": 1
+            },
+            {
+              "maxLength": 1024
+            }
+          ],
+          "type": "string"
+        },
+        "sourceLabel": {
+          "allOf": [
+            {
+              "maxLength": 200
+            }
+          ],
+          "type": "string"
+        }
+      },
+      "required": ["sourceId", "sourceLabel", "collectedAt", "projects", "conversations"],
+      "type": "object"
+    },
+    "LensMessage": {
+      "additionalProperties": false,
+      "properties": {
+        "createdAt": {
+          "allOf": [
+            {
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{3})?Z$"
+            }
+          ],
+          "type": "string"
+        },
+        "id": {
+          "allOf": [
+            {
+              "minLength": 1
+            },
+            {
+              "maxLength": 1024
+            }
+          ],
+          "type": "string"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LensModel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "role": {
+          "enum": ["user", "assistant"],
+          "type": "string"
+        },
+        "text": {
+          "allOf": [
+            {
+              "maxLength": 16000
+            }
+          ],
+          "type": "string"
+        }
+      },
+      "required": ["id", "role", "text", "createdAt", "model"],
+      "type": "object"
+    },
+    "LensModel": {
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "allOf": [
+            {
+              "minLength": 1
+            },
+            {
+              "maxLength": 200
+            }
+          ],
+          "type": "string"
+        },
+        "provider": {
+          "enum": ["codex", "claude"],
+          "type": "string"
+        }
+      },
+      "required": ["provider", "model"],
+      "type": "object"
+    },
+    "LensModelReply": {
+      "additionalProperties": false,
+      "properties": {
+        "recommendations": {
+          "allOf": [
+            {
+              "maxItems": 100
+            }
+          ],
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "allOf": [
+                  {
+                    "minLength": 1
+                  },
+                  {
+                    "maxLength": 1024
+                  }
+                ],
+                "type": "string"
+              },
+              "reason": {
+                "allOf": [
+                  {
+                    "maxLength": 16000
+                  }
+                ],
+                "type": "string"
+              }
+            },
+            "required": ["id", "reason"],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "text": {
+          "allOf": [
+            {
+              "maxLength": 16000
+            },
+            {
+              "minLength": 1
+            }
+          ],
+          "type": "string"
+        }
+      },
+      "required": ["text", "recommendations"],
+      "type": "object"
+    },
+    "LensOverview": {
+      "additionalProperties": false,
+      "properties": {
+        "activity": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "conversations": {
+                "type": "integer"
+              },
+              "date": {
+                "$ref": "#/$defs/TrimmedNonEmptyString"
+              }
+            },
+            "required": ["date", "conversations"],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "allOf": [
+                {
+                  "maxLength": 16000
+                }
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lastRunAt": {
+          "anyOf": [
+            {
+              "allOf": [
+                {
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{3})?Z$"
+                }
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "messages": {
+          "items": {
+            "$ref": "#/$defs/LensMessage"
+          },
+          "type": "array"
+        },
+        "models": {
+          "items": {
+            "$ref": "#/$defs/LensModel"
+          },
+          "type": "array"
+        },
+        "nextRunAt": {
+          "anyOf": [
+            {
+              "allOf": [
+                {
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{3})?Z$"
+                }
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "recommendations": {
+          "items": {
+            "$ref": "#/$defs/LensRecommendation"
+          },
+          "type": "array"
+        },
+        "revision": {
+          "type": "integer"
+        },
+        "running": {
+          "type": "boolean"
+        },
+        "selectedModel": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LensModel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "settings": {
+          "$ref": "#/$defs/LensSettings"
+        },
+        "settingsRevision": {
+          "type": "integer"
+        },
+        "sources": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "allOf": [
+                  {
+                    "minLength": 1
+                  },
+                  {
+                    "maxLength": 1024
+                  }
+                ],
+                "type": "string"
+              },
+              "label": {
+                "$ref": "#/$defs/TrimmedNonEmptyString"
+              },
+              "syncedAt": {
+                "allOf": [
+                  {
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{3})?Z$"
+                  }
+                ],
+                "type": "string"
+              }
+            },
+            "required": ["id", "label", "syncedAt"],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "revision",
+        "settingsRevision",
+        "settings",
+        "nextRunAt",
+        "lastRunAt",
+        "running",
+        "error",
+        "selectedModel",
+        "models",
+        "messages",
+        "recommendations",
+        "sources",
+        "activity"
+      ],
+      "type": "object"
+    },
+    "LensProject": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "allOf": [
+            {
+              "minLength": 1
+            },
+            {
+              "maxLength": 1024
+            }
+          ],
+          "type": "string"
+        },
+        "title": {
+          "allOf": [
+            {
+              "maxLength": 1000
+            }
+          ],
+          "type": "string"
+        },
+        "updatedAt": {
+          "allOf": [
+            {
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{3})?Z$"
+            }
+          ],
+          "type": "string"
+        }
+      },
+      "required": ["id", "title", "updatedAt"],
+      "type": "object"
+    },
+    "LensRecommendation": {
+      "additionalProperties": false,
+      "properties": {
+        "createdAt": {
+          "allOf": [
+            {
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{3})?Z$"
+            }
+          ],
+          "type": "string"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "allOf": [
+                {
+                  "maxLength": 16000
+                }
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "allOf": [
+            {
+              "minLength": 1
+            },
+            {
+              "maxLength": 1024
+            }
+          ],
+          "type": "string"
+        },
+        "kind": {
+          "enum": ["unread", "follow_up", "archive_conversation", "remove_project"],
+          "type": "string"
+        },
+        "reason": {
+          "allOf": [
+            {
+              "maxLength": 16000
+            }
+          ],
+          "type": "string"
+        },
+        "sourceId": {
+          "allOf": [
+            {
+              "minLength": 1
+            },
+            {
+              "maxLength": 1024
+            }
+          ],
+          "type": "string"
+        },
+        "status": {
+          "enum": ["pending", "approved", "dismissed", "applied", "stale", "failed"],
+          "type": "string"
+        },
+        "targetId": {
+          "allOf": [
+            {
+              "minLength": 1
+            },
+            {
+              "maxLength": 1024
+            }
+          ],
+          "type": "string"
+        },
+        "targetUpdatedAt": {
+          "allOf": [
+            {
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{3})?Z$"
+            }
+          ],
+          "type": "string"
+        },
+        "title": {
+          "$ref": "#/$defs/TrimmedNonEmptyString"
+        }
+      },
+      "required": [
+        "id",
+        "sourceId",
+        "targetId",
+        "title",
+        "reason",
+        "kind",
+        "targetUpdatedAt",
+        "createdAt",
+        "status",
+        "error"
+      ],
+      "type": "object"
+    },
+    "LensSchedule": {
+      "additionalProperties": false,
+      "properties": {
+        "frequency": {
+          "enum": ["daily", "weekly"],
+          "type": "string"
+        },
+        "hour": {
+          "allOf": [
+            {
+              "maximum": 23,
+              "minimum": 0
+            }
+          ],
+          "type": "integer"
+        },
+        "minute": {
+          "allOf": [
+            {
+              "maximum": 59,
+              "minimum": 0
+            }
+          ],
+          "type": "integer"
+        },
+        "timeZone": {
+          "allOf": [
+            {
+              "minLength": 1
+            },
+            {
+              "maxLength": 100
+            }
+          ],
+          "type": "string"
+        },
+        "weekday": {
+          "allOf": [
+            {
+              "maximum": 6,
+              "minimum": 0
+            }
+          ],
+          "type": "integer"
+        }
+      },
+      "required": ["frequency", "weekday", "hour", "minute", "timeZone"],
+      "type": "object"
+    },
+    "LensSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LensModel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "schedule": {
+          "$ref": "#/$defs/LensSchedule"
+        },
+        "staleConversationDays": {
+          "allOf": [
+            {
+              "maximum": 365,
+              "minimum": 1
+            }
+          ],
+          "type": "integer"
+        },
+        "staleProjectDays": {
+          "allOf": [
+            {
+              "maximum": 730,
+              "minimum": 1
+            }
+          ],
+          "type": "integer"
+        }
+      },
+      "required": ["enabled", "schedule", "model", "staleConversationDays", "staleProjectDays"],
       "type": "object"
     },
     "LspCodeAction": {

@@ -1,3 +1,4 @@
+import { rememberLensConversation } from "./lens.ts";
 import { shouldYieldIdleWorker } from "./state.ts";
 import {
   recordProjectSnapshot,
@@ -254,6 +255,7 @@ export const make = Effect.gen(function* () {
       const notify = yield* store.mutate(config.allowedUserId, (doc) => {
         const before = Object.keys(doc.private.pushEvents ?? {}).length;
         if (acceptCallback(doc.state, callback, now)) {
+          rememberLensConversation(doc.state, callback.taskId, conversation);
           (doc.state.projections ??= {})[callback.taskId] = { key, sha256: hash };
           enqueueConversationNotifications(
             doc,
@@ -320,7 +322,7 @@ export const make = Effect.gen(function* () {
           leaseOwned,
           leaseTurnRequestId,
           stopRequested: !["running", "waiting_for_input"].includes(task.state),
-          yieldIdle: shouldYieldIdleWorker(document.state, task),
+          yieldIdle: shouldYieldIdleWorker(document.state, task, yield* currentMillis),
         };
       const now = yield* currentMillis;
       const snapshotHead =

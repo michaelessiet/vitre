@@ -90,6 +90,10 @@ fn cloud_error_detail(status: u16, body: &[u8]) -> String {
         .ok()
         .and_then(|value| value.get("code")?.as_str().map(str::to_owned));
     match (status, code.as_deref()) {
+        (_, Some("lens_unavailable")) => "Lens is already reviewing, or its selected AI account is unavailable. Wait for the current review or check your model and account connection.".into(),
+        (_, Some("invalid_schedule")) => "Choose a valid IANA time zone, such as Africa/Lagos.".into(),
+        (_, Some("revision_conflict")) => "Settings changed on another device. Dismiss this error, review the latest settings, and save again.".into(),
+        (_, Some("budget_exhausted")) => "Your cloud compute allowance cannot cover this review.".into(),
         (409, Some("provider_busy")) =>
             "The provider account is still stopping its previous worker. Refresh and retry shortly.".into(),
         (409, Some("workers_busy")) => "Both cloud workers are busy. Retry when one stops.".into(),
@@ -104,6 +108,19 @@ fn cloud_error_detail(status: u16, body: &[u8]) -> String {
 }
 
 impl CloudHttp {
+    pub async fn lens(&self, bearer: &str) -> Result<vitre_contracts::LensOverview, RpcError> {
+        self.request(bearer, Method::GET, "/lens", None::<&()>)
+            .await
+    }
+    pub async fn lens_command(
+        &self,
+        bearer: &str,
+        command: &vitre_contracts::LensCommand,
+    ) -> Result<vitre_contracts::LensOverview, RpcError> {
+        self.request(bearer, Method::POST, "/lens/commands", Some(command))
+            .await
+    }
+
     pub async fn repositories(
         &self,
         bearer: &str,
@@ -327,4 +344,31 @@ mod tests {
             .contains("Cloudflare Worker resource limit")
         );
     }
+}
+
+/// Explicit debug-only fixture. The fixed loopback endpoint receives no account credentials.
+#[cfg(debug_assertions)]
+pub async fn lens_preview(
+    command: Option<&vitre_contracts::LensCommand>,
+) -> Result<vitre_contracts::LensOverview, RpcError> {
+    let client = reqwest::Client::new();
+    let request = if let Some(command) = command {
+        client.post("http://127.0.0.1:4897/lens").json(command)
+    } else {
+        client.get("http://127.0.0.1:4897/lens")
+    };
+    request
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+        .map_err(|_| {
+            RpcError::Transport(
+                "Start scripts/vitre/lens-preview.ts for the Lens development preview.".into(),
+            )
+        })?
+        .error_for_status()
+        .map_err(|_| RpcError::Transport("The Lens preview rejected this request.".into()))?
+        .json()
+        .await
+        .map_err(|_| RpcError::Transport("Invalid Lens preview response.".into()))
 }

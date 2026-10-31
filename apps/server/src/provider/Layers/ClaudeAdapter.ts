@@ -1,3 +1,4 @@
+import { VISUAL_INSTRUCTIONS } from "@t3tools/shared/visual";
 /**
  * ClaudeAdapterLive - Scoped live implementation for the Claude Agent provider adapter.
  *
@@ -3660,7 +3661,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...new Set([...(input.cwd ? [input.cwd] : []), ...(input.additionalDirectories ?? [])]),
       ];
       const workspacesNote = attachedWorkspacesNoteFor(input.additionalDirectories);
-      const systemPromptAppend = [graphNote, workspacesNote]
+      const systemPromptAppend = [graphNote, workspacesNote, VISUAL_INSTRUCTIONS]
         .filter((note): note is string => note !== null)
         .join("\n\n");
       const queryOptions: ClaudeQueryOptions = {

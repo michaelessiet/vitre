@@ -7,8 +7,8 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeUtil from "node:util";
 import * as NodeURL from "node:url";
 const exec = NodeUtil.promisify(NodeChildProcess.execFile);
-const attemptPattern = /^(?:[a-f0-9-]{36}-[1-9][0-9]*|(?:login|publish)-[a-f0-9-]{36})$/;
-const idPattern = /^(?:[a-f0-9-]{36}|(?:login|publish)-[a-f0-9-]{36})$/;
+const attemptPattern = /^(?:[a-f0-9-]{36}-[1-9][0-9]*|(?:login|publish|lens)-[a-f0-9-]{36})$/;
+const idPattern = /^(?:[a-f0-9-]{36}|(?:login|publish|lens)-[a-f0-9-]{36})$/;
 export function validateAttempt(id) {
   if (!attemptPattern.test(id)) throw Object.assign(new Error("Invalid attempt"), { status: 400 });
   return id;
@@ -110,7 +110,7 @@ export function systemdDriver(rootfs, execute = exec) {
           "--property=TimeoutStopSec=15",
           // Task backends remain resident. Auxiliary login/publication jobs
           // still have a strict deadline; the relay fences unhealthy tasks.
-          `--property=RuntimeMaxSec=${id.startsWith("login-") || id.startsWith("publish-") ? remaining : "infinity"}`,
+          `--property=RuntimeMaxSec=${id.startsWith("login-") || id.startsWith("publish-") || id.startsWith("lens-") ? remaining : "infinity"}`,
           "--property=IPAddressDeny=169.254.0.0/16",
           "--property=IPAddressDeny=fd00:ec2::254/128",
           "--property=TasksMax=2048",
@@ -197,7 +197,9 @@ export async function createMachineAgent({
       )
     ).filter(Boolean);
   const taskForAttempt = (id) =>
-    id.startsWith("login-") || id.startsWith("publish-") ? id : id.slice(0, 36);
+    id.startsWith("login-") || id.startsWith("publish-") || id.startsWith("lens-")
+      ? id
+      : id.slice(0, 36);
   const prepare = async (id) => {
     const current = await read(id);
     if (current?.state === "deleted") fail(409, "Attempt retired");
@@ -273,7 +275,7 @@ export async function createMachineAgent({
             typeof input.token !== "string" ||
             input.token.length < 32 ||
             input.token.length > 4096 ||
-            ![undefined, "login", "publication"].includes(input.mode)
+            ![undefined, "login", "publication", "lens"].includes(input.mode)
           )
             fail(400, "Invalid bootstrap");
           const fingerprint = NodeCrypto.createHash("sha256")

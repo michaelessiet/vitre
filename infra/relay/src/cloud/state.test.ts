@@ -1,3 +1,4 @@
+import { emptyLens } from "@t3tools/shared/lens";
 import { describe, expect, it } from "vite-plus/test";
 import type { CloudCommand, CloudWorkerCallback } from "@t3tools/contracts/cloud";
 import {
@@ -930,6 +931,21 @@ describe("resident conversation provider leases", () => {
     state.tasks.task!.worker!.sandboxId = "machine-task-1";
     return state;
   };
+  it("yields an idle resident provider to a due Lens review without preempting a turn", () => {
+    const state = resident();
+    const task = state.tasks.task!;
+    state.lens = emptyLens();
+    state.lens.settings = {
+      ...state.lens.settings,
+      enabled: true,
+      model: { provider: "codex", model: "test" },
+    };
+    state.lens.nextRunAt = iso(now);
+    expect(shouldYieldIdleWorker(state, task, now - 1)).toBe(false);
+    expect(shouldYieldIdleWorker(state, task, now)).toBe(true);
+    state.lens.settings = { ...state.lens.settings, enabled: false };
+    expect(shouldYieldIdleWorker(state, task, now)).toBe(false);
+  });
   const handoff = (residentDestination: boolean) => {
     const state = resident();
     const source = state.tasks.task!;

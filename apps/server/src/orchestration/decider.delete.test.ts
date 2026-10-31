@@ -140,6 +140,45 @@ function normalizeDeleteEvent(event: PlannedEvent | ReadonlyArray<PlannedEvent>)
 }
 
 it.layer(NodeServices.layer)("decider deletion flows", (it) => {
+  it.effect("fences Lens cleanup against activity after approval", () =>
+    Effect.gen(function* () {
+      const readModel = yield* seedReadModel;
+      for (const command of [
+        {
+          type: "thread.archive" as const,
+          commandId: asCommandId("lens-archive"),
+          threadId: asThreadId("thread-delete-1"),
+          expectedUpdatedAt: "2025-01-01T00:00:00.000Z",
+        },
+        {
+          type: "project.delete" as const,
+          commandId: asCommandId("lens-delete"),
+          projectId: asProjectId("project-delete"),
+          force: true,
+          expectedUpdatedAt: "2025-01-01T00:00:00.000Z",
+        },
+      ]) {
+        const error = yield* Effect.flip(decideOrchestrationCommand({ command, readModel }));
+        expect(error.message).toContain("changed after");
+      }
+      const events = yield* decideOrchestrationCommand({
+        command: {
+          type: "project.delete",
+          commandId: asCommandId("lens-confirmed"),
+          projectId: asProjectId("project-delete"),
+          force: true,
+          expectedUpdatedAt: "2026-01-01T00:00:00.000Z",
+        },
+        readModel,
+      });
+      expect(Array.isArray(events) && events.map((entry) => entry.type)).toEqual([
+        "thread.deleted",
+        "thread.deleted",
+        "project.deleted",
+      ]);
+    }),
+  );
+
   it.effect("rejects deleting a non-empty project without force", () =>
     Effect.gen(function* () {
       const readModel = yield* seedReadModel;

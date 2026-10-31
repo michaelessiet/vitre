@@ -807,6 +807,9 @@ pub enum ClientOrchestrationCommand {
     ProjectDelete {
         #[serde(rename = "commandId")]
         command_id: CommandId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(rename = "expectedUpdatedAt")]
+        expected_updated_at: Option<String>,
         #[serde(
             default,
             skip_serializing_if = "Option::is_none",
@@ -860,6 +863,9 @@ pub enum ClientOrchestrationCommand {
     ThreadArchive {
         #[serde(rename = "commandId")]
         command_id: CommandId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(rename = "expectedUpdatedAt")]
+        expected_updated_at: Option<String>,
         #[serde(rename = "threadId")]
         thread_id: ThreadId,
         r#type: ClientOrchestrationCommandThreadArchiveType,
@@ -4885,6 +4891,321 @@ pub enum KeybindingsConfigParseErrorTag {
 pub struct LaunchEditorInput {
     pub cwd: TrimmedNonEmptyString,
     pub editor: EditorId,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum LensCommand {
+    #[serde(rename = "settings.update")]
+    SettingsUpdate {
+        #[serde(rename = "expectedRevision")]
+        expected_revision: i64,
+        #[serde(rename = "idempotencyKey")]
+        idempotency_key: String,
+        settings: LensSettings,
+    },
+    #[serde(rename = "sweep")]
+    Sweep {
+        #[serde(rename = "idempotencyKey")]
+        idempotency_key: String,
+    },
+    #[serde(rename = "chat")]
+    Chat {
+        #[serde(rename = "idempotencyKey")]
+        idempotency_key: String,
+        message: String,
+    },
+    #[serde(rename = "decide")]
+    Decide {
+        decision: LensCommandDecideDecision,
+        #[serde(rename = "idempotencyKey")]
+        idempotency_key: String,
+        #[serde(rename = "recommendationId")]
+        recommendation_id: String,
+    },
+    #[serde(rename = "read")]
+    Read {
+        #[serde(rename = "idempotencyKey")]
+        idempotency_key: String,
+        #[serde(rename = "sourceId")]
+        source_id: String,
+        #[serde(rename = "targetId")]
+        target_id: String,
+        through: String,
+    },
+    #[serde(rename = "read.batch")]
+    ReadBatch {
+        entries: Vec<LensCommandReadBatchEntries>,
+        #[serde(rename = "idempotencyKey")]
+        idempotency_key: String,
+        #[serde(rename = "sourceId")]
+        source_id: String,
+    },
+    #[serde(rename = "sync")]
+    Sync {
+        #[serde(rename = "idempotencyKey")]
+        idempotency_key: String,
+        inventory: LensInventory,
+    },
+    #[serde(rename = "action.result")]
+    ActionResult {
+        error: Option<String>,
+        #[serde(rename = "idempotencyKey")]
+        idempotency_key: String,
+        #[serde(rename = "recommendationId")]
+        recommendation_id: String,
+        status: LensCommandActionResultStatus,
+    },
+    /// Forward compatibility: an event kind this build does not know.
+    #[serde(untagged)]
+    Unknown(serde_json::Value),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum LensCommandDecideDecision {
+    #[serde(rename = "approve")]
+    Approve,
+    #[serde(rename = "dismiss")]
+    Dismiss,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LensCommandReadBatchEntries {
+    #[serde(rename = "targetId")]
+    pub target_id: String,
+    pub through: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum LensCommandActionResultStatus {
+    #[serde(rename = "applied")]
+    Applied,
+    #[serde(rename = "stale")]
+    Stale,
+    #[serde(rename = "failed")]
+    Failed,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LensConversation {
+    pub archived: bool,
+    pub busy: bool,
+    pub excerpt: String,
+    pub id: String,
+    #[serde(rename = "lastAssistantAt")]
+    pub last_assistant_at: Option<String>,
+    pub model: Option<LensModel>,
+    #[serde(rename = "needsInput")]
+    pub needs_input: bool,
+    #[serde(rename = "projectId")]
+    pub project_id: String,
+    #[serde(rename = "readAt")]
+    pub read_at: Option<String>,
+    pub title: String,
+    pub turns: i64,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LensInventory {
+    #[serde(rename = "collectedAt")]
+    pub collected_at: String,
+    pub conversations: Vec<LensConversation>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::support::double_option"
+    )]
+    pub models: Option<Option<Vec<LensModel>>>,
+    pub projects: Vec<LensProject>,
+    #[serde(rename = "sourceId")]
+    pub source_id: String,
+    #[serde(rename = "sourceLabel")]
+    pub source_label: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LensMessage {
+    #[serde(rename = "createdAt")]
+    pub created_at: String,
+    pub id: String,
+    pub model: Option<LensModel>,
+    pub role: LensMessageRole,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum LensMessageRole {
+    #[serde(rename = "user")]
+    User,
+    #[serde(rename = "assistant")]
+    Assistant,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LensModel {
+    pub model: String,
+    pub provider: LensModelProvider,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum LensModelProvider {
+    #[serde(rename = "codex")]
+    Codex,
+    #[serde(rename = "claude")]
+    Claude,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LensModelReply {
+    pub recommendations: Vec<LensModelReplyRecommendations>,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LensModelReplyRecommendations {
+    pub id: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LensOverview {
+    pub activity: Vec<LensOverviewActivity>,
+    pub error: Option<String>,
+    #[serde(rename = "lastRunAt")]
+    pub last_run_at: Option<String>,
+    pub messages: Vec<LensMessage>,
+    pub models: Vec<LensModel>,
+    #[serde(rename = "nextRunAt")]
+    pub next_run_at: Option<String>,
+    pub recommendations: Vec<LensRecommendation>,
+    pub revision: i64,
+    pub running: bool,
+    #[serde(rename = "selectedModel")]
+    pub selected_model: Option<LensModel>,
+    pub settings: LensSettings,
+    #[serde(rename = "settingsRevision")]
+    pub settings_revision: i64,
+    pub sources: Vec<LensOverviewSources>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LensOverviewActivity {
+    pub conversations: i64,
+    pub date: TrimmedNonEmptyString,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LensOverviewSources {
+    pub id: String,
+    pub label: TrimmedNonEmptyString,
+    #[serde(rename = "syncedAt")]
+    pub synced_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LensProject {
+    pub id: String,
+    pub title: String,
+    #[serde(rename = "updatedAt")]
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LensRecommendation {
+    #[serde(rename = "createdAt")]
+    pub created_at: String,
+    pub error: Option<String>,
+    pub id: String,
+    pub kind: LensRecommendationKind,
+    pub reason: String,
+    #[serde(rename = "sourceId")]
+    pub source_id: String,
+    pub status: LensRecommendationStatus,
+    #[serde(rename = "targetId")]
+    pub target_id: String,
+    #[serde(rename = "targetUpdatedAt")]
+    pub target_updated_at: String,
+    pub title: TrimmedNonEmptyString,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum LensRecommendationKind {
+    #[serde(rename = "unread")]
+    Unread,
+    #[serde(rename = "follow_up")]
+    FollowUp,
+    #[serde(rename = "archive_conversation")]
+    ArchiveConversation,
+    #[serde(rename = "remove_project")]
+    RemoveProject,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum LensRecommendationStatus {
+    #[serde(rename = "pending")]
+    Pending,
+    #[serde(rename = "approved")]
+    Approved,
+    #[serde(rename = "dismissed")]
+    Dismissed,
+    #[serde(rename = "applied")]
+    Applied,
+    #[serde(rename = "stale")]
+    Stale,
+    #[serde(rename = "failed")]
+    Failed,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LensSchedule {
+    pub frequency: LensScheduleFrequency,
+    pub hour: i64,
+    pub minute: i64,
+    #[serde(rename = "timeZone")]
+    pub time_zone: String,
+    pub weekday: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum LensScheduleFrequency {
+    #[serde(rename = "daily")]
+    Daily,
+    #[serde(rename = "weekly")]
+    Weekly,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LensSettings {
+    pub enabled: bool,
+    pub model: Option<LensModel>,
+    pub schedule: LensSchedule,
+    #[serde(rename = "staleConversationDays")]
+    pub stale_conversation_days: i64,
+    #[serde(rename = "staleProjectDays")]
+    pub stale_project_days: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

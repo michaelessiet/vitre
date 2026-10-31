@@ -20,3 +20,21 @@ Screenshot colors vary with the desktop backdrop and glass setting. Read exact
 values from the theme file. Row names and device counts are fixture/environment
 data, not fixed interface requirements. The earlier centered outlined-button
 device list is superseded by the command-row picker shown here.
+
+## Lens references — 2026-10-31
+
+The Lens captures use explicit sample data and the native dark theme. Desktop
+images show the complete native window; the mobile images are iPhone 17 Pro
+simulator capture on iOS 26.5. Development preview labels are intentional.
+
+- [Lens overview](lens-desktop-overview.png): restrained metrics, short summary,
+  attention/cleanup rows, and the always-available manual review action.
+- [Inline visual](lens-desktop-visual.png): headline numbers, quiet tabs, and an
+  unboxed chart in Lens chat.
+- [Mobile overview](lens-mobile-overview.jpg): the same hierarchy in a narrow
+  viewport, with touch-sized review and settings controls.
+- [Mobile visual](lens-mobile-visual.jpg): headline metrics and an inline chart
+  with touch-friendly view tabs and source actions.
+
+Implementation: `crates/vitre-app/src/lens.rs`, `crates/vitre-app/src/visuals.rs`,
+`apps/mobile/src/Lens.tsx`, and `apps/mobile/src/Visual.tsx`.

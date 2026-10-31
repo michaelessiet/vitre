@@ -516,7 +516,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "project.delete": {
-      yield* requireProject({
+      const occurredAt = yield* nowIso;
+      const project = yield* requireProject({
         readModel,
         command,
         projectId: command.projectId,
@@ -524,6 +525,26 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       const activeThreads = listThreadsByProjectId(readModel, command.projectId).filter(
         (thread) => thread.deletedAt === null,
       );
+      if (command.expectedUpdatedAt !== undefined) {
+        const latest = activeThreads.reduce(
+          (at, thread) => (thread.updatedAt > at ? thread.updatedAt : at),
+          project.updatedAt,
+        );
+        if (
+          latest !== command.expectedUpdatedAt ||
+          activeThreads.some(
+            (thread) =>
+              thread.latestTurn?.state === "running" ||
+              ["running", "starting"].includes(thread.session?.status ?? "") ||
+              hasOpenBlockingRequest(thread) ||
+              threadHasQueuedTurnStart(thread, occurredAt),
+          )
+        )
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: "This project changed after the cleanup was approved.",
+          });
+      }
       if (activeThreads.length > 0 && command.force !== true) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
@@ -550,7 +571,6 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         });
       }
 
-      const occurredAt = yield* nowIso;
       return {
         ...(yield* withEventBase({
           aggregateKind: "project",
@@ -633,12 +653,24 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.archive": {
-      yield* requireThreadNotArchived({
+      const occurredAt = yield* nowIso;
+      const thread = yield* requireThreadNotArchived({
         readModel,
         command,
         threadId: command.threadId,
       });
-      const occurredAt = yield* nowIso;
+      if (
+        command.expectedUpdatedAt !== undefined &&
+        (thread.updatedAt !== command.expectedUpdatedAt ||
+          thread.latestTurn?.state === "running" ||
+          ["running", "starting"].includes(thread.session?.status ?? "") ||
+          hasOpenBlockingRequest(thread) ||
+          threadHasQueuedTurnStart(thread, occurredAt))
+      )
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "This conversation changed after the cleanup was approved.",
+        });
       return {
         ...(yield* withEventBase({
           aggregateKind: "thread",

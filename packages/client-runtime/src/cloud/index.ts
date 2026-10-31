@@ -1,3 +1,4 @@
+import { LensCommand, LensOverview } from "@t3tools/contracts/lens";
 import * as Schema from "effect/Schema";
 export { cloudConversationLayer } from "./connection.ts";
 import {
@@ -57,6 +58,8 @@ const RelayAuthErrorBody = Schema.TaggedStruct("RelayAuthInvalidError", {
 const encodeJson = Schema.encodeSync(Schema.UnknownFromJsonString);
 const decodeError = Schema.decodeUnknownOption(ErrorBody);
 const decodeRelayAuthError = Schema.decodeUnknownOption(RelayAuthErrorBody);
+const decodeLensOverview = Schema.decodeUnknownSync(LensOverview);
+const decodeLensCommand = Schema.decodeUnknownSync(LensCommand);
 const decodeOverview = Schema.decodeUnknownSync(CloudOverview);
 const decodeCommandResult = Schema.decodeUnknownSync(CommandResult);
 const decodeCommand = Schema.decodeUnknownSync(CloudCommand);
@@ -139,6 +142,9 @@ export function makeCloudClient(options: CloudClientOptions) {
     return `/tasks/${id}`;
   };
   return {
+    lens: async () => decodeLensOverview(await request("/lens")),
+    lensCommand: async (command: LensCommand) =>
+      decodeLensOverview(await request("/lens/commands", decodeLensCommand(command))),
     registerMobileDevice: async (registration: CloudMobileDeviceRegistration) =>
       decodeCredentialResult(await request("/mobile/devices", registration)),
     projectSnapshots: async (projectId: string) => {

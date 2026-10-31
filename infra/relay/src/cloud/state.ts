@@ -1,4 +1,5 @@
 // @effect-diagnostics globalDate:off - Pure UTC billing calculations with an explicit injected clock.
+import { lensModels } from "@t3tools/shared/lens";
 import type {
   CloudCommand,
   CloudOverview,
@@ -34,6 +35,8 @@ type Mutable<T> = T extends object ? { -readonly [K in keyof T]: Mutable<T[K]> }
 export type MutableCloudTask = Mutable<CloudTask>;
 
 export interface CloudState {
+  lens?: import("@t3tools/shared/lens").LensState;
+  lensConversations?: Record<string, import("@t3tools/contracts/lens").LensConversation>;
   githubAccounts?: Record<string, CloudGitHubAccount>;
   projects?: Record<string, CloudProject>;
   deletedProjects?: string[];
@@ -850,7 +853,25 @@ export function isPreparingHandoff(state: CloudState, task: CloudTask): boolean 
 }
 
 /** Ask a warm, idle worker to checkpoint before releasing its provider lease. */
-export function shouldYieldIdleWorker(state: CloudState, task: CloudTask): boolean {
+export function shouldYieldIdleWorker(
+  state: CloudState,
+  task: CloudTask,
+  now = Number.NEGATIVE_INFINITY,
+): boolean {
+  const lens = state.lens;
+  const due =
+    !!lens?.settings.enabled && !lens.run && !!lens.nextRunAt && Date.parse(lens.nextRunAt) <= now;
+  const lensWaiting =
+    due &&
+    (
+      lens.settings.model ??
+      lensModels(
+        lens,
+        Object.values(state.accounts)
+          .filter((account) => account.state === "connected")
+          .map((account) => account.provider),
+      )[0]
+    )?.provider === task.provider;
   if (isResidentWorker(task)) {
     // This is a cooperative hint: resident workers honor it only after their
     // active turn has settled. Include pending warm turns and handoff validation
@@ -858,12 +879,13 @@ export function shouldYieldIdleWorker(state: CloudState, task: CloudTask): boole
     return (
       task.state === "running" &&
       state.accounts[task.provider].leasedBy === task.attempt?.id &&
-      Object.values(state.tasks).some(
-        (waiting) =>
-          waiting.id !== task.id &&
-          waiting.provider === task.provider &&
-          needsProviderLease(state, waiting),
-      )
+      (lensWaiting ||
+        Object.values(state.tasks).some(
+          (waiting) =>
+            waiting.id !== task.id &&
+            waiting.provider === task.provider &&
+            needsProviderLease(state, waiting),
+        ))
     );
   }
   return (
@@ -874,10 +896,13 @@ export function shouldYieldIdleWorker(state: CloudState, task: CloudTask): boole
         !["completed", "cancelled"].includes(operation.phase) &&
         state.bindings?.[operation.conversationId]?.cloudTaskId === task.id,
     ) &&
-    Object.values(state.tasks).some(
-      (waiting) =>
-        waiting.id !== task.id && waiting.state === "queued" && waiting.provider === task.provider,
-    )
+    (lensWaiting ||
+      Object.values(state.tasks).some(
+        (waiting) =>
+          waiting.id !== task.id &&
+          waiting.state === "queued" &&
+          waiting.provider === task.provider,
+      ))
   );
 }
 

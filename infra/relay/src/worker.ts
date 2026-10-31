@@ -75,6 +75,7 @@ import {
   needsFrequentReconciliation,
   wakeReconciliation,
 } from "./cloud/reconciliation.ts";
+import * as CloudLens from "./cloud/lens.ts";
 import * as CloudAuxiliary from "./cloud/auxiliary.ts";
 import { VitreCloudQueue } from "./queues.ts";
 import { CloudArtifacts } from "./cloud/artifacts.ts";
@@ -259,6 +260,7 @@ export default class Api extends Cloudflare.Worker<Api>()(
         Layer.provideMerge(CloudWorkerControl.layer),
         Layer.provideMerge(CloudScheduler.layer),
         Layer.provideMerge(CloudAuxiliary.layer),
+        Layer.provideMerge(CloudLens.layer),
         Layer.provideMerge(CloudService.layer),
         Layer.provideMerge(CloudStore.layer),
         Layer.provideMerge(

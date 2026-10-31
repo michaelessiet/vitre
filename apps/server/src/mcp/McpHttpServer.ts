@@ -1,3 +1,4 @@
+import { VisualToolkitRegistrationLive } from "./toolkits/visuals.ts";
 import { CloudScreenshotRegistrationLive } from "./toolkits/cloudScreenshot/registration.ts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -242,4 +243,5 @@ export const layer = Layer.mergeAll(
   GraphToolkitRegistrationLive,
   SystemBrowserToolkitRegistrationLive,
   MobileToolkitRegistrationLive,
+  VisualToolkitRegistrationLive,
 ).pipe(Layer.provideMerge(McpTransportLive));

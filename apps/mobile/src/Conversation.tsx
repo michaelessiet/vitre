@@ -1,3 +1,5 @@
+import { AppState } from "react-native";
+import { Visual } from "./Visual";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Alert,
@@ -11,7 +13,7 @@ import {
   TextInput,
   View,
 } from "react-native";
-import Markdown from "react-native-markdown-display";
+import Markdown, { type RenderRules } from "react-native-markdown-display";
 import * as Clipboard from "expo-clipboard";
 import * as Crypto from "expo-crypto";
 import {
@@ -46,6 +48,17 @@ import {
   type ConversationMessage,
   type OutgoingMessage,
 } from "./outgoingMessage";
+
+const visualMarkdownRules: RenderRules = {
+  fence: (node, _children, _parent, style) =>
+    (node as typeof node & { sourceInfo?: string }).sourceInfo?.trim() === "vitre-visual" ? (
+      <Visual key={node.key} source={node.content} />
+    ) : (
+      <Text key={node.key} selectable style={style.fence}>
+        {node.content}
+      </Text>
+    ),
+};
 
 function MessageEntrance({ animate, children }: { animate: boolean; children: ReactNode }) {
   const progress = useRef(new Animated.Value(animate ? 0 : 1)).current;
@@ -430,6 +443,36 @@ export function Conversation({
   const files = diffFiles(cloud.diff);
   const busy = busyTask(task);
   const owned = cloudOwned(cloud.overview, task);
+  const assistantAt =
+    cloud.thread?.messages.findLast((message) => message.role === "assistant" && !message.streaming)
+      ?.createdAt ?? task.result?.createdAt;
+  useEffect(() => {
+    if (!assistantAt) return;
+    let cancelled = false,
+      done = false;
+    const command = {
+      type: "read" as const,
+      idempotencyKey: `read:cloud:${task.id}:${assistantAt}`,
+      sourceId: "cloud",
+      targetId: task.id,
+      through: assistantAt,
+    };
+    const read = async () => {
+      if (done || cancelled || AppState.currentState !== "active") return;
+      try {
+        await cloud.client.lensCommand(command);
+        done = true;
+      } catch {
+        /* Retry while this conversation remains visible. */
+      }
+    };
+    void read();
+    const timer = setInterval(() => void read(), 8000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [assistantAt, task.id, cloud.client]);
   const requests = pendingRequests(cloud.thread, task);
   const messages = conversationMessages(cloud.thread?.messages ?? [], outgoing);
   if (!seededHistory.current && cloud.thread?.messages.length) {
@@ -492,6 +535,7 @@ export function Conversation({
               </Text>
             ) : (
               <Markdown
+                rules={visualMarkdownRules}
                 style={{
                   body: { color: colors.text, fontSize: 16, lineHeight: 26 },
                   paragraph: { marginTop: 4, marginBottom: 15 },

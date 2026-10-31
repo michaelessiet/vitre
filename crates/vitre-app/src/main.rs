@@ -13,6 +13,7 @@ mod graph;
 mod icons;
 mod image_render;
 mod keymap;
+mod lens;
 mod lsp;
 mod mobile;
 mod palette;
@@ -22,6 +23,7 @@ mod settings;
 mod sidebar_prefs;
 mod ui;
 mod vim;
+mod visuals;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

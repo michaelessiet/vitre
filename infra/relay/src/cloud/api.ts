@@ -1,3 +1,5 @@
+import { LensCommand, LensOverview, LensModelReply } from "@t3tools/contracts/lens";
+import { CloudLens } from "./lens.ts";
 import {
   CloudCommand,
   CloudConnection,
@@ -131,6 +133,12 @@ const Manifest = Schema.Struct({
 });
 const cloudGroup = HttpApiGroup.make("cloud")
   .add(
+    HttpApiEndpoint.get("lensOverview", "/v1/cloud/lens", { success: LensOverview, error: errors }),
+    HttpApiEndpoint.post("lensCommand", "/v1/cloud/lens/commands", {
+      payload: LensCommand,
+      success: LensOverview,
+      error: errors,
+    }),
     HttpApiEndpoint.post("mobileDevice", "/v1/cloud/mobile/devices", {
       payload: CloudMobileDeviceRegistration,
       success: Ok,
@@ -288,6 +296,7 @@ const callbackGroup = HttpApiGroup.make("cloudWorker").add(
     params: taskParams,
     headers: workerHeaders,
     payload: Schema.Struct({
+      reply: Schema.optionalKey(LensModelReply),
       sequence: Schema.Int.check(Schema.isGreaterThan(0)),
       phase: Schema.Literals(["code", "completed", "failed"]),
       verificationUrl: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(2048))),
@@ -391,6 +400,7 @@ export const cloudApiLayer = HttpApiBuilder.group(
   "cloud",
   Effect.fnUntraced(function* (handlers) {
     const service = yield* CloudService;
+    const lens = yield* CloudLens;
     const control = yield* CloudWorkerControl;
     const auxiliary = yield* CloudAuxiliary;
     const config = yield* CloudConfiguration;
@@ -404,6 +414,18 @@ export const cloudApiLayer = HttpApiBuilder.group(
       return userId;
     });
     return handlers
+      .handle("lensOverview", () =>
+        Effect.gen(function* () {
+          const { userId } = yield* RelayClientPrincipal;
+          return yield* lens.overview(userId).pipe(Effect.mapError(cloudError));
+        }),
+      )
+      .handle("lensCommand", ({ payload }) =>
+        Effect.gen(function* () {
+          const { userId } = yield* RelayClientPrincipal;
+          return yield* lens.command(userId, payload).pipe(Effect.mapError(cloudError));
+        }),
+      )
       .handle("mobileDevice", ({ payload }) =>
         Effect.gen(function* () {
           const { userId } = yield* RelayClientPrincipal;
