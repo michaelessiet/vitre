@@ -1,33 +1,21 @@
-<!--
-⚠️ READ BEFORE OPENING ⚠️
+## Change
 
-We are not actively accepting contributions right now.
+<!-- Explain the problem and resulting behavior. Keep the scope focused. -->
 
-You can still open a PR, but please do so knowing there is a high chance
-we may close it without merging it, or never review it.
+## Verification
 
-- Small, focused PRs are strongly preferred. Bug fixes are most likely to be merged.
-- New features will most likely just annoy us.
-- 1,000+ line PRs with a bunch of new features will probably get you banned from the repo.
--->
+<!-- List focused tests and checks you ran, with their results. Mention any limitations.
+     Backend changes need tests for the changed behavior.
+     Leave full-workspace verification to CI. -->
 
-## What Changed
+## Native UI
 
-<!-- Describe the change clearly and keep scope tight. -->
-
-## Why
-
-<!-- Explain the problem being solved and why this approach is the right one. -->
-
-## UI Changes
-
-<!-- If this PR changes UI, include clear before/after screenshots.
-     If the change involves motion or interaction, include a short video.
-     Delete this section if not applicable. -->
+<!-- For visible Vitre changes, include before/after screenshots and a recording
+     for interaction or motion. Verify the flow in the native app, including
+     keyboard navigation and long/empty content. Delete this section otherwise. -->
 
 ## Checklist
 
-- [ ] This PR is small and focused
-- [ ] I explained what changed and why
-- [ ] I included before/after screenshots for any UI changes
-- [ ] I included a video for animation/interaction changes
+- [ ] I explained the change and its purpose
+- [ ] I ran focused verification for the affected files and packages
+- [ ] I documented configuration or compatibility changes, if applicable

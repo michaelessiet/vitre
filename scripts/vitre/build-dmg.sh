@@ -4,7 +4,7 @@ set -eu
 REPO_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$REPO_ROOT"
 
-for tool in cargo codesign ditto hdiutil iconutil node plutil pnpm sips; do
+for tool in cargo codesign ditto hdiutil iconutil node plutil pnpm sips vp; do
   command -v "$tool" >/dev/null 2>&1 || {
     echo "missing required tool: $tool" >&2
     exit 1
@@ -25,7 +25,11 @@ if [ -z "$SIGNING_IDENTITY" ]; then
 fi
 
 VERSION=$(node -p "require('./apps/server/package.json').version")
-NODE_BINARY=${VITRE_NODE:-$(command -v node)}
+NODE_BINARY=${VITRE_NODE:-$(node -p 'process.execPath')}
+if [ "$("$NODE_BINARY" -p 'process.arch')" != "arm64" ]; then
+  echo "the packaged Node runtime must be Apple Silicon" >&2
+  exit 1
+fi
 OUTPUT_DIR=${VITRE_RELEASE_DIR:-$REPO_ROOT/release}
 OUTPUT_DMG="$OUTPUT_DIR/Vitre-$VERSION-$ARCH.dmg"
 BUILD_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/vitre-dmg.XXXXXX")
@@ -51,11 +55,11 @@ echo "[vitre-dmg] building server bundle"
 (cd apps/server && vp run build:bundle)
 
 echo "[vitre-dmg] deploying production server dependencies"
-pnpm --filter t3 deploy --prod --legacy "$DEPLOY_ROOT"
+pnpm --filter ./apps/server deploy --prod --legacy "$DEPLOY_ROOT"
 node scripts/vitre/prune-packaged-node-modules.mjs "$DEPLOY_ROOT/node_modules"
 
 echo "[vitre-dmg] building release binary"
-cargo build --release -p vitre-app --bin vitre
+cargo build --locked --release -p vitre-app --bin vitre
 
 mkdir -p "$CONTENTS/MacOS" "$RESOURCES/node/bin" "$RESOURCES/server" "$DMG_ROOT" "$SELFTEST_HOME" "$OUTPUT_DIR"
 ditto target/release/vitre "$CONTENTS/MacOS/Vitre"
@@ -110,5 +114,6 @@ hdiutil create \
   -format UDZO \
   "$OUTPUT_DMG"
 hdiutil verify "$OUTPUT_DMG"
-shasum -a 256 "$OUTPUT_DMG"
+node scripts/ci/artifact.ts "$OUTPUT_DMG"
+cat "$OUTPUT_DMG.sha256"
 echo "[vitre-dmg] ready: $OUTPUT_DMG"

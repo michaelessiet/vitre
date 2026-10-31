@@ -1,6 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off
-import * as NodeFs from "node:fs";
-import * as NodeOs from "node:os";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -67,7 +67,7 @@ describe("ripgrepArguments", () => {
 
 describe("rewriteAsarUnpackedPath", () => {
   const makeAsarFixture = () => {
-    const base = NodeFs.mkdtempSync(NodePath.join(NodeOs.tmpdir(), "t3code-asar-"));
+    const base = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3code-asar-"));
     const packedPath = NodePath.join(base, "app.asar", "node_modules", "bin", "rg");
     const unpackedPath = NodePath.join(base, "app.asar.unpacked", "node_modules", "bin", "rg");
     return { base, packedPath, unpackedPath };
@@ -76,11 +76,11 @@ describe("rewriteAsarUnpackedPath", () => {
   it("redirects an asar path to its existing unpacked sibling", () => {
     const { base, packedPath, unpackedPath } = makeAsarFixture();
     try {
-      NodeFs.mkdirSync(NodePath.dirname(unpackedPath), { recursive: true });
-      NodeFs.writeFileSync(unpackedPath, "");
+      NodeFS.mkdirSync(NodePath.dirname(unpackedPath), { recursive: true });
+      NodeFS.writeFileSync(unpackedPath, "");
       expect(WorkspaceContentSearch.rewriteAsarUnpackedPath(packedPath)).toBe(unpackedPath);
     } finally {
-      NodeFs.rmSync(base, { recursive: true, force: true });
+      NodeFS.rmSync(base, { recursive: true, force: true });
     }
   });
 
@@ -89,7 +89,7 @@ describe("rewriteAsarUnpackedPath", () => {
     try {
       expect(WorkspaceContentSearch.rewriteAsarUnpackedPath(packedPath)).toBe(packedPath);
     } finally {
-      NodeFs.rmSync(base, { recursive: true, force: true });
+      NodeFS.rmSync(base, { recursive: true, force: true });
     }
   });
 

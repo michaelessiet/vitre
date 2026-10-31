@@ -27,10 +27,12 @@ body:
       label: Area
       description: Which part of the project is affected?
       options:
-        - crates/vitre-app
-        - apps/server
-        - apps/marketing
-        - packages/contracts or packages/shared
+        - Native Vitre (crates/vitre-app)
+        - Sidecar and providers (apps/server)
+        - Mobile companion (apps/mobile)
+        - Relay and cloud (infra/relay)
+        - Shared contracts and client runtime (packages)
+        - Website (apps/marketing)
         - Build, CI, or release tooling
         - Docs
         - Not sure
@@ -90,8 +92,8 @@ body:
     id: environment
     attributes:
       label: Environment
-      description: OS, browser or desktop app version, Node/Bun version, provider/model if relevant.
-      placeholder: macOS 15.3, Chrome 135, Bun 1.3.9, Codex app-server ...
+      description: macOS version and chip, Vitre version or commit, Node version, and provider/model; include device details for mobile issues.
+      placeholder: macOS 15, Apple Silicon, Vitre main @ abc1234, Node 24, Codex app-server ...
 
   - type: textarea
     id: logs

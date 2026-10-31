@@ -1,15 +1,15 @@
 // Export the pinned Pierre/T3 icon set for native GPUI.
 // Prints an apply_patch patch; --check verifies the checked-in export instead.
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
+import * as NodeURL from "node:url";
 import { getBuiltInSpriteSheet } from "../node_modules/@pierre/trees/dist/builtInIcons.js";
 import treeStyles from "../node_modules/@pierre/trees/dist/style.js";
 import { T3_PIERRE_ICONS, resolvePierreIconForEntry } from "./pierre-icons.ts";
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+const root = NodePath.resolve(NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)), "../..");
 const upstream = "scripts/node_modules/@pierre/trees";
-const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
+const read = (file) => NodeFS.readFileSync(NodePath.join(root, file), "utf8");
 const source = read(`${upstream}/dist/builtInIcons.js`);
 const table = (name) => {
   const match = source.match(new RegExp(`const ${name} = (\\{[\\s\\S]*?\\n\\});`));
@@ -111,7 +111,7 @@ const equivalent = (name, a, b) =>
     : a === b;
 const changed = Object.entries(files).filter(
   ([name, contents]) =>
-    !fs.existsSync(path.join(root, name)) || !equivalent(name, read(name), contents),
+    !NodeFS.existsSync(NodePath.join(root, name)) || !equivalent(name, read(name), contents),
 );
 if (process.argv.includes("--check")) {
   if (changed.length)
@@ -121,7 +121,7 @@ if (process.argv.includes("--check")) {
   );
 } else {
   const patch = changed.map(([name, contents]) =>
-    fs.existsSync(path.join(root, name))
+    NodeFS.existsSync(NodePath.join(root, name))
       ? `*** Update File: ${name}\n@@\n${read(name)
           .trimEnd()
           .split("\n")

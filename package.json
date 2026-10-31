@@ -12,6 +12,7 @@
     "start:marketing": "vp run --filter @t3tools/marketing preview",
     "build": "vp run --filter './apps/*' --filter './packages/*' --filter './oxlint-plugin-t3code' --filter './scripts' build",
     "build:marketing": "vp run --filter @t3tools/marketing build",
+    "build:vitre:dmg": "sh scripts/vitre/build-dmg.sh",
     "typecheck": "vp run -r --concurrency-limit 2 typecheck",
     "tc": "vp run -r --concurrency-limit 2 typecheck",
     "lint": "vp lint --report-unused-disable-directives",

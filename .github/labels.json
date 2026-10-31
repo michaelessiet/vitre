@@ -1,0 +1,47 @@
+[
+  {
+    "name": "bug",
+    "color": "d73a4a",
+    "description": "Something is broken or behaving incorrectly."
+  },
+  {
+    "name": "enhancement",
+    "color": "a2eeef",
+    "description": "Requested improvement or new capability."
+  },
+  {
+    "name": "needs-triage",
+    "color": "fbca04",
+    "description": "Issue needs maintainer review and initial categorization."
+  },
+  {
+    "name": "size:XS",
+    "color": "0e8a16",
+    "description": "0-9 effective changed lines (test files excluded in mixed PRs)."
+  },
+  {
+    "name": "size:S",
+    "color": "5ebd3e",
+    "description": "10-29 effective changed lines (test files excluded in mixed PRs)."
+  },
+  {
+    "name": "size:M",
+    "color": "fbca04",
+    "description": "30-99 effective changed lines (test files excluded in mixed PRs)."
+  },
+  {
+    "name": "size:L",
+    "color": "fe7d37",
+    "description": "100-499 effective changed lines (test files excluded in mixed PRs)."
+  },
+  {
+    "name": "size:XL",
+    "color": "d93f0b",
+    "description": "500-999 effective changed lines (test files excluded in mixed PRs)."
+  },
+  {
+    "name": "size:XXL",
+    "color": "b60205",
+    "description": "1,000+ effective changed lines (test files excluded in mixed PRs)."
+  }
+]

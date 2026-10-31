@@ -1,0 +1,5 @@
+# Register the gitlink inherited from the read-only Alchemy reference subtree.
+# Git enumerates submodules from this root file even when checkout skips them.
+[submodule ".repos/alchemy-effect/.vendor/alchemy"]
+	path = .repos/alchemy-effect/.vendor/alchemy
+	url = https://github.com/alchemy-run/alchemy.git

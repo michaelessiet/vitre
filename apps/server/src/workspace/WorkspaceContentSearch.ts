@@ -16,7 +16,7 @@
  * @module WorkspaceContentSearch
  */
 import * as NodeChildProcess from "node:child_process";
-import * as NodeFs from "node:fs";
+import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeReadline from "node:readline";
 
@@ -230,7 +230,7 @@ async function resolveRipgrepPath(): Promise<string> {
  */
 export function rewriteAsarUnpackedPath(filePath: string): string {
   const rewritten = filePath.replace(`.asar${NodePath.sep}`, `.asar.unpacked${NodePath.sep}`);
-  return rewritten !== filePath && NodeFs.existsSync(rewritten) ? rewritten : filePath;
+  return rewritten !== filePath && NodeFS.existsSync(rewritten) ? rewritten : filePath;
 }
 
 function runRipgrep(

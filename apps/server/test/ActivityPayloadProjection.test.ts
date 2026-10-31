@@ -10,8 +10,6 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { buildThreadFeed, type ThreadFeedActivity } from "../../mobile/src/lib/threadActivity.ts";
-import { deriveWorkLogEntries } from "../../web/src/session-logic.ts";
 import {
   MCP_TOOL_CALL_AGGRESSIVE_STRING_BYTE_BUDGET,
   MCP_TOOL_CALL_DATA_BYTE_BUDGET,
@@ -137,27 +135,6 @@ const fixtures = [
 ] satisfies ReadonlyArray<OrchestrationThreadActivity>;
 
 describe("projectActivityPayload", () => {
-  function comparableActivity(activity: ThreadFeedActivity) {
-    return {
-      ...activity,
-      fullDetail: activity.getFullDetail(),
-      copyText: activity.getCopyText(),
-      getFullDetail: undefined,
-      getCopyText: undefined,
-    };
-  }
-
-  function comparableThreadFeed(activities: ReadonlyArray<OrchestrationThreadActivity>) {
-    return buildThreadFeed(makeThread(activities)).map((entry) =>
-      entry.type === "activity-group"
-        ? {
-            ...entry,
-            activities: entry.activities.map(comparableActivity),
-          }
-        : entry,
-    );
-  }
-
   it("drops unread bulk while retaining command, file, tool, and summary inputs", () => {
     const projected = projectActivityPayload(fixtures[0]!);
     expect(projected.payload).toEqual({
@@ -193,12 +170,17 @@ describe("projectActivityPayload", () => {
     );
   });
 
-  it("keeps current web and mobile derived output identical for every tool item type", () => {
-    for (const activity of fixtures) {
-      const projected = projectActivityPayload(activity);
-      expect(deriveWorkLogEntries([projected])).toEqual(deriveWorkLogEntries([activity]));
-      expect(comparableThreadFeed([projected])).toEqual(comparableThreadFeed([activity]));
-    }
+  it.each([
+    { index: 2, data: { toolCallId: "tool-dynamic", rawOutput: { content: "dynamic summary" } } },
+    { index: 3, data: { kind: "delegate", rawOutput: { content: "2 lines" } } },
+    { index: 5, data: { rawOutput: { totalFiles: 42, truncated: true } } },
+    { index: 6, data: {} },
+  ])("retains display metadata and summaries for tool fixture $index", ({ index, data }) => {
+    const activity = fixtures[index]!;
+    expect(projectActivityPayload(activity)).toEqual({
+      ...activity,
+      payload: { ...(activity.payload as Record<string, unknown>), data },
+    });
   });
 
   it("projects snapshot and event transports without mutating their sources", () => {

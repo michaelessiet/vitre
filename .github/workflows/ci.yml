@@ -1,50 +1,117 @@
-name: CI
+name: Vitre CI
 
 on:
   pull_request:
   push:
-    branches:
-      - main
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      build_artifact:
+        description: Build an ad-hoc Apple Silicon DMG after validation
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+# Only PR runs share a cancelable group. Main runs must not cancel deployments.
+concurrency:
+  group: vitre-ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  check:
-    name: Check
-    runs-on: blacksmith-8vcpu-ubuntu-2404
-    timeout-minutes: 10
+  changes:
+    name: Select validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      native: ${{ steps.changes.outputs.native }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@v1
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v6
         with:
           node-version-file: package.json
-          cache: true
-          run-install: true
+      - id: changes
+        run: node scripts/ci/changes.ts
 
-      - name: Check
+  check:
+    name: TypeScript checks and builds
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-tools
+      - name: Formatting and lint
         run: vp check
-
       - name: Typecheck
-        run: vpr typecheck
-
-      - name: Build server package
-        run: vp run --filter t3 build
+        run: vp run typecheck
+      - name: Build bundled sidecar
+        run: vp run --filter ./apps/server build:bundle
+      - name: Build marketing site
+        run: vp run --filter ./apps/marketing build
 
   test:
-    name: Test
-    runs-on: blacksmith-8vcpu-ubuntu-2404
-    timeout-minutes: 10
+    name: TypeScript tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-tools
+      - run: vp run test
 
-      - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@v1
+  native:
+    name: Native validation
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
+    uses: ./.github/workflows/vitre-ci.yml
+
+  result:
+    name: CI result
+    needs: [changes, check, test, native]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
         with:
           node-version-file: package.json
-          cache: true
-          run-install: true
+      - run: node scripts/ci/result.ts
+        env:
+          CI_NEEDS: ${{ toJSON(needs) }}
+          NATIVE_CHECKS: ${{ needs.changes.outputs.native }}
 
-      - name: Test
-        run: vp run test
+  artifact:
+    name: Vitre development build
+    needs: [changes, result]
+    if: >-
+      always() && needs.result.result == 'success' &&
+      ((github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.native == 'true') ||
+       (github.event_name == 'workflow_dispatch' && inputs.build_artifact))
+    uses: ./.github/workflows/build-vitre.yml
+    with:
+      ref: ${{ github.sha }}
+
+  relay:
+    name: Relay deployment
+    needs: result
+    if: >-
+      !cancelled() && needs.result.result == 'success' && github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' && vars.RELAY_DEPLOY_ENABLED == 'true'
+    permissions:
+      contents: read
+      deployments: read
+    uses: ./.github/workflows/deploy-relay.yml
+    secrets: inherit
+    with:
+      ref: ${{ github.sha }}
+      ci_result: ${{ needs.result.result }}
