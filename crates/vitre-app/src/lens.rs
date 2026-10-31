@@ -1223,7 +1223,7 @@ mod tests {
         }
         let notifications = Rc::new(Cell::new(0));
         let subscriptions = panel.update(cx, |panel, cx| {
-            assert!(panel.markdown.len() > 0);
+            assert!(!panel.markdown.is_empty());
             assert!(
                 panel.markdown.len() < 20,
                 "only visible messages should parse, not all 200"

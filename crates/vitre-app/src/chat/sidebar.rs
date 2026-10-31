@@ -629,41 +629,40 @@ impl ChatApp {
         };
         let (id, updated_at) = (thread.id.0.clone(), thread.updated_at.0.clone());
         let changed = self.sidebar.mark_thread_visited(&id, &updated_at);
-        if changed {
-            if let Some(client) = self.client.clone() {
-                let source = if self.is_cloud_thread() {
+        if changed && let Some(client) = self.client.clone() {
+            let source =
+                if self.is_cloud_thread() {
                     Some("cloud".to_owned())
                 } else {
                     client.sessions().borrow().as_ref().map(|session| {
                         format!("local:{}", session.config.environment.environment_id.0)
                     })
                 };
-                if let Some(source_id) = source {
-                    let target_id = if source_id == "cloud" {
-                        self.open_cloud_task_id()
-                            .unwrap_or_else(|| id.strip_prefix("cloud-").unwrap_or(&id).to_owned())
-                    } else {
-                        id.clone()
-                    };
-                    let command = vitre_contracts::LensCommand::Read {
-                        idempotency_key: format!("read:{source_id}:{target_id}:{updated_at}"),
-                        source_id,
-                        target_id,
-                        through: updated_at,
-                    };
-                    cx.spawn(async move |_, cx| {
-                        let _ = cx
-                            .update(|cx| {
-                                gpui_tokio::Tokio::spawn_result(cx, async move {
-                                    Ok(vitre_client::cloud::CloudClient::new(client)
-                                        .lens_command(&command)
-                                        .await?)
-                                })
+            if let Some(source_id) = source {
+                let target_id = if source_id == "cloud" {
+                    self.open_cloud_task_id()
+                        .unwrap_or_else(|| id.strip_prefix("cloud-").unwrap_or(&id).to_owned())
+                } else {
+                    id.clone()
+                };
+                let command = vitre_contracts::LensCommand::Read {
+                    idempotency_key: format!("read:{source_id}:{target_id}:{updated_at}"),
+                    source_id,
+                    target_id,
+                    through: updated_at,
+                };
+                cx.spawn(async move |_, cx| {
+                    let _ = cx
+                        .update(|cx| {
+                            gpui_tokio::Tokio::spawn_result(cx, async move {
+                                Ok(vitre_client::cloud::CloudClient::new(client)
+                                    .lens_command(&command)
+                                    .await?)
                             })
-                            .await;
-                    })
-                    .detach();
-                }
+                        })
+                        .await;
+                })
+                .detach();
             }
         }
         changed

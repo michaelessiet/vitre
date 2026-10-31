@@ -35,6 +35,12 @@ simulator capture on iOS 26.5. Development preview labels are intentional.
   viewport, with touch-sized review and settings controls.
 - [Mobile visual](lens-mobile-visual.jpg): headline metrics and an inline chart
   with touch-friendly view tabs and source actions.
+- [Mobile interaction recording](lens-mobile-review.mov): a manual review with
+  scheduling off, scrolling suggestions, and switching chart views in the iPhone
+  simulator. This is a UI walkthrough with sample data, not a performance benchmark.
+- [Earlier desktop preview](lens-desktop-earlier-preview.png): the short-chat
+  alignment issue before the final layout correction; retained for QA comparison,
+  not as the current design reference.
 
 Implementation: `crates/vitre-app/src/lens.rs`, `crates/vitre-app/src/visuals.rs`,
 `apps/mobile/src/Lens.tsx`, and `apps/mobile/src/Visual.tsx`.

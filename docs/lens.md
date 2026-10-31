@@ -108,3 +108,5 @@ Reference captures: [desktop overview](design-language/images/lens-desktop-overv
 [desktop visual](design-language/images/lens-desktop-visual.png),
 [iPhone overview](design-language/images/lens-mobile-overview.jpg), and
 [iPhone visual](design-language/images/lens-mobile-visual.jpg).
+An [iPhone interaction recording](design-language/images/lens-mobile-review.mov)
+shows a manual review, suggestion scrolling, and chart navigation using sample data.

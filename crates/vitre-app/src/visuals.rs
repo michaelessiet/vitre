@@ -283,30 +283,28 @@ impl Render for VisualPanel {
             ));
         }
         let view = &spec.views[self.selected.min(spec.views.len() - 1)];
-        if matches!(view.kind.as_str(), "bar" | "line") {
-            if !self.show_data {
-                let color = cx.theme().primary;
-                let chart: AnyElement = if view.kind == "line" {
-                    LineChart::new(view.points.clone())
-                        .id("native-visual-line")
-                        .name(view.label.clone())
-                        .natural()
-                        .x(|p: &Point| SharedString::from(p.label.clone()))
-                        .y(|p| p.value)
-                        .stroke(cx.theme().primary)
-                        .into_any_element()
-                } else {
-                    BarChart::new(view.points.clone())
-                        .id("native-visual-bars")
-                        .name(view.label.clone())
-                        .value_axis(true)
-                        .band(|p: &Point| SharedString::from(p.label.clone()))
-                        .value(|p| p.value)
-                        .fill(move |_, _, _, _| color)
-                        .into_any_element()
-                };
-                body = body.child(div().h(px(220.)).w_full().child(chart));
-            }
+        if matches!(view.kind.as_str(), "bar" | "line") && !self.show_data {
+            let color = cx.theme().primary;
+            let chart: AnyElement = if view.kind == "line" {
+                LineChart::new(view.points.clone())
+                    .id("native-visual-line")
+                    .name(view.label.clone())
+                    .natural()
+                    .x(|p: &Point| SharedString::from(p.label.clone()))
+                    .y(|p| p.value)
+                    .stroke(cx.theme().primary)
+                    .into_any_element()
+            } else {
+                BarChart::new(view.points.clone())
+                    .id("native-visual-bars")
+                    .name(view.label.clone())
+                    .value_axis(true)
+                    .band(|p: &Point| SharedString::from(p.label.clone()))
+                    .value(|p| p.value)
+                    .fill(move |_, _, _, _| color)
+                    .into_any_element()
+            };
+            body = body.child(div().h(px(220.)).w_full().child(chart));
         }
         if view.kind == "metrics" || self.show_data && matches!(view.kind.as_str(), "bar" | "line")
         {
