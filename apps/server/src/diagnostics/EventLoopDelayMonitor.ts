@@ -1,7 +1,7 @@
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Metric from "effect/Metric";
-import { monitorEventLoopDelay } from "node:perf_hooks";
+import * as NodePerfHooks from "node:perf_hooks";
 
 import { eventLoopDelay } from "../observability/Metrics.ts";
 
@@ -14,7 +14,7 @@ const SAMPLE_INTERVAL_MS = 5_000;
  */
 export const layer = Layer.effectDiscard(
   Effect.gen(function* () {
-    const histogram = monitorEventLoopDelay({ resolution: 20 });
+    const histogram = NodePerfHooks.monitorEventLoopDelay({ resolution: 20 });
     histogram.enable();
     yield* Effect.addFinalizer(() => Effect.sync(() => histogram.disable()));
 

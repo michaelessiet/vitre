@@ -2568,91 +2568,97 @@ describe("ProviderRuntimeIngestion", () => {
     expect(message?.streaming).toBe(false);
   });
 
-  it("does not duplicate assistant completion when item.completed is followed by turn.completed", async () => {
-    const harness = await createHarness();
-    const now = "2026-01-01T00:00:00.000Z";
+  effectIt.effect(
+    "does not duplicate assistant completion when item.completed is followed by turn.completed",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* Effect.promise(() => createHarness());
+        const now = "2026-01-01T00:00:00.000Z";
 
-    harness.emit({
-      type: "turn.started",
-      eventId: asEventId("evt-turn-started-for-complete-dedup"),
-      provider: ProviderDriverKind.make("codex"),
-      createdAt: now,
-      threadId: asThreadId("thread-1"),
-      turnId: asTurnId("turn-complete-dedup"),
-    });
+        harness.emit({
+          type: "turn.started",
+          eventId: asEventId("evt-turn-started-for-complete-dedup"),
+          provider: ProviderDriverKind.make("codex"),
+          createdAt: now,
+          threadId: asThreadId("thread-1"),
+          turnId: asTurnId("turn-complete-dedup"),
+        });
 
-    await waitForThread(
-      harness.readModel,
-      (thread) =>
-        thread.session?.status === "running" &&
-        thread.session?.activeTurnId === "turn-complete-dedup",
-    );
+        yield* Effect.promise(() =>
+          waitForThread(
+            harness.readModel,
+            (thread) =>
+              thread.session?.status === "running" &&
+              thread.session?.activeTurnId === "turn-complete-dedup",
+          ),
+        );
 
-    harness.emit({
-      type: "content.delta",
-      eventId: asEventId("evt-message-delta-for-complete-dedup"),
-      provider: ProviderDriverKind.make("codex"),
-      createdAt: now,
-      threadId: asThreadId("thread-1"),
-      turnId: asTurnId("turn-complete-dedup"),
-      itemId: asItemId("item-complete-dedup"),
-      payload: {
-        streamKind: "assistant_text",
-        delta: "done",
-      },
-    });
-    harness.emit({
-      type: "item.completed",
-      eventId: asEventId("evt-message-completed-for-complete-dedup"),
-      provider: ProviderDriverKind.make("codex"),
-      createdAt: now,
-      threadId: asThreadId("thread-1"),
-      turnId: asTurnId("turn-complete-dedup"),
-      itemId: asItemId("item-complete-dedup"),
-      payload: {
-        itemType: "assistant_message",
-        status: "completed",
-      },
-    });
-    harness.emit({
-      type: "turn.completed",
-      eventId: asEventId("evt-turn-completed-for-complete-dedup"),
-      provider: ProviderDriverKind.make("codex"),
-      createdAt: now,
-      threadId: asThreadId("thread-1"),
-      turnId: asTurnId("turn-complete-dedup"),
-      payload: {
-        state: "completed",
-      },
-    });
+        harness.emit({
+          type: "content.delta",
+          eventId: asEventId("evt-message-delta-for-complete-dedup"),
+          provider: ProviderDriverKind.make("codex"),
+          createdAt: now,
+          threadId: asThreadId("thread-1"),
+          turnId: asTurnId("turn-complete-dedup"),
+          itemId: asItemId("item-complete-dedup"),
+          payload: {
+            streamKind: "assistant_text",
+            delta: "done",
+          },
+        });
+        harness.emit({
+          type: "item.completed",
+          eventId: asEventId("evt-message-completed-for-complete-dedup"),
+          provider: ProviderDriverKind.make("codex"),
+          createdAt: now,
+          threadId: asThreadId("thread-1"),
+          turnId: asTurnId("turn-complete-dedup"),
+          itemId: asItemId("item-complete-dedup"),
+          payload: {
+            itemType: "assistant_message",
+            status: "completed",
+          },
+        });
+        harness.emit({
+          type: "turn.completed",
+          eventId: asEventId("evt-turn-completed-for-complete-dedup"),
+          provider: ProviderDriverKind.make("codex"),
+          createdAt: now,
+          threadId: asThreadId("thread-1"),
+          turnId: asTurnId("turn-complete-dedup"),
+          payload: {
+            state: "completed",
+          },
+        });
 
-    await waitForThread(
-      harness.readModel,
-      (thread) =>
-        thread.session?.status === "ready" &&
-        thread.session?.activeTurnId === null &&
-        thread.messages.some(
-          (message: ProviderRuntimeTestMessage) =>
-            message.id === "assistant:item-complete-dedup" && !message.streaming,
-        ),
-    );
+        yield* Effect.promise(() =>
+          waitForThread(
+            harness.readModel,
+            (thread) =>
+              thread.session?.status === "ready" &&
+              thread.session?.activeTurnId === null &&
+              thread.messages.some(
+                (message: ProviderRuntimeTestMessage) =>
+                  message.id === "assistant:item-complete-dedup" && !message.streaming,
+              ),
+          ),
+        );
 
-    const events = await Effect.runPromise(
-      Stream.runCollect(harness.engine.readEvents(0)).pipe(
-        Effect.map((chunk) => Array.from(chunk)),
-      ),
-    );
-    const completionEvents = events.filter((event) => {
-      if (event.type !== "thread.message-sent") {
-        return false;
-      }
-      return (
-        event.payload.messageId === "assistant:item-complete-dedup" &&
-        event.payload.streaming === false
-      );
-    });
-    expect(completionEvents).toHaveLength(1);
-  });
+        const events = yield* Stream.runCollect(harness.engine.readEvents(0)).pipe(
+          Effect.map((chunk) => Array.from(chunk)),
+        );
+        const completionEvents = events.filter((event) => {
+          if (event.type !== "thread.message-sent") {
+            return false;
+          }
+          return (
+            event.payload.messageId === "assistant:item-complete-dedup" &&
+            event.payload.streaming === false
+          );
+        });
+        expect(completionEvents).toHaveLength(1);
+      }),
+  );
 
   it("maps canonical request events into approval activities with requestKind", async () => {
     const harness = await createHarness();
