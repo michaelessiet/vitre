@@ -1,0 +1,8 @@
+# actionlint 1.7.12 predates GitHub's queued concurrency support.
+# Keep this exception limited to the exact unknown-key diagnostic in this file;
+# scripts/ci/workflows.test.ts validates queue/max and cancellation together.
+# https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency
+paths:
+  .github/workflows/deploy-relay.yml:
+    ignore:
+      - '^unexpected key "queue" for "concurrency" section\. expected one of "cancel-in-progress", "group"$'

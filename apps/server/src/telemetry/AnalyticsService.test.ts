@@ -135,10 +135,10 @@ it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
         // spill file the first instance wrote. No HTTP server is launched at all:
         // if shutdown tried to reach PostHog, this test would hang rather than
         // quietly pass, which is exactly the regression worth guarding.
-        const serverConfig = yield* Effect.provide(
-          ServerConfig.ServerConfig,
+        const configServices = yield* Layer.build(
           ServerConfig.layerTest(process.cwd(), { prefix: "t3-telemetry-spill-" }),
         );
+        const serverConfig = yield* Effect.provide(ServerConfig.ServerConfig, configServices);
         const runtimeLayer = AnalyticsService.layer.pipe(
           Layer.provideMerge(Layer.succeed(ServerConfig.ServerConfig, serverConfig)),
           Layer.provide(
