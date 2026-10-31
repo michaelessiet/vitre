@@ -607,6 +607,7 @@ const ProjectMetaUpdateCommand = Schema.Struct({
 });
 
 const ProjectDeleteCommand = Schema.Struct({
+  expectedUpdatedAt: Schema.optionalKey(IsoDateTime),
   type: Schema.Literal("project.delete"),
   commandId: CommandId,
   projectId: ProjectId,
@@ -637,6 +638,7 @@ const ThreadDeleteCommand = Schema.Struct({
 });
 
 const ThreadArchiveCommand = Schema.Struct({
+  expectedUpdatedAt: Schema.optionalKey(IsoDateTime),
   type: Schema.Literal("thread.archive"),
   commandId: CommandId,
   threadId: ThreadId,

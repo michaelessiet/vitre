@@ -11,9 +11,105 @@ import { CloudError } from "./policy.ts";
 import { CredentialVault, sha256 } from "./crypto.ts";
 import { reserveJob } from "./jobs.ts";
 import { currentMillis } from "./service.ts";
+import { applyLensCommand } from "./lens.ts";
 const encodeJson = Schema.encodeSync(Schema.UnknownFromJsonString);
 
 afterEach(() => vi.unstubAllGlobals());
+
+it.effect(
+  "Lens bootstrap and callbacks are credential-fenced and failed replies cannot become reviews",
+  () =>
+    Effect.gen(function* () {
+      const now = yield* currentMillis;
+      let document = emptyDocument();
+      const encryptionKey = btoa("x".repeat(32));
+      const credential = encodeJson({ tokens: { refresh_token: "lens-subscription-secret" } });
+      document.state.accounts.codex.state = "connected";
+      document.state.accounts.codex.credentialVersion = 1;
+      document.private.credentials.codex = {
+        version: 1,
+        sealed: yield* Effect.promise(() =>
+          new CredentialVault(encryptionKey).seal(credential, "user:codex:1"),
+        ),
+      };
+      const id = "lens-callback-test";
+      applyLensCommand(
+        document.state,
+        { type: "sweep", idempotencyKey: "review" },
+        now,
+        id,
+        true,
+        "fingerprint",
+      );
+      const token = "private-lens-worker-token";
+      document.private.workerTokens[id] = {
+        hash: yield* Effect.promise(() => sha256(token)),
+        sealed: yield* Effect.promise(() =>
+          new CredentialVault(encryptionKey).seal(token, `user:job:${id}`),
+        ),
+      };
+      const runtime = layer.pipe(
+        Layer.provide([
+          NodeCrypto.layer,
+          Layer.succeed(CloudStore, {
+            read: () => Effect.sync(() => structuredClone(document)),
+            users: Effect.succeed(["user"]),
+            mutate: (_, reduce) =>
+              Effect.try({
+                try: () => {
+                  const next = structuredClone(document);
+                  const result = reduce(next);
+                  document = next;
+                  return result;
+                },
+                catch: (error) =>
+                  error instanceof CloudError ? error : new CloudError("test", "Test failed"),
+              }),
+          }),
+          Layer.succeed(CloudConfiguration, {
+            enabled: true,
+            allowedUserId: "user",
+            controlUrl: "https://example.test",
+            encryptionKey,
+            github: { appId: "", privateKey: "", installationIds: [] },
+            wake: () => Effect.void,
+          }),
+          Layer.succeed(CloudArtifacts, {
+            get: async () => null,
+            head: async () => null,
+            put: async () => {},
+            delete: async () => {},
+          }),
+        ]),
+      );
+      yield* Effect.gen(function* () {
+        const service = yield* CloudAuxiliary;
+        expect((yield* Effect.flip(service.bootstrap(id, "invalid"))).status).toBe(401);
+        const input = yield* service.bootstrap(id, token);
+        expect(input.kind).toBe("lens");
+        expect("credential" in input && input.credential).toBe(credential);
+        expect(encodeJson(document)).not.toContain("lens-subscription-secret");
+        expect(
+          (yield* Effect.flip(service.callback(id, token, { sequence: 1, phase: "code" }))).code,
+        ).toBe("invalid_reply");
+        document.state.accounts.codex.credentialVersion++;
+        expect((yield* Effect.flip(service.bootstrap(id, token))).code).toBe("stale_worker");
+        expect(
+          (yield* Effect.flip(service.callback(id, token, { sequence: 1, phase: "failed" }))).code,
+        ).toBe("stale_worker");
+        document.state.accounts.codex.credentialVersion--;
+        yield* service.callback(id, token, {
+          sequence: 1,
+          phase: "failed",
+          reply: { text: "Must not appear", recommendations: [] },
+        });
+        expect(document.state.lens!.messages).toHaveLength(0);
+        expect(document.state.lens!.run).toBeNull();
+        expect(document.state.lens!.error).toBeTruthy();
+        expect(document.state.accounts.codex.leasedBy).toBe(id);
+      }).pipe(Effect.provide(runtime));
+    }),
+);
 
 it.effect("wakes task scheduling only after auxiliary absence releases its provider lease", () =>
   Effect.gen(function* () {

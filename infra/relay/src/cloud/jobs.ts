@@ -5,7 +5,8 @@ import { CLOUD_POLICY, CloudError, iso, month } from "./policy.ts";
 
 export interface CloudJob {
   id: string;
-  kind: "login" | "publication";
+  kind: "login" | "publication" | "lens";
+  provider?: "codex" | "claude";
   publicationId: string | null;
   state: "starting" | "running" | "completed" | "failed";
   deleted: boolean;
@@ -32,12 +33,16 @@ export function reserveJob(
   kind: CloudJob["kind"],
   now: number,
   publicationId: string | null = null,
+  provider: "codex" | "claude" = "codex",
 ): CloudJob {
   const jobs = (state.jobs ??= {});
   if (jobs[id]) return jobs[id];
-  const account = state.accounts.codex;
-  if (kind === "login" && account.leasedBy)
-    throw new CloudError("provider_busy", "Stop Codex execution before connecting the account");
+  const account = state.accounts[provider];
+  if ((kind === "login" || kind === "lens") && account.leasedBy)
+    throw new CloudError(
+      "provider_busy",
+      "This AI account is busy. Wait for its current run to finish and try again.",
+    );
   const tasks = Object.values(state.tasks).filter(
     (task) => task.worker && !["stopped", "deleted"].includes(task.worker.state),
   );
@@ -52,6 +57,7 @@ export function reserveJob(
   jobs[id] = {
     id,
     kind,
+    provider,
     publicationId,
     state: "starting",
     deleted: false,
@@ -67,7 +73,7 @@ export function reserveJob(
     claimUntil: null,
     claimToken: null,
   };
-  if (kind === "login") account.leasedBy = id;
+  if (kind === "login" || kind === "lens") account.leasedBy = id;
   return jobs[id];
 }
 export function accrueJobs(state: CloudState, now: number): void {
@@ -86,7 +92,8 @@ export function accrueJobs(state: CloudState, now: number): void {
       ["starting", "running"].includes(job.state) &&
       (now >= Date.parse(job.deadlineAt) ||
         (state.usage[month(now)] ?? 0) >= state.monthlyLimit ||
-        (job.kind === "login" && state.accounts.codex.credentialVersion !== job.credentialVersion))
+        ((job.kind === "login" || job.kind === "lens") &&
+          state.accounts[job.provider ?? "codex"].credentialVersion !== job.credentialVersion))
     ) {
       job.state = "failed";
       job.error = "Operation expired, was disconnected, or reached its compute allowance";

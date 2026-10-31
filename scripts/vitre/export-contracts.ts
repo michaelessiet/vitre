@@ -7,6 +7,7 @@
 // Run: node scripts/vitre/export-contracts.ts
 
 import * as contracts from "@t3tools/contracts";
+import * as lens from "@t3tools/contracts/lens";
 import * as cloud from "@t3tools/contracts/cloud";
 import * as Schema from "effect/Schema";
 import * as SchemaRepresentation from "effect/SchemaRepresentation";
@@ -27,7 +28,11 @@ const outPath = NodePath.join(repoRoot, "crates", "vitre-contracts", "contracts.
 
 // --- 1. annotate every contract export so defs get stable names -------------
 
-const annotateSummary = annotateContracts({ ...contracts, ...cloud } as unknown as AnyRecord);
+const annotateSummary = annotateContracts({
+  ...contracts,
+  ...cloud,
+  ...lens,
+} as unknown as AnyRecord);
 
 // --- 2. collect payload/success/error roots per method ----------------------
 
@@ -91,7 +96,7 @@ for (const [tag, rpc] of group.requests) {
 
 // Cloud is an HTTP surface, not environment RPC. Export its schemas for native
 // clients without inventing RPC methods or duplicating the wire types in Rust.
-const cloudRoots = Object.entries(cloud)
+const cloudRoots = Object.entries({ ...cloud, ...lens })
   .filter(([, value]) => isSchemaLike(value))
   .map(([name, value]) => ({
     name,

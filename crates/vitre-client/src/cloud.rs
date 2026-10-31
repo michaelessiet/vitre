@@ -286,6 +286,25 @@ impl CloudClient {
         Ok(result)
     }
 
+    pub async fn lens(&self) -> Result<vitre_contracts::LensOverview, RpcError> {
+        #[cfg(debug_assertions)]
+        if std::env::var("VITRE_LENS_PREVIEW").as_deref() == Ok("1") {
+            return vitre_rpc::cloud::lens_preview(None).await;
+        }
+        let (http, token) = self.authenticated().await?;
+        http.lens(&token).await
+    }
+    pub async fn lens_command(
+        &self,
+        command: &vitre_contracts::LensCommand,
+    ) -> Result<vitre_contracts::LensOverview, RpcError> {
+        #[cfg(debug_assertions)]
+        if std::env::var("VITRE_LENS_PREVIEW").as_deref() == Ok("1") {
+            return vitre_rpc::cloud::lens_preview(Some(command)).await;
+        }
+        let (http, token) = self.authenticated().await?;
+        http.lens_command(&token, command).await
+    }
     pub async fn overview(&self) -> Result<CloudOverview, RpcError> {
         let (http, token) = self.authenticated().await?;
         http.overview(&token).await

@@ -1,3 +1,4 @@
+import { startLensSync } from "./cloud/LensSync.ts";
 import {
   CommandId,
   DEFAULT_MODEL,
@@ -366,6 +367,7 @@ export const make = Effect.gen(function* () {
       }),
     );
 
+    yield* startLensSync;
     const welcomeBase = yield* resolveWelcomeBase;
     const environment = yield* serverEnvironment.getDescriptor;
     yield* Effect.logDebug("startup phase: preparing welcome payload");

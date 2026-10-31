@@ -1,3 +1,4 @@
+import { VISUAL_INSTRUCTIONS } from "@t3tools/shared/visual";
 import type { ProviderInteractionMode } from "@t3tools/contracts";
 
 const T3_CODE_BROWSER_TOOL_INSTRUCTIONS = `
@@ -167,6 +168,8 @@ export function buildCodexDeveloperInstructions(
       ? CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS
       : CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS;
   return `${base}
+
+${VISUAL_INSTRUCTIONS}
 
 <runtime_info>In case you're asked: you are running in Vitre through the Codex harness, as ${toSingleLine(runtime.model)} with ${toSingleLine(runtime.reasoningEffort)} reasoning effort. No need to mention this otherwise.</runtime_info>`;
 }

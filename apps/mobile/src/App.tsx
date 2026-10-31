@@ -1,3 +1,4 @@
+import { Lens } from "./Lens";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ActivityIndicator,
@@ -280,14 +281,20 @@ export function CloudScreen({
   cloud,
   onSignOut,
   preview = false,
+  startInLens = false,
   notifications,
 }: {
   cloud: MobileCloud;
   onSignOut: () => Promise<void>;
   preview?: boolean;
+  startInLens?: boolean;
   notifications?: ReturnType<typeof useCloudNotifications>;
 }) {
-  const [drawer, setDrawer] = useState(!cloud.selectedId);
+  const [drawer, setDrawer] = useState(!startInLens && !cloud.selectedId);
+  const [lensOpen, setLensOpen] = useState(startInLens);
+  useEffect(() => {
+    if (cloud.selectedId) setLensOpen(false);
+  }, [cloud.selectedId]);
   const [newConversation, setNewConversation] = useState<{ project?: string } | null>(null);
   const [settings, setSettings] = useState(false);
   const [query, setQuery] = useState("");
@@ -405,6 +412,11 @@ export function CloudScreen({
         setDrawer(false);
         return true;
       }
+      if (lensOpen) {
+        setLensOpen(false);
+        setDrawer(true);
+        return true;
+      }
       if (cloud.selectedId) {
         cloud.select(null);
         setDrawer(true);
@@ -413,7 +425,7 @@ export function CloudScreen({
       return false;
     });
     return () => subscription.remove();
-  }, [drawer, cloud.selectedId, cloud.select]);
+  }, [drawer, lensOpen, cloud.selectedId, cloud.select]);
   return (
     <SafeAreaView style={styles.screen} edges={["top", "bottom"]}>
       {/* Expo StatusBar uses a named appearance, not a React Native style object. */}
@@ -428,7 +440,16 @@ export function CloudScreen({
             Interface preview · sample conversations
           </Text>
         )}
-        {cloud.task ? (
+        {lensOpen ? (
+          <Lens
+            cloud={cloud}
+            onMenu={() => setDrawer(true)}
+            onOpen={(id) => {
+              cloud.select(id);
+              setLensOpen(false);
+            }}
+          />
+        ) : cloud.task ? (
           <Conversation
             key={cloud.task.id}
             cloud={cloud}
@@ -507,9 +528,21 @@ export function CloudScreen({
               onPress={() => {
                 setDrawer(false);
                 setNewConversation({});
+                setLensOpen(false);
               }}
             >
               ＋ New conversation
+            </Button>
+          </View>
+          <View style={{ paddingHorizontal: 15, paddingBottom: 6 }}>
+            <Button
+              onPress={() => {
+                cloud.select(null);
+                setLensOpen(true);
+                setDrawer(false);
+              }}
+            >
+              Lens
             </Button>
           </View>
           <ScrollView
@@ -570,6 +603,7 @@ export function CloudScreen({
                       key={task.id}
                       onPress={() => {
                         cloud.select(task.id);
+                        setLensOpen(false);
                         setDrawer(false);
                       }}
                       style={[
@@ -873,10 +907,17 @@ function SignedIn({
 }
 function Showcase() {
   const client = useMemo(makeShowcaseClient, []);
-  const cloud = useCloud("https://preview.invalid", "preview", async () => null, client);
+  const startInLens = process.env.EXPO_PUBLIC_SHOWCASE_LENS === "1";
+  const cloud = useCloud(
+    "https://preview.invalid",
+    startInLens ? "lens-preview" : "preview",
+    async () => null,
+    client,
+  );
   return (
     <CloudScreen
       preview
+      startInLens={startInLens}
       cloud={cloud}
       onSignOut={async () => {
         await cloud.storage.clear();

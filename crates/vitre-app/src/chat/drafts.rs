@@ -498,6 +498,7 @@ impl ChatApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.lens_open = false;
         if self.draft_creating {
             return;
         }

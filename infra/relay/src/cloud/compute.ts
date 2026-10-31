@@ -12,7 +12,7 @@ export interface WorkerBootstrap {
   controlUrl: string;
   attemptId: string;
   token: string;
-  mode?: "login" | "publication";
+  mode?: "login" | "publication" | "lens";
   deadlineAt: string;
 }
 export interface ComputeExecutor {
@@ -35,7 +35,7 @@ export interface MachineProvisioner {
   resize(machineId: string, size: string): Promise<void>;
   destroy(machineId: string): Promise<void>;
 }
-const attemptPattern = /^(?:[a-f0-9-]{36}-[1-9][0-9]*|(?:login|publish)-[a-f0-9-]{36})$/;
+const attemptPattern = /^(?:[a-f0-9-]{36}-[1-9][0-9]*|(?:login|publish|lens)-[a-f0-9-]{36})$/;
 const decodeWorker = Schema.decodeUnknownSync(
   Schema.Struct({ id: Schema.String, running: Schema.optionalKey(Schema.Boolean) }),
 );

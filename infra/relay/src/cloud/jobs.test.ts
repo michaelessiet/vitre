@@ -8,7 +8,7 @@ it("atomically reserves auxiliary capacity and excludes duplicate login leases",
   const job = reserveJob(state, "login-a", "login", now);
   expect(state.accounts.codex.leasedBy).toBe(job.id);
   expect(reserveJob(state, "login-a", "login", now)).toBe(job);
-  expect(() => reserveJob(state, "login-b", "login", now)).toThrow("Stop Codex");
+  expect(() => reserveJob(state, "login-b", "login", now)).toThrow("account is busy");
   reserveJob(state, "publish-a", "publication", now, "p");
   expect(() => reserveJob(state, "publish-b", "publication", now, "p2")).toThrow("Wait");
   expect(publicOverview(state, true, now).usage.reservedMicroDollars).toBeGreaterThan(0);

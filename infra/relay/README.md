@@ -208,3 +208,11 @@ See:
 - [Relay Observability](../../docs/operations/relay-observability.md) for deployment tracing and diagnostics.
 - [remote connection architecture overview](../../docs/cloud/t3-code-connect-auth-flow.html) for the full link,
   connect, endpoint, and notification flows.
+
+## Lens
+
+[Cloud Lens](src/cloud/lens.ts) exposes authenticated account-wide reviews, model
+and schedule settings, read markers, and permission-gated cleanup. Existing
+auxiliary-job maintenance runs scheduled sweeps. Deploy the matching machine agent
+and runtime image for the new `lens` job mode. See [Lens](../../docs/lens.md) for
+behavior, inventory limits, isolation, verification, and coordinated rollout.

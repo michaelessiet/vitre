@@ -29,7 +29,7 @@ export async function createLoginHome(base = "/home/vitre", uid = 10001, gid = 1
 export async function runAuxiliary() {
   if (process.getuid?.() !== 0) throw new Error("Auxiliary supervisor must run as root");
   const id = process.env.VITRE_CLOUD_TASK_ID;
-  if (!/^(login|publish)-[a-zA-Z0-9-]+$/.test(id ?? "")) throw new Error("Invalid job id");
+  if (!/^(login|publish|lens)-[a-zA-Z0-9-]+$/.test(id ?? "")) throw new Error("Invalid job id");
   const control = new WorkerControlClient(
     process.env.VITRE_CLOUD_CONTROL_URL,
     process.env.VITRE_CLOUD_WORKER_TOKEN,
@@ -88,6 +88,10 @@ export async function runAuxiliary() {
         clearTimeout(timer);
         child.kill("SIGKILL");
       }
+    } else if (bootstrap.kind === "lens") {
+      const { runLensModel } = await import("./lens.mjs");
+      const result = await runLensModel(bootstrap, timeout);
+      await callback({ phase: "completed", ...result });
     } else if (bootstrap.kind === "publication") {
       let commit = null;
       if (bootstrap.publication.kind === "pull_request") {

@@ -22,7 +22,12 @@
     "./cloud": {
       "types": "./src/cloud.ts",
       "import": "./src/cloud.ts"
-    }
+    },
+    "./lens": {
+      "types": "./src/lens.ts",
+      "import": "./src/lens.ts"
+    },
+    "./visual": "./src/visual.ts"
   },
   "scripts": {
     "typecheck": "tsgo --noEmit",
