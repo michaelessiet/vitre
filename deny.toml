@@ -37,6 +37,8 @@ name = "zlog"
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
+# GPUI's property-test dependency is pinned to this commit in its manifest and lockfile.
+allow-git = ["https://github.com/proptest-rs/proptest?rev=3dca198a8fef1b32e3a66f1e1897c955b4dc5b5b"]
 
 [sources.allow-org]
 github = ["zed-industries", "rust-lang"]
