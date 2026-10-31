@@ -650,7 +650,9 @@ when root discovery would include the old nested worktree.
 
 ### CI and release gates
 
-CI (`.github/workflows/vitre-ci.yml`) owns the broader checks:
+`Vitre CI` (`.github/workflows/ci.yml`) owns the aggregate `CI result` check,
+Linux package validation, and downstream development artifacts. Its reusable native
+workflow (`.github/workflows/vitre-ci.yml`) owns the broader native checks:
 
 - Workspace formatting, Clippy with warnings denied, and workspace tests
   (the excluded gpui-component workspace needs its own targeted coverage).
@@ -664,7 +666,12 @@ sources` (three checks, not just licenses).
   whenever contracts change (flow: `scripts/vitre/README.md`).
 - **Live-server spikes** against a real sidecar (`cargo run -p vitre-rpc
 --example spike_rpc|spike_typed`, `-p vitre-client --example spike_client`)
-  — these need `pnpm --filter t3 run build:bundle` first.
+  — these need `vp run --filter ./apps/server build:bundle` first.
+
+Relevant main changes and manual CI builds produce verified ad-hoc Apple Silicon
+DMGs, checksums, and build metadata. Public signing, notarization, and update feeds
+remain outstanding. Relay deployment is opt-in and consumes only validated main
+commits. See [CI and development builds](./operations/release.md).
 
 Fork-test caveats: one pre-existing, font-metric-dependent failure is known
 (`command::state::tests::first_enabled_selection_resets_scroll_to_its_late_row`);

@@ -27,10 +27,12 @@ body:
       label: Area
       description: Which part of the project would this change affect?
       options:
-        - crates/vitre-app
-        - apps/server
-        - apps/marketing
-        - packages/contracts or packages/shared
+        - Native Vitre (crates/vitre-app)
+        - Sidecar and providers (apps/server)
+        - Mobile companion (apps/mobile)
+        - Relay and cloud (infra/relay)
+        - Shared contracts and client runtime (packages)
+        - Website (apps/marketing)
         - Build, CI, or release tooling
         - Docs
         - Not sure
@@ -42,7 +44,7 @@ body:
     attributes:
       label: Problem or use case
       description: What are you trying to do? What is hard, slow, or impossible today?
-      placeholder: I want to reconnect to an existing provider session after a browser refresh without losing the current thread state.
+      placeholder: I want to reconnect to an existing provider session after reopening Vitre without losing the current thread state.
     validations:
       required: true
 

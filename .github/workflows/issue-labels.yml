@@ -1,75 +1,40 @@
-name: Issue Labels
+name: Vitre repository labels
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
     paths:
       - .github/ISSUE_TEMPLATE/**
+      - .github/labels.json
       - .github/workflows/issue-labels.yml
+      - scripts/ci/labels.ts
+      - scripts/ci/github.ts
+      - scripts/ci/changes.ts
   workflow_dispatch:
 
 permissions:
-  issues: write
+  contents: read
+
+concurrency:
+  group: vitre-label-definitions
+  cancel-in-progress: false
 
 jobs:
   sync:
-    name: Sync issue labels
+    name: Sync issue and size labels
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
     steps:
-      - name: Ensure managed issue labels exist
-        uses: actions/github-script@v7
+      - uses: actions/checkout@v6
         with:
-          script: |
-            const managedLabels = [
-              {
-                name: "bug",
-                color: "d73a4a",
-                description: "Something is broken or behaving incorrectly.",
-              },
-              {
-                name: "enhancement",
-                color: "a2eeef",
-                description: "Requested improvement or new capability.",
-              },
-              {
-                name: "needs-triage",
-                color: "fbca04",
-                description: "Issue needs maintainer review and initial categorization.",
-              },
-            ];
-
-            for (const label of managedLabels) {
-              try {
-                const { data: existing } = await github.rest.issues.getLabel({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  name: label.name,
-                });
-
-                if (
-                  existing.color !== label.color ||
-                  (existing.description ?? "") !== label.description
-                ) {
-                  await github.rest.issues.updateLabel({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    name: label.name,
-                    color: label.color,
-                    description: label.description,
-                  });
-                }
-              } catch (error) {
-                if (error.status !== 404) {
-                  throw error;
-                }
-
-                await github.rest.issues.createLabel({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  name: label.name,
-                  color: label.color,
-                  description: label.description,
-                });
-              }
-            }
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+      - run: node scripts/ci/labels.ts sync
+        env:
+          GH_TOKEN: ${{ github.token }}

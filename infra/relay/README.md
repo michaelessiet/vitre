@@ -1,22 +1,19 @@
-# T3 Connect Relay
+# Vitre Relay
 
-> [!WARNING]
-> T3 Connect is currently in private beta. Join the waitlist in the app under Settings > T3 Connect.
-
-The relay is the hosted control plane for T3 Connect. It helps clients discover and connect to
+The relay is the hosted control plane for Vitre remote environments and cloud conversations. It helps clients discover and connect to
 remote environments, manages the cloud-side records needed for those connections, and delivers
 optional mobile notifications and Live Activities.
 
-The relay is intentionally not in the hot path for normal T3 Code traffic. After a client connects,
+The relay is intentionally not in the hot path for normal local Vitre traffic. After a client connects,
 regular API and WebSocket traffic goes directly between that client and the selected environment.
-See the [T3 Connect architecture overview](../../docs/cloud/t3-code-connect-auth-flow.html) for the larger system
+See the [remote connection architecture overview](../../docs/cloud/t3-code-connect-auth-flow.html) for the larger system
 design.
 
 ## Responsibilities
 
 The relay currently owns:
 
-- Linking T3 Code environments to a cloud account.
+- Linking Vitre environments to a cloud account.
 - Provisioning and tracking managed environment endpoints.
 - Issuing short-lived credentials used to connect clients to linked environments.
 - Listing linked environments and registered mobile devices for an account.
@@ -64,12 +61,8 @@ To run a smaller test set while iterating:
 vp test run src/environments/EnvironmentLinker.test.ts
 ```
 
-Before considering a change complete, run the repository-wide checks from the root:
-
-```sh
-vp check
-vp run typecheck
-```
+Run targeted formatting, lint, and type checks for the affected scope. Full
+workspace checks run in GitHub Actions.
 
 Backend changes should include tests. Prefer testing the real business logic with external
 dependencies represented at their boundary rather than mocking internal behavior.
@@ -79,7 +72,7 @@ dependencies represented at their boundary rather than mocking internal behavior
 The relay deploys through Alchemy:
 
 ```sh
-vp run --filter t3code-relay deploy
+vp run --filter ./infra/relay deploy
 ```
 
 The stack provisions the Cloudflare Worker and queues, managed endpoint resources, database
@@ -127,8 +120,8 @@ Create a separate database for each stage and supply its URLs explicitly.
 Stages do not create databases automatically or require a prior `prod` deployment:
 
 ```sh
-vp run --filter t3code-relay deploy -- --stage prod
-vp run --filter t3code-relay deploy -- --env-file .env.local
+vp run --filter ./infra/relay deploy -- --stage prod
+vp run --filter ./infra/relay deploy -- --env-file .env.local
 ```
 
 Alchemy defaults personal deployments to the `dev_$USER` stage. Relay custom domains apply the same
@@ -146,57 +139,72 @@ the URL manually.
 
 ### Deployment CI
 
-The relay is versioned separately from client releases. `.github/workflows/deploy-relay.yml` deploys
-the shared Alchemy `prod` stage on every push to `main`. Stable and nightly release builds both
-resolve their static public config from the same
-`production` GitHub environment. Pull requests do not deploy relay stages. Developers can
-deploy personal non-production stages locally with any stage name other than `prod`.
+`.github/workflows/deploy-relay.yml` is reusable and runs only after successful
+main validation in `Vitre CI`. Deployment remains disabled until the repository
+variable `RELAY_DEPLOY_ENABLED` is explicitly `true`. Pull requests and manual CI
+builds never deploy. Development DMGs do not read deployment secrets or tracing
+credentials.
 
-The repository must define these Actions variables shared by relay deployments:
+Use the existing `production` GitHub environment. Configure its values to match
+the existing installation; do not rename the stack, switch the database, or
+replace encryption keys while enabling CI. The workflow requires an existing
+stack using `VITRE_CLOUD_REQUIRE_EXISTING_STACK=true`.
 
-- `CLOUDFLARE_ACCOUNT_ID`
-- `AXIOM_ORG_ID`
+Required variables:
 
-The repository must define these Actions secrets shared by relay deployments:
+- `RELAY_STACK_NAME` and `RELAY_STAGE`: the exact existing Alchemy installation
+  and stage; neither defaults to an inherited upstream name.
+- `RELAY_PERSONAL_DEPLOYMENT`, `RELAY_MOBILE_ENABLED`, and `VITRE_CLOUD_ENABLED`:
+  explicit `true` or `false`, matching the deployed configuration.
+- `CLOUDFLARE_ACCOUNT_ID`, `AXIOM_ORG_ID`.
+- `RELAY_API_ZONE_NAME`, `RELAY_TUNNEL_ZONE_NAME`.
+- `CLERK_PUBLISHABLE_KEY`, `CLERK_JWT_AUDIENCE`.
 
-- `CLOUDFLARE_API_TOKEN`
-- `AXIOM_TOKEN`
+Required secrets:
 
-The `production` GitHub environment must define these Actions variables:
+- `CLOUDFLARE_API_TOKEN`, `AXIOM_TOKEN`.
+- `RELAY_DATABASE_ADMIN_URL`, `RELAY_DATABASE_URL`.
+- `CLERK_SECRET_KEY`.
 
-- `RELAY_API_ZONE_NAME`
-- `RELAY_TUNNEL_ZONE_NAME`
-- `RELAY_DOMAIN` if overriding the derived production relay domain
-- `CLERK_PUBLISHABLE_KEY`
-- `CLERK_JWT_AUDIENCE`
-- `CLERK_JWT_TEMPLATE`
-- `APNS_ENVIRONMENT`
-- `APNS_TEAM_ID`
-- `APNS_KEY_ID`
-- `APNS_BUNDLE_ID`
+Optional configuration and feature-dependent requirements:
 
-The `production` GitHub environment must define these Actions secrets:
+- `RELAY_DOMAIN` overrides the derived domain. `RELAY_HTTP_TRACING_ENABLED`
+  overrides the deployment's tracing default when set to `true` or `false`.
+- Private database CAs require both secrets `RELAY_DATABASE_CA_CERT` and
+  `RELAY_DATABASE_CA_CERTIFICATE_ID`. Omit both when using system trust.
+- Mobile-enabled deployments require variables `APNS_ENVIRONMENT`, `APNS_TEAM_ID`,
+  `APNS_KEY_ID`, `APNS_BUNDLE_ID`, and secret `APNS_PRIVATE_KEY`.
+- Cloud-enabled deployments require variables `VITRE_CLOUD_ALLOWED_USER_ID`,
+  `VITRE_CLOUD_MACHINE_URL`, and secrets `VITRE_CLOUD_MACHINE_TOKEN` and
+  `VITRE_CLOUD_ENCRYPTION_KEY`. Preserve these settings when disabling new cloud
+  starts so existing accounts, workers, and cleanup continue to function.
+- An existing GitHub App integration requires variables `VITRE_GITHUB_APP_ID`,
+  `VITRE_GITHUB_INSTALLATION_IDS`, and secret `VITRE_GITHUB_PRIVATE_KEY` together.
 
-- `RELAY_DATABASE_ADMIN_URL`
-- `RELAY_DATABASE_URL`
-- `CLERK_SECRET_KEY`
-- `APNS_PRIVATE_KEY`
+Account-wide credentials can be repository secrets; installation-specific values
+belong in `production`. No secrets are copied automatically. Secrets are exposed
+only to the configuration/deployment step. Preflight errors name missing fields
+without printing their values, before migrations or infrastructure are applied.
 
-For a database using a private CA, also define the paired `RELAY_DATABASE_CA_CERT` and
-`RELAY_DATABASE_CA_CERTIFICATE_ID` Actions secrets in `production`. Omit both for system trust;
-providing only one fails configuration validation. The workflow passes these database secrets
-only to the deployment step, which runs migrations before applying the infrastructure plan.
+The workflow serializes baseline selection and deployment. It compares the exact
+validated commit with the last successful production deployment, including all
+intervening changes. Unchanged and superseded commits are skipped; divergent or
+unreadable history fails closed. With no recorded success, the configured existing
+stack is deployed. GitHub records success only after deployment completes, with
+applied/no-op results in the run summary.
 
-The account-scoped repository credentials are consumed by Alchemy while provisioning relay stages; they
-are not bound into the relay Worker. The production deployment uses an Axiom personal access token,
-so `AXIOM_ORG_ID` must accompany `AXIOM_TOKEN`. The release workflow reads the production relay's
-derived public URL and Clerk publishable key from the same environment for downstream desktop, CLI,
-and hosted web builds.
+Enable the repository flag only after configuration is complete. The next
+successful main push evaluates cumulative relay changes. Unset the flag to stop
+future automatic deployment. This pipeline does not publish or install AWS machine
+runtime images; coordinate those separately when upgrading the cloud protocol.
+
+See [Vitre CI and development builds](../../docs/operations/release.md) for artifact
+triggers, metadata, and local verification.
 
 See:
 
-- [T3 Connect Clerk Setup](../../docs/cloud/t3-connect-clerk.md) for Clerk keys, JWT templates, and waitlist
+- [Clerk setup](../../docs/cloud/t3-connect-clerk.md) for Clerk keys, JWT templates, and waitlist
   setup.
-- [Relay Observability](../../docs/relay-observability.md) for deployment tracing and diagnostics.
-- [T3 Connect Architecture Overview](../../docs/cloud/t3-code-connect-auth-flow.html) for the full link,
+- [Relay Observability](../../docs/operations/relay-observability.md) for deployment tracing and diagnostics.
+- [remote connection architecture overview](../../docs/cloud/t3-code-connect-auth-flow.html) for the full link,
   connect, endpoint, and notification flows.

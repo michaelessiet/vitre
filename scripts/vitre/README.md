@@ -9,14 +9,31 @@
 - `lib.ts` — shared annotate pass naming `$defs` after contract export names.
 
 Regeneration flow (what CI's drift gate must mirror): run both scripts, then
-`pnpm exec vp fmt crates/vitre-contracts` — the committed canonical form is the
+`vp fmt crates/vitre-contracts` — the committed canonical form is the
 formatted one. Regenerate + fmt is byte-stable.
 
 Consumer: Stage B Rust emitter (`vitre-contracts-gen`) in `crates/vitre-contracts`.
 
 ## Native macOS package
 
-- `scripts/vitre/build-dmg.sh` builds the current server bundle and release
+From the repository root, build the desktop app and DMG with:
+
+```sh
+VITRE_SIGNING_IDENTITY="Apple Development: …" vp run build:vitre:dmg
+```
+
+The output is `release/Vitre-<version>-arm64.dmg`, accompanied by a `.sha256`
+checksum and `.metadata.json` with version, commit, architecture, signing mode,
+checkout state, and workflow provenance. Set `VITRE_RELEASE_DIR` to choose another
+output directory. The actual Node executable is resolved through `process.execPath`;
+`VITRE_NODE` can override it with another Apple Silicon Node executable.
+
+GitHub Actions produces ad-hoc development builds after relevant main changes pass
+CI, or through a manual **Vitre CI** run. Artifacts expire after 14 days. See
+[CI and development builds](../../docs/operations/release.md) for download and
+verification instructions.
+
+- `vp run build:vitre:dmg` runs `scripts/vitre/build-dmg.sh` to build the current server bundle and release
   binary, deploys production Node dependencies, embeds the active Apple Silicon
   Node runtime, signs `Vitre.app`, and creates a compressed DMG under `release/`.
   Set `VITRE_SIGNING_IDENTITY` to an Apple Development or Developer ID certificate

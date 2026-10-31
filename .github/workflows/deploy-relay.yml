@@ -1,27 +1,65 @@
-name: Deploy T3 Connect relay
+name: Deploy Vitre relay
 
 on:
-  push:
-    branches:
-      - main
+  workflow_call:
+    inputs:
+      ref:
+        description: Exact validated main commit
+        type: string
+        required: true
+      ci_result:
+        description: Aggregate validation result
+        type: string
+        required: true
 
 permissions:
   contents: read
-  id-token: none
-  statuses: write
+  deployments: read
 
+# Serialize both baseline selection and deployment. Retain queued main commits.
 concurrency:
-  group: relay-production
+  group: vitre-relay-production
   cancel-in-progress: false
+  queue: max
 
 jobs:
-  deploy_relay:
-    name: Deploy production relay
+  eligibility:
+    name: Check production deployment baseline
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 10
+    outputs:
+      deploy: ${{ steps.eligibility.outputs.deploy }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+      - id: eligibility
+        run: node scripts/ci/relay.ts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELAY_DEPLOY_ENABLED: ${{ vars.RELAY_DEPLOY_ENABLED }}
+          CI_RESULT: ${{ inputs.ci_result }}
+          CANDIDATE_SHA: ${{ inputs.ref }}
+
+  deploy:
+    name: Deploy validated relay
+    needs: eligibility
+    if: needs.eligibility.outputs.deploy == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     environment:
       name: production
     env:
+      RELAY_STACK_NAME: ${{ vars.RELAY_STACK_NAME }}
+      RELAY_STAGE: ${{ vars.RELAY_STAGE }}
+      RELAY_PERSONAL_DEPLOYMENT: ${{ vars.RELAY_PERSONAL_DEPLOYMENT }}
+      RELAY_MOBILE_ENABLED: ${{ vars.RELAY_MOBILE_ENABLED }}
+      RELAY_HTTP_TRACING_ENABLED: ${{ vars.RELAY_HTTP_TRACING_ENABLED }}
       CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
       AXIOM_ORG_ID: ${{ vars.AXIOM_ORG_ID }}
       RELAY_DOMAIN: ${{ vars.RELAY_DOMAIN }}
@@ -33,21 +71,27 @@ jobs:
       APNS_TEAM_ID: ${{ vars.APNS_TEAM_ID }}
       APNS_KEY_ID: ${{ vars.APNS_KEY_ID }}
       APNS_BUNDLE_ID: ${{ vars.APNS_BUNDLE_ID }}
+      VITRE_CLOUD_ENABLED: ${{ vars.VITRE_CLOUD_ENABLED }}
+      VITRE_CLOUD_ALLOWED_USER_ID: ${{ vars.VITRE_CLOUD_ALLOWED_USER_ID }}
+      VITRE_CLOUD_MACHINE_URL: ${{ vars.VITRE_CLOUD_MACHINE_URL }}
+      VITRE_GITHUB_APP_ID: ${{ vars.VITRE_GITHUB_APP_ID }}
+      VITRE_GITHUB_INSTALLATION_IDS: ${{ vars.VITRE_GITHUB_INSTALLATION_IDS }}
+      VITRE_CLOUD_REQUIRE_EXISTING_STACK: "true"
       ALCHEMY_TELEMETRY_DISABLED: "1"
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@v1
+      - uses: actions/checkout@v6
         with:
-          node-version-file: package.json
-          cache: true
-          run-install: true
-
-      - name: Deploy production relay stage
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-tools
+      - name: Validate configuration and deploy existing stack
         id: deploy
-        run: vp run --filter t3code-relay deploy --stage prod --yes --github-output
+        shell: bash
+        run: |
+          # Empty optional settings must be absent so deployment defaults apply.
+          if [[ -z "$RELAY_HTTP_TRACING_ENABLED" ]]; then unset RELAY_HTTP_TRACING_ENABLED; fi
+          node scripts/ci/relay.ts configuration
+          vp run --filter ./infra/relay deploy --stage "$RELAY_STAGE" --yes --github-output
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           RELAY_DATABASE_ADMIN_URL: ${{ secrets.RELAY_DATABASE_ADMIN_URL }}
@@ -57,25 +101,12 @@ jobs:
           AXIOM_TOKEN: ${{ secrets.AXIOM_TOKEN }}
           CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
           APNS_PRIVATE_KEY: ${{ secrets.APNS_PRIVATE_KEY }}
-
-      - name: Publish relay deploy commit status
-        uses: actions/github-script@v8
-        with:
-          script: |
-            const result = "${{ steps.deploy.outputs.result }}";
-            const changed = "${{ steps.deploy.outputs.changed }}" === "true";
-            const description = changed
-              ? "Relay production deploy applied infrastructure changes."
-              : result === "noop"
-                ? "Relay production deploy was a no-op."
-                : `Relay production deploy completed with result: ${result}.`;
-
-            await github.rest.repos.createCommitStatus({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              sha: context.sha,
-              state: "success",
-              context: "Relay deploy / production",
-              description,
-              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
-            });
+          VITRE_CLOUD_MACHINE_TOKEN: ${{ secrets.VITRE_CLOUD_MACHINE_TOKEN }}
+          VITRE_CLOUD_ENCRYPTION_KEY: ${{ secrets.VITRE_CLOUD_ENCRYPTION_KEY }}
+          VITRE_GITHUB_PRIVATE_KEY: ${{ secrets.VITRE_GITHUB_PRIVATE_KEY }}
+      - name: Deployment summary
+        env:
+          DEPLOY_RESULT: ${{ steps.deploy.outputs.result }}
+          DEPLOY_CHANGED: ${{ steps.deploy.outputs.changed }}
+        run: |
+          printf 'Relay deployment: %s (infrastructure changed: %s).\n' "$DEPLOY_RESULT" "$DEPLOY_CHANGED" >> "$GITHUB_STEP_SUMMARY"
