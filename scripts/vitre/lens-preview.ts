@@ -1,6 +1,7 @@
+// @effect-diagnostics nodeBuiltinImport:off globalConsole:off - Standalone local QA transport, runs via plain `node` outside the Effect runtime.
 /** Local QA transport; run explicitly. Never forwards requests or credentials. */
 import * as NodeHttp from "node:http";
-import { makeLensPreview } from "../../packages/shared/src/lensPreview.ts";
+import { makeLensPreview } from "@t3tools/shared/lensPreview";
 import { LensCommand } from "@t3tools/contracts/lens";
 import * as Schema from "effect/Schema";
 const preview = makeLensPreview();

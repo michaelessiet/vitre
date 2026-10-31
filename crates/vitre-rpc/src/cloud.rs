@@ -303,6 +303,33 @@ impl CloudHttp {
     }
 }
 
+/// Explicit debug-only fixture. The fixed loopback endpoint receives no account credentials.
+#[cfg(debug_assertions)]
+pub async fn lens_preview(
+    command: Option<&vitre_contracts::LensCommand>,
+) -> Result<vitre_contracts::LensOverview, RpcError> {
+    let client = reqwest::Client::new();
+    let request = if let Some(command) = command {
+        client.post("http://127.0.0.1:4897/lens").json(command)
+    } else {
+        client.get("http://127.0.0.1:4897/lens")
+    };
+    request
+        .timeout(std::time::Duration::from_secs(5))
+        .send()
+        .await
+        .map_err(|_| {
+            RpcError::Transport(
+                "Start scripts/vitre/lens-preview.ts for the Lens development preview.".into(),
+            )
+        })?
+        .error_for_status()
+        .map_err(|_| RpcError::Transport("The Lens preview rejected this request.".into()))?
+        .json()
+        .await
+        .map_err(|_| RpcError::Transport("Invalid Lens preview response.".into()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -344,31 +371,4 @@ mod tests {
             .contains("Cloudflare Worker resource limit")
         );
     }
-}
-
-/// Explicit debug-only fixture. The fixed loopback endpoint receives no account credentials.
-#[cfg(debug_assertions)]
-pub async fn lens_preview(
-    command: Option<&vitre_contracts::LensCommand>,
-) -> Result<vitre_contracts::LensOverview, RpcError> {
-    let client = reqwest::Client::new();
-    let request = if let Some(command) = command {
-        client.post("http://127.0.0.1:4897/lens").json(command)
-    } else {
-        client.get("http://127.0.0.1:4897/lens")
-    };
-    request
-        .timeout(std::time::Duration::from_secs(5))
-        .send()
-        .await
-        .map_err(|_| {
-            RpcError::Transport(
-                "Start scripts/vitre/lens-preview.ts for the Lens development preview.".into(),
-            )
-        })?
-        .error_for_status()
-        .map_err(|_| RpcError::Transport("The Lens preview rejected this request.".into()))?
-        .json()
-        .await
-        .map_err(|_| RpcError::Transport("Invalid Lens preview response.".into()))
 }
