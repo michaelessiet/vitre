@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppState } from "react-native";
+import * as Crypto from "expo-crypto";
 import * as Network from "expo-network";
 import * as Schema from "effect/Schema";
 import { OrchestrationThread, ServerConfig } from "@t3tools/contracts";
@@ -65,9 +66,21 @@ export function useCloud(
     },
     [storage],
   );
+  const githubRefreshed = useRef(false);
+  useEffect(() => {
+    githubRefreshed.current = false;
+  }, [client]);
   const refresh = useCallback(async () => {
     const next = await client.overview();
     accept(next);
+    if (next.githubManageUrl && !githubRefreshed.current) {
+      const result = await client.command({
+        type: "github.refresh",
+        idempotencyKey: Crypto.randomUUID(),
+      });
+      githubRefreshed.current = true;
+      accept(result.overview);
+    }
   }, [client, accept]);
   useEffect(() => {
     alive.current = true;

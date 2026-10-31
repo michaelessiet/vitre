@@ -10,6 +10,7 @@ import type {
   CloudWorkerCallback,
   CloudProject,
   CloudProjectSnapshot,
+  CloudGitHubAccount,
 } from "@t3tools/contracts/cloud";
 import { backfillProjects, projectSnapshot, projectIdentity } from "./projects.ts";
 import { requestHandoff, advanceHandoff, stopHandoff, type HandoffState } from "./handoff.ts";
@@ -33,6 +34,7 @@ type Mutable<T> = T extends object ? { -readonly [K in keyof T]: Mutable<T[K]> }
 export type MutableCloudTask = Mutable<CloudTask>;
 
 export interface CloudState {
+  githubAccounts?: Record<string, CloudGitHubAccount>;
   projects?: Record<string, CloudProject>;
   deletedProjects?: string[];
   projectSnapshots?: Record<string, Record<string, CloudProjectSnapshot>>;
@@ -212,6 +214,7 @@ export function publicOverview(state: CloudState, enabled: boolean, now: number)
   const spent = state.usage[month(now)] ?? 0;
   return {
     projects: Object.values(state.projects ?? {}),
+    githubAccounts: Object.values(state.githubAccounts ?? {}),
     capabilities: {
       projectDeletion: true,
       projectCreation: true,
@@ -257,13 +260,21 @@ export function applyCommand(
   }
   if (
     !enabled &&
-    !["task.cancel", "task.delete", "project.delete", "provider.disconnect"].includes(command.type)
+    ![
+      "github.refresh",
+      "task.cancel",
+      "task.delete",
+      "project.delete",
+      "provider.disconnect",
+    ].includes(command.type)
   ) {
     throw new CloudError("disabled", "Cloud execution is disabled", 503);
   }
   let entityId = id;
   backfillProjects(state);
   switch (command.type) {
+    case "github.refresh":
+      break;
     case "project.delete": {
       const project = state.projects?.[command.projectId];
       if (!project) throw new CloudError("not_found", "Cloud project not found", 404);

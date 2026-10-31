@@ -247,6 +247,7 @@ export type CloudWorkerState = typeof CloudWorkerState.Type;
 export const CloudRepository = Schema.Struct({
   id: Id,
   installationId: Id,
+  githubAccountId: Schema.optionalKey(Id),
   owner: Id,
   name: Schema.String.check(Schema.isPattern(/^[a-zA-Z0-9_.-]{1,100}$/)),
   defaultBranch: Text,
@@ -255,6 +256,12 @@ export const CloudRepository = Schema.Struct({
   revision: Revision,
 });
 export type CloudRepository = typeof CloudRepository.Type;
+export const CloudGitHubAccount = Schema.Struct({
+  id: Id,
+  login: Text,
+  state: Schema.Literals(["connected", "needs_auth"]),
+});
+export type CloudGitHubAccount = typeof CloudGitHubAccount.Type;
 export const CloudTaskAttempt = Schema.Struct({
   id: Id,
   generation: Revision,
@@ -440,6 +447,8 @@ export const CloudUsageSummary = Schema.Struct({
 });
 export type CloudUsageSummary = typeof CloudUsageSummary.Type;
 export const CloudOverview = Schema.Struct({
+  githubAccounts: Schema.optionalKey(Schema.Array(CloudGitHubAccount)),
+  githubManageUrl: Schema.optionalKey(Text),
   projects: Schema.optionalKey(Schema.Array(CloudProject)),
   capabilities: Schema.optionalKey(
     Schema.Struct({
@@ -526,6 +535,7 @@ export const CloudTaskFeed = Schema.Struct({
   conversation: Schema.Unknown,
 });
 export const CloudCommand = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("github.refresh"), idempotencyKey: Id }),
   Schema.Struct({
     type: Schema.Literal("project.delete"),
     idempotencyKey: Id,

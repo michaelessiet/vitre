@@ -35,6 +35,10 @@ RUN useradd --uid 10001 --create-home --shell /bin/bash vitre \
     && mkdir -p /workspace /var/lib/vitre-worker /opt/vitre/cloud \
     && chmod 700 /var/lib/vitre-worker
 COPY --from=build /opt/vitre/server /opt/vitre/server
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/vitre/browsers
+RUN node /opt/vitre/server/node_modules/playwright-core/cli.js install --with-deps chromium \
+    && chmod -R a+rX /opt/vitre/browsers \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=build /opt/vitre/models.json /opt/vitre/cloud/models.json
 COPY scripts/vitre/cloud/*.mjs /opt/vitre/cloud/
 WORKDIR /workspace

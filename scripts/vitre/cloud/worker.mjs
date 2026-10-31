@@ -272,7 +272,7 @@ export async function settleResidentTurn({
 }
 
 export function cloudTurnContext(kind) {
-  return `This is a cloud ${kind} task. Pull requests are supported through Vitre's Create PR action, which saves the workspace for review and publishes a draft PR with the connected GitHub account. When asked to open a PR, finish the changes and validation, suggest a title and description, and direct the user to Create PR. Do not push branches or publish PRs/comments from shell tools; execution credentials are read-only. Report changes and validation accurately.`;
+  return `This is a cloud ${kind} task. Pull requests are supported through Vitre's Create PR action, which saves the workspace for review and publishes a draft PR with the connected GitHub account. When asked to open a PR, finish the changes and validation, suggest a title and description, and direct the user to Create PR. Do not push branches or publish PRs/comments from shell tools; execution credentials are read-only. When the user requests screenshots or visual verification of frontend UI, start the app locally and use cloud_screenshot with its port and path. Inspect and return the captured image; report failures honestly. Report changes and validation accurately.`;
 }
 
 /** Claim the reviewed turn before stopping any process or reading its files. */
@@ -1407,6 +1407,8 @@ export async function runWorker() {
     rememberCredential(auth.credential);
     const env = {
       ...providerEnvironment(task.provider, auth.credential),
+      VITRE_CLOUD_SCREENSHOTS: "true",
+      PLAYWRIGHT_BROWSERS_PATH: "/opt/vitre/browsers",
       ...(resident ? { VITRE_CLOUD_RESIDENT_PROVIDER: task.provider } : {}),
     };
     if (task.provider === "codex") {

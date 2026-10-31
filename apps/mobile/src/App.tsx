@@ -729,8 +729,61 @@ export function CloudScreen({
               </Text>
             ))}
             <Text style={styles.muted}>
-              Manage provider and GitHub connections in Vitre on your computer.
+              Manage provider subscriptions in Vitre on your computer.
             </Text>
+            <Text style={styles.label}>GitHub accounts</Text>
+            <Text style={styles.muted}>
+              Sign in with either linked GitHub account, or another login method on your Vitre
+              account, to access all your repositories.
+            </Text>
+            {cloud.overview?.githubAccounts?.map((account) => (
+              <Text key={account.id} style={styles.text}>
+                @{account.login} · {account.state === "connected" ? "Connected" : "Needs sign-in"}
+              </Text>
+            ))}
+            {cloud.overview?.githubManageUrl && (
+              <Button
+                onPress={async () => {
+                  try {
+                    await WebBrowser.openBrowserAsync(cloud.overview!.githubManageUrl!);
+                    await cloud.command({
+                      type: "github.refresh",
+                      idempotencyKey: Crypto.randomUUID(),
+                    });
+                  } catch (error) {
+                    Alert.alert(
+                      "GitHub accounts",
+                      error instanceof Error
+                        ? error.message
+                        : "Could not refresh accounts. Try again.",
+                    );
+                  }
+                }}
+              >
+                Manage GitHub accounts
+              </Button>
+            )}
+            {cloud.overview?.githubManageUrl && (
+              <Button
+                onPress={async () => {
+                  try {
+                    await cloud.command({
+                      type: "github.refresh",
+                      idempotencyKey: Crypto.randomUUID(),
+                    });
+                  } catch (error) {
+                    Alert.alert(
+                      "GitHub accounts",
+                      error instanceof Error
+                        ? error.message
+                        : "Could not refresh accounts. Try again.",
+                    );
+                  }
+                }}
+              >
+                Refresh GitHub accounts
+              </Button>
+            )}
             <Text style={styles.label}>Notifications</Text>
             <Text style={styles.muted}>Get notified when work finishes or needs your input.</Text>
             {notifications && (

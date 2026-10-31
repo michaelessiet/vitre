@@ -44,6 +44,26 @@ describe("mobile cloud creation", () => {
     } as unknown as CloudClient;
     expect(await resolveRepository(client, "owner/repo", [])).toEqual(repository);
   });
+  it("keeps a saved account, allows explicit selection, and never silently switches identities", async () => {
+    const personal = { ...repository, installationId: "installation", githubAccountId: "personal" };
+    const work = { ...personal, githubAccountId: "work" };
+    const client = {
+      repositories: async () => [work, personal],
+      publicRepository: async () => repository,
+    } as unknown as CloudClient;
+    await expect(resolveRepository(client, "owner/repo", [])).rejects.toThrow(
+      "Choose which GitHub account",
+    );
+    expect((await resolveRepository(client, "owner/repo", [personal])).githubAccountId).toBe(
+      "personal",
+    );
+    expect(
+      (await resolveRepository(client, "owner/repo", [personal], "work")).githubAccountId,
+    ).toBe("work");
+    await expect(resolveRepository(client, "owner/repo", [], "unlinked")).rejects.toThrow(
+      "selected GitHub account",
+    );
+  });
   it("replays distinct stable keys when registration succeeded and the task response was lost", async () => {
     const persisted = new Map<string, unknown>();
     const storage = {

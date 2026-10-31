@@ -58,13 +58,19 @@ Build from the repository root with explicitly pinned provider versions:
 
 ```sh
 node scripts/vitre/cloud/build-image.mjs vitre-cloud:dev-20261015 0.156.1 2.1.236
-node scripts/vitre/cloud/smoke-image.mjs vitre-cloud:dev-20261015
+curl -fsSL https://raw.githubusercontent.com/microsoft/playwright/v1.60.0/utils/docker/seccomp_profile.json -o /tmp/vitre-playwright-seccomp.json
+VITRE_SMOKE_SECCOMP_PROFILE=/tmp/vitre-playwright-seccomp.json node scripts/vitre/cloud/smoke-image.mjs vitre-cloud:dev-20261015
 ```
 
 The smoke test runs the packaged Linux backend in a disposable local container,
 performs the bootstrap token exchange, reads an authenticated orchestration
-snapshot, requests a WebSocket ticket, and removes the container. It does not
+snapshot, requests a WebSocket ticket, captures a PNG with sandboxed Chromium,
+and removes the container. The Docker seccomp profile permits Chromium's user
+namespaces; production workers use the machine's bubblewrap isolation. It does not
 authenticate subscriptions or prove the deployed machine's lifecycle behavior.
+
+See [linked accounts and screenshots](../../../docs/architecture/vitre-cloud-accounts-and-screenshots.md)
+for user flows, access rules, and deployment acceptance checks.
 
 Export the tested image into a complete machine runtime filesystem:
 

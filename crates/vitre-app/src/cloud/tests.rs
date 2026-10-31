@@ -14,6 +14,7 @@ pub(crate) mod fixtures {
 
     pub(crate) fn repository() -> CloudRepository {
         CloudRepository {
+            github_account_id: None,
             default_branch: "main".into(),
             id: "repo-1".into(),
             installation_id: "42".into(),
@@ -78,6 +79,8 @@ pub(crate) mod fixtures {
         tasks: Vec<CloudTask>,
     ) -> CloudOverview {
         CloudOverview {
+            github_accounts: None,
+            github_manage_url: None,
             capabilities: None,
             projects: None,
             revision: None,
