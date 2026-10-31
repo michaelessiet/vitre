@@ -22,6 +22,7 @@ export default defineConfig({
     ignorePatterns: [
       ".reference",
       ".repos/**",
+      "third_party/gpui-component/**",
       "third_party/gpui-frost/gpui/**",
       "third_party/gpui-frost/gpui_apple/**",
       "third_party/gpui-frost/gpui_macos/**",
@@ -50,6 +51,7 @@ export default defineConfig({
     ignorePatterns: [
       ".repos",
       ".repos/**",
+      "third_party/gpui-component/**",
       "dist",
       "dist-electron",
       "node_modules",
