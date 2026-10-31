@@ -1,10 +1,10 @@
 //! Android EmulatorController gRPC. Raw RGBA frames go straight to Metal.
 //! No screenshot polling, PNG/base64 video, browser, or device-side helper.
 //! MMAP is deliberately avoided: Emulator 36.5.11 on macOS crashes in that path.
-use super::{Device, Input, native::NativeView};
+use super::{Input, android_devices, native::NativeView};
 use anyhow::{Context as _, Result};
 use prost::Message;
-use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 use tokio::sync::mpsc;
 use tonic::{Request, client::Grpc, codec::ProstCodec, transport::Channel};
 
@@ -87,66 +87,72 @@ struct KeyEvent {
     text: String,
 }
 
-fn ini(text: &str) -> HashMap<String, String> {
-    text.lines()
-        .filter_map(|s| s.split_once('='))
-        .map(|(k, v)| (k.trim().to_owned(), v.trim().to_owned()))
-        .collect()
+async fn endpoint(id: &str) -> Result<Endpoint> {
+    android_devices::running()
+        .await?
+        .into_iter()
+        .find(|r| r.device.id == id)
+        .map(|r| r.endpoint)
+        .context("The emulator stopped. Reopen Devices to start it again.")
 }
-fn registry() -> PathBuf {
-    PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
-        .join("Library/Caches/TemporaryItems/avd/running")
+
+#[derive(Clone, PartialEq, Message)]
+struct EmulatorStatus {
+    #[prost(bool, tag = "3")]
+    booted: bool,
 }
-pub fn devices() -> Vec<Device> {
-    let Ok(entries) = std::fs::read_dir(registry()) else {
-        return vec![];
-    };
-    entries
-        .flatten()
-        .filter_map(|entry| {
-            let path = entry.path();
-            if path.extension()?.to_str()? != "ini" {
-                return None;
-            }
-            let properties = ini(&std::fs::read_to_string(path).ok()?);
-            let serial = properties.get("port.serial")?.parse::<u16>().ok()?;
-            properties.get("grpc.port")?.parse::<u16>().ok()?;
-            Some(Device {
-                id: format!("emulator-{serial}"),
-                name: properties
-                    .get("avd.name")
-                    .or(properties.get("avd.id"))?
-                    .clone(),
-                platform: "android".into(),
-            })
-        })
-        .collect()
+
+#[derive(Clone, PartialEq, Message)]
+struct VmRunState {
+    #[prost(int32, tag = "1")]
+    state: i32,
 }
-fn endpoint(id: &str) -> Result<Endpoint> {
-    for entry in std::fs::read_dir(registry())
-        .context("No Android emulator is running")?
-        .flatten()
-    {
-        if entry.path().extension().and_then(|s| s.to_str()) != Some("ini") {
-            continue;
-        }
-        let p = ini(&std::fs::read_to_string(entry.path())?);
-        if p.get("port.serial")
-            .is_some_and(|s| id == format!("emulator-{s}"))
-        {
-            return Ok(Endpoint {
-                port: p
-                    .get("grpc.port")
-                    .context("Emulator has no gRPC endpoint")?
-                    .parse()?,
-                token: p
-                    .get("grpc.token")
-                    .context("Emulator has no local authentication token")?
-                    .clone(),
-            });
-        }
-    }
-    anyhow::bail!("The emulator is no longer running. Refresh Devices.")
+
+pub(super) async fn shutdown(endpoint: &Endpoint) -> Result<()> {
+    anyhow::ensure!(
+        !endpoint.token.is_empty(),
+        "Emulator authentication token is missing"
+    );
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let channel = Channel::from_shared(format!("http://127.0.0.1:{}", endpoint.port))?
+            .connect_timeout(Duration::from_secs(2))
+            .connect()
+            .await?;
+        // SHUTDOWN saves the emulator state and exits gracefully. STOP merely
+        // pauses the VM; TERMINATE can corrupt its disk and must not be used.
+        unary(
+            &mut Grpc::new(channel),
+            endpoint,
+            "/android.emulation.control.EmulatorController/setVmState",
+            VmRunState { state: 5 },
+        )
+        .await
+    })
+    .await
+    .context("Emulator did not answer the shutdown request")?
+}
+
+pub(super) async fn booted(endpoint: &Endpoint) -> Result<bool> {
+    tokio::time::timeout(Duration::from_secs(2), async {
+        let channel = Channel::from_shared(format!("http://127.0.0.1:{}", endpoint.port))?
+            .connect_timeout(Duration::from_secs(1))
+            .connect()
+            .await?;
+        let mut client = Grpc::new(channel);
+        client.ready().await?;
+        let reply: tonic::Response<EmulatorStatus> = client
+            .unary(
+                request(endpoint, Empty {})?,
+                tonic::codegen::http::uri::PathAndQuery::from_static(
+                    "/android.emulation.control.EmulatorController/getStatus",
+                ),
+                ProstCodec::default(),
+            )
+            .await?;
+        Ok(reply.into_inner().booted)
+    })
+    .await
+    .context("Emulator did not answer its readiness check")?
 }
 fn request<T>(endpoint: &Endpoint, input: T) -> Result<Request<T>> {
     let mut req = Request::new(input);
@@ -218,7 +224,7 @@ pub async fn run(
     view: Arc<NativeView>,
     mut inputs: mpsc::UnboundedReceiver<Input>,
 ) -> Result<()> {
-    let endpoint = endpoint(&id)?;
+    let endpoint = endpoint(&id).await?;
     let channel = Channel::from_shared(format!("http://127.0.0.1:{}", endpoint.port))?
         .connect_timeout(Duration::from_secs(5))
         .http2_adaptive_window(true)
@@ -392,6 +398,163 @@ fn pixel_point(x: f64, y: f64, w: u32, h: u32) -> (i32, i32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tonic::codegen::{Body, BoxFuture, Service, StdError, http};
+
+    #[derive(Clone)]
+    struct StatusService(Arc<AtomicBool>, Arc<AtomicBool>);
+    #[derive(Clone)]
+    struct ShutdownService(Arc<AtomicBool>);
+    impl tonic::server::UnaryService<VmRunState> for ShutdownService {
+        type Response = Empty;
+        type Future = BoxFuture<tonic::Response<Empty>, tonic::Status>;
+        fn call(&mut self, request: Request<VmRunState>) -> Self::Future {
+            let shutdown = self.0.clone();
+            Box::pin(async move {
+                if request
+                    .metadata()
+                    .get("authorization")
+                    .and_then(|v| v.to_str().ok())
+                    != Some("Bearer test-token")
+                {
+                    return Err(tonic::Status::unauthenticated("Invalid token"));
+                }
+                assert_eq!(
+                    request.into_inner().state,
+                    5,
+                    "Must request graceful shutdown"
+                );
+                shutdown.store(true, Ordering::SeqCst);
+                Ok(tonic::Response::new(Empty {}))
+            })
+        }
+    }
+    impl tonic::server::NamedService for StatusService {
+        const NAME: &'static str = "android.emulation.control.EmulatorController";
+    }
+    impl tonic::server::UnaryService<Empty> for StatusService {
+        type Response = EmulatorStatus;
+        type Future = BoxFuture<tonic::Response<EmulatorStatus>, tonic::Status>;
+        fn call(&mut self, request: Request<Empty>) -> Self::Future {
+            let booted = self.0.load(Ordering::SeqCst);
+            Box::pin(async move {
+                if request
+                    .metadata()
+                    .get("authorization")
+                    .and_then(|v| v.to_str().ok())
+                    != Some("Bearer test-token")
+                {
+                    return Err(tonic::Status::unauthenticated("Invalid token"));
+                }
+                Ok(tonic::Response::new(EmulatorStatus { booted }))
+            })
+        }
+    }
+    impl<B> Service<http::Request<B>> for StatusService
+    where
+        B: Body + Send + 'static,
+        B::Error: Into<StdError> + Send + 'static,
+    {
+        type Response = http::Response<tonic::body::BoxBody>;
+        type Error = std::convert::Infallible;
+        type Future = BoxFuture<Self::Response, Self::Error>;
+        fn poll_ready(
+            &mut self,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), Self::Error>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+        fn call(&mut self, request: http::Request<B>) -> Self::Future {
+            if request.uri().path() == "/android.emulation.control.EmulatorController/setVmState" {
+                let service = ShutdownService(self.1.clone());
+                return Box::pin(async move {
+                    Ok(tonic::server::Grpc::new(ProstCodec::default())
+                        .unary(service, request)
+                        .await)
+                });
+            }
+            assert_eq!(
+                request.uri().path(),
+                "/android.emulation.control.EmulatorController/getStatus"
+            );
+            let service = self.clone();
+            Box::pin(async move {
+                Ok(tonic::server::Grpc::new(ProstCodec::default())
+                    .unary(service, request)
+                    .await)
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn readiness_requires_authenticated_android_boot_completion() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = Endpoint {
+            port: listener.local_addr().unwrap().port(),
+            token: "test-token".into(),
+        };
+        let ready = Arc::new(AtomicBool::new(false));
+        let service = StatusService(ready.clone(), Arc::new(AtomicBool::new(false)));
+        let server = tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(service)
+                .serve_with_incoming(
+                    tonic::codegen::tokio_stream::wrappers::TcpListenerStream::new(listener),
+                )
+                .await
+                .unwrap();
+        });
+        assert!(
+            !booted(&endpoint).await.unwrap(),
+            "A live gRPC port does not mean Android is booted"
+        );
+        ready.store(true, Ordering::SeqCst);
+        assert!(booted(&endpoint).await.unwrap());
+        assert!(
+            booted(&Endpoint {
+                token: "wrong-token".into(),
+                ..endpoint.clone()
+            })
+            .await
+            .is_err()
+        );
+        server.abort();
+        let _ = server.await;
+        assert!(
+            booted(&endpoint).await.is_err(),
+            "A dead endpoint must not be ready"
+        );
+    }
+    #[tokio::test]
+    async fn shutdown_requires_authentication_and_requests_graceful_exit() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut endpoint = Endpoint {
+            port: listener.local_addr().unwrap().port(),
+            token: "wrong-token".into(),
+        };
+        let stopped = Arc::new(AtomicBool::new(false));
+        let service = StatusService(Arc::new(AtomicBool::new(true)), stopped.clone());
+        let server = tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(service)
+                .serve_with_incoming(
+                    tonic::codegen::tokio_stream::wrappers::TcpListenerStream::new(listener),
+                )
+                .await
+                .unwrap();
+        });
+        assert!(shutdown(&endpoint).await.is_err());
+        assert!(!stopped.load(Ordering::SeqCst));
+        endpoint.token.clear();
+        assert!(shutdown(&endpoint).await.is_err());
+        assert!(!stopped.load(Ordering::SeqCst));
+        endpoint.token = "test-token".into();
+        shutdown(&endpoint).await.unwrap();
+        assert!(stopped.load(Ordering::SeqCst));
+        server.abort();
+        let _ = server.await;
+        assert!(shutdown(&endpoint).await.is_err());
+    }
     #[test]
     fn android_frame_bounds_and_touch_edges() {
         assert!(frame_bytes(0, 100).is_err());
@@ -410,7 +573,7 @@ mod tests {
     }
     #[test]
     fn android_registry_preserves_token_values() {
-        let p = ini("grpc.port=8554\ngrpc.token=a=b==\navd.name=Pixel 10");
+        let p = android_devices::ini("grpc.port=8554\ngrpc.token=a=b==\navd.name=Pixel 10");
         assert_eq!(p["grpc.token"], "a=b==");
     }
 }

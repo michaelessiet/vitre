@@ -47,6 +47,8 @@ impl FilesPanel {
         cx.spawn_in(window, async move |this, cx| {
             let executor = cx.background_executor().clone();
             let run = async {
+                let capture = std::env::var("VITRE_VERIFY_ICONS").as_deref()
+                    != Ok("editor-shortcuts");
                 for (path, prop_marker) in [("src/components/Workspace.tsx", "<Button "), ("src/components/Playground.jsx", "<Button ")] {
                     this.update_in(cx, |panel, window, cx| panel.open_file(path.into(), window, cx)).map_err(|e| e.to_string())?;
                     loop {
@@ -74,7 +76,7 @@ impl FilesPanel {
                             cx.background_executor().timer(Duration::from_millis(80)).await;
                             if this.update(cx, |p, cx| p.editor.read(cx).completion_menu_state().open).map_err(|e| e.to_string())? { break; }
                         }
-                        crate::chat::ui_verification::capture("languages-completion", cx).await?;
+                        if capture { crate::chat::ui_verification::capture("languages-completion", cx).await?; }
                         crate::chat::ui_verification::key("escape", cx).await?;
                     }
                 }
@@ -97,7 +99,46 @@ impl FilesPanel {
                     p.lsp.definitions(&text, offset, window, cx)
                 }).map_err(|e| e.to_string())?;
                 let definitions = task.await.map_err(|e| e.to_string())?;
-                if !definitions.iter().any(|d| d.target_uri.as_str().ends_with("/src/language.ts")) { return Err("Cross-file definition did not reach language.ts".into()); }
+                let definition = definitions.iter().find(|d| d.target_uri.as_str().ends_with("/src/language.ts"))
+                    .ok_or("Cross-file definition did not reach language.ts")?.clone();
+                // Cmd-click calls show_document while the editor entity is
+                // being updated. Exercise that exact path before the F12
+                // shortcut, which starts from the files panel instead.
+                let handled = this.update_in(cx, |p, window, cx| {
+                    p.editor.update(cx, |state, cx| {
+                        let show = state.lsp().show_document.clone().unwrap();
+                        show(&lsp_types::ShowDocumentParams {
+                            uri: definition.target_uri.clone(),
+                            external: Some(false),
+                            take_focus: Some(true),
+                            selection: Some(definition.target_selection_range),
+                        }, window, cx)
+                    })
+                }).map_err(|e| e.to_string())?;
+                if !handled { return Err("Cross-file editor definition was not handled".into()); }
+                loop {
+                    cx.background_executor().timer(Duration::from_millis(80)).await;
+                    if this.update(cx, |p, _| p.lsp.current_document().as_deref() == Some("src/language.ts")).map_err(|e| e.to_string())? { break; }
+                }
+                this.update_in(cx, |p, window, cx| p.open_file("src/components/Workspace.tsx".into(), window, cx)).map_err(|e| e.to_string())?;
+                loop {
+                    cx.background_executor().timer(Duration::from_millis(80)).await;
+                    if this.update(cx, |p, _| p.lsp.current_document().as_deref() == Some("src/components/Workspace.tsx")).map_err(|e| e.to_string())? { break; }
+                }
+                this.update_in(cx, |p, window, cx| {
+                    let offset = p.editor.read(cx).text().to_string().find("greet('").unwrap();
+                    p.editor.update(cx, |state, cx| { state.set_selected_range(offset..offset, cx); state.focus(window, cx); });
+                }).map_err(|e| e.to_string())?;
+                crate::chat::ui_verification::key("f12", cx).await?;
+                loop {
+                    cx.background_executor().timer(Duration::from_millis(80)).await;
+                    if this.update(cx, |p, _| p.lsp.current_document().as_deref() == Some("src/language.ts")).map_err(|e| e.to_string())? { break; }
+                }
+                this.update_in(cx, |p, window, cx| p.open_file("src/components/Workspace.tsx".into(), window, cx)).map_err(|e| e.to_string())?;
+                loop {
+                    cx.background_executor().timer(Duration::from_millis(80)).await;
+                    if this.update(cx, |p, _| p.lsp.current_document().as_deref() == Some("src/components/Workspace.tsx")).map_err(|e| e.to_string())? { break; }
+                }
                 this.update_in(cx, |p, window, cx| {
                     let offset = p.editor.read(cx).text().to_string().find("greet('").unwrap() + "greet(".len();
                     p.editor.update(cx, |state, cx| { state.set_selected_range(offset..offset, cx); state.focus(window, cx); });
@@ -108,7 +149,7 @@ impl FilesPanel {
                     if this.update(cx, |p, _| p.verification_signature().is_some_and(|s| s.contains("Parameter 1"))).map_err(|e| e.to_string())? { break; }
                 }
                 eprintln!("[vitre-language-test] cross-file definition and rendered signature help PASS");
-                crate::chat::ui_verification::capture("languages-signature", cx).await?;
+                if capture { crate::chat::ui_verification::capture("languages-signature", cx).await?; }
                 if !this.update(cx, |p, _| p.verification_signature().is_some()).map_err(|e| e.to_string())? { return Err("Mouse movement dismissed parameter hints".into()); }
                 crate::chat::ui_verification::key("escape", cx).await?;
                 if this.update(cx, |p, _| p.verification_signature().is_some()).map_err(|e| e.to_string())? { return Err("Escape did not dismiss parameter hints".into()); }
@@ -121,7 +162,7 @@ impl FilesPanel {
                     cx.background_executor().timer(Duration::from_millis(80)).await;
                     if cx.update(|window, cx| window.has_active_dialog(cx)).map_err(|e| e.to_string())? { break; }
                 }
-                crate::chat::ui_verification::capture("languages-references", cx).await?;
+                if capture { crate::chat::ui_verification::capture("languages-references", cx).await?; }
                 cx.update(|window, cx| window.close_dialog(cx)).map_err(|e| e.to_string())?;
                 let hover = this.update_in(cx, |p, window, cx| {
                     let text = p.editor.read(cx).text().to_string();

@@ -15,6 +15,7 @@ export async function resolveRepository(
   client: CloudClient,
   url: string,
   configured: readonly CloudRepository[],
+  githubAccountId?: string,
 ) {
   const { owner, name } = parseGithubRepository(url);
   // Public repositories remain usable when installed-repository discovery is unavailable.
@@ -26,8 +27,20 @@ export async function resolveRepository(
   const matches = (repository: CloudRepository) =>
     repository.owner.toLowerCase() === owner.toLowerCase() &&
     repository.name.toLowerCase() === name.toLowerCase();
+  const candidates = installed.filter(matches);
+  const previousChoice = configured.find(matches)?.githubAccountId;
+  const chosen = githubAccountId ?? previousChoice;
+  if (!chosen && candidates.length > 1)
+    throw new Error("Choose which GitHub account to use for this repository.");
+  const selected = chosen
+    ? candidates.find((repo) => repo.githubAccountId === chosen)
+    : candidates[0];
+  if (chosen && !selected)
+    throw new Error(
+      "The selected GitHub account cannot access this repository. Reconnect it or choose another account.",
+    );
   const resolved =
-    installed.find(matches) ??
+    selected ??
     (await client.publicRepository(owner, name).catch((error: unknown) => {
       throw discoveryError ?? error;
     }));

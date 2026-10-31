@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1128" height="736" viewBox="0 0 1128 736" role="img" aria-labelledby="title description">
+  <title id="title">Vitre semantic color tokens</title>
+  <desc id="description">Dark and light theme swatches generated from crates/vitre-app/themes/vitre.json. Transparent tokens are composited over each theme's canvas.</desc>
+  <rect width="1128" height="736" fill="#eeeef0"/>
+  <g font-family="DM Sans, Arial, sans-serif">
+  <text x="24" y="44" fill="#27272a" font-size="24" font-weight="600">Vitre / Semantic colors</text>
+  <rect x="24" y="74" width="530" height="608" rx="12" fill="#000000" stroke="#888888" stroke-opacity="0.25"/>
+    <text x="46" y="110" fill="#f1f3f7" font-size="20" font-weight="600">Vitre Dark</text><rect x="46" y="132" width="34" height="34" rx="8" fill="#000000" fill-opacity="1" stroke="#a3a3a3" stroke-opacity="0.3"/>
+      <text x="94" y="146" fill="#f1f3f7" font-size="14">Canvas</text>
+      <text x="94" y="163" fill="#a3a3a3" font-size="11">background</text>
+      <text x="529" y="155" text-anchor="end" fill="#a3a3a3" font-family="Menlo, monospace" font-size="12">#000000</text>
+<rect x="46" y="185" width="34" height="34" rx="8" fill="#f1f3f7" fill-opacity="1" stroke="#a3a3a3" stroke-opacity="0.3"/>
+      <text x="94" y="199" fill="#f1f3f7" font-size="14">Primary text</text>
+      <text x="94" y="216" fill="#a3a3a3" font-size="11">foreground</text>
+      <text x="529" y="208" text-anchor="end" fill="#a3a3a3" font-family="Menlo, monospace" font-size="12">#f1f3f7</text>
+<rect x="46" y="238" width="34" height="34" rx="8" fill="#a3a3a3" fill-opacity="1" stroke="#a3a3a3" stroke-opacity="0.3"/>
+      <text x="94" y="252" fill="#f1f3f7" font-size="14">Supporting text</text>
+      <text x="94" y="269" fill="#a3a3a3" font-size="11">muted.foreground</text>
+      <text x="529" y="261" text-anchor="end" fill="#a3a3a3" font-family="Menlo, monospace" font-size="12">#a3a3a3</text>
+<rect x="46" y="291" width="34" height="34" rx="8" fill="#181818" fill-opacity="1" stroke="#a3a3a3" stroke-opacity="0.3"/>
+      <text x="94" y="305" fill="#f1f3f7" font-size="14">Floating surface</text>
+      <text x="94" y="322" fill="#a3a3a3" font-size="11">popover.background</text>
+      <text x="529" y="314" text-anchor="end" fill="#a3a3a3" font-family="Menlo, monospace" font-size="12">#181818</text>
+<rect x="46" y="344" width="34" height="34" rx="8" fill="#191a1d" fill-opacity="1" stroke="#a3a3a3" stroke-opacity="0.3"/>
+      <text x="94" y="358" fill="#f1f3f7" font-size="14">Selection surface</text>
+      <text x="94" y="375" fill="#a3a3a3" font-size="11">accent.background</text>
+      <text x="529" y="367" text-anchor="end" fill="#a3a3a3" font-family="Menlo, monospace" font-size="12">#191a1d</text>
+<rect x="46" y="397" width="34" height="34" rx="8" fill="#ffffff" fill-opacity="0.0784313725490196" stroke="#a3a3a3" stroke-opacity="0.3"/>
+      <text x="94" y="411" fill="#f1f3f7" font-size="14">Divider</text>
+      <text x="94" y="428" fill="#a3a3a3" font-size="11">border</text>
+      <text x="529" y="420" text-anchor="end" fill="#a3a3a3" font-family="Menlo, monospace" font-size="12">#ffffff14</text>
+<rect x="46" y="450" width="34" height="34" rx="8" fill="#366ffb" fill-opacity="1" stroke="#a3a3a3" stroke-opacity="0.3"/>
+      <text x="94" y="464" fill="#f1f3f7" font-size="14">Primary action</text>
+      <text x="94" y="481" fill="#a3a3a3" font-size="11">primary.background</text>
+      <text x="529" y="473" text-anchor="end" fill="#a3a3a3" font-family="Menlo, monospace" font-size="12">#366ffb</text>
+<rect x="46" y="503" width="34" height="34" rx="8" fill="#00d491" fill-opacity="1" stroke="#a3a3a3" stroke-opacity="0.3"/>
+      <text x="94" y="517" fill="#f1f3f7" font-size="14">Success</text>
+      <text x="94" y="534" fill="#a3a3a3" font-size="11">success.background</text>
+      <text x="529" y="526" text-anchor="end" fill="#a3a3a3" font-family="Menlo, monospace" font-size="12">#00d491</text>
+<rect x="46" y="556" width="34" height="34" rx="8" fill="#ffb900" fill-opacity="1" stroke="#a3a3a3" stroke-opacity="0.3"/>
+      <text x="94" y="570" fill="#f1f3f7" font-size="14">Warning</text>
+      <text x="94" y="587" fill="#a3a3a3" font-size="11">warning.background</text>
+      <text x="529" y="579" text-anchor="end" fill="#a3a3a3" font-family="Menlo, monospace" font-size="12">#ffb900</text>
+<rect x="46" y="609" width="34" height="34" rx="8" fill="#ff4e4d" fill-opacity="1" stroke="#a3a3a3" stroke-opacity="0.3"/>
+      <text x="94" y="623" fill="#f1f3f7" font-size="14">Error</text>
+      <text x="94" y="640" fill="#a3a3a3" font-size="11">danger.background</text>
+      <text x="529" y="632" text-anchor="end" fill="#a3a3a3" font-family="Menlo, monospace" font-size="12">#ff4e4d</text>
+<rect x="574" y="74" width="530" height="608" rx="12" fill="#fcfcfc" stroke="#888888" stroke-opacity="0.25"/>
+    <text x="596" y="110" fill="#27272a" font-size="20" font-weight="600">Vitre Light</text><rect x="596" y="132" width="34" height="34" rx="8" fill="#fcfcfc" fill-opacity="1" stroke="#71717b" stroke-opacity="0.3"/>
+      <text x="644" y="146" fill="#27272a" font-size="14">Canvas</text>
+      <text x="644" y="163" fill="#71717b" font-size="11">background</text>
+      <text x="1079" y="155" text-anchor="end" fill="#71717b" font-family="Menlo, monospace" font-size="12">#fcfcfc</text>
+<rect x="596" y="185" width="34" height="34" rx="8" fill="#27272a" fill-opacity="1" stroke="#71717b" stroke-opacity="0.3"/>
+      <text x="644" y="199" fill="#27272a" font-size="14">Primary text</text>
+      <text x="644" y="216" fill="#71717b" font-size="11">foreground</text>
+      <text x="1079" y="208" text-anchor="end" fill="#71717b" font-family="Menlo, monospace" font-size="12">#27272a</text>
+<rect x="596" y="238" width="34" height="34" rx="8" fill="#71717b" fill-opacity="1" stroke="#71717b" stroke-opacity="0.3"/>
+      <text x="644" y="252" fill="#27272a" font-size="14">Supporting text</text>
+      <text x="644" y="269" fill="#71717b" font-size="11">muted.foreground</text>
+      <text x="1079" y="261" text-anchor="end" fill="#71717b" font-family="Menlo, monospace" font-size="12">#71717b</text>
+<rect x="596" y="291" width="34" height="34" rx="8" fill="#ffffff" fill-opacity="1" stroke="#71717b" stroke-opacity="0.3"/>
+      <text x="644" y="305" fill="#27272a" font-size="14">Floating surface</text>
+      <text x="644" y="322" fill="#71717b" font-size="11">popover.background</text>
+      <text x="1079" y="314" text-anchor="end" fill="#71717b" font-family="Menlo, monospace" font-size="12">#ffffff</text>
+<rect x="596" y="344" width="34" height="34" rx="8" fill="#f4f4f5" fill-opacity="1" stroke="#71717b" stroke-opacity="0.3"/>
+      <text x="644" y="358" fill="#27272a" font-size="14">Selection surface</text>
+      <text x="644" y="375" fill="#71717b" font-size="11">accent.background</text>
+      <text x="1079" y="367" text-anchor="end" fill="#71717b" font-family="Menlo, monospace" font-size="12">#f4f4f5</text>
+<rect x="596" y="397" width="34" height="34" rx="8" fill="#e4e4e7" fill-opacity="1" stroke="#71717b" stroke-opacity="0.3"/>
+      <text x="644" y="411" fill="#27272a" font-size="14">Divider</text>
+      <text x="644" y="428" fill="#71717b" font-size="11">border</text>
+      <text x="1079" y="420" text-anchor="end" fill="#71717b" font-family="Menlo, monospace" font-size="12">#e4e4e7</text>
+<rect x="596" y="450" width="34" height="34" rx="8" fill="#1b4ed8" fill-opacity="1" stroke="#71717b" stroke-opacity="0.3"/>
+      <text x="644" y="464" fill="#27272a" font-size="14">Primary action</text>
+      <text x="644" y="481" fill="#71717b" font-size="11">primary.background</text>
+      <text x="1079" y="473" text-anchor="end" fill="#71717b" font-family="Menlo, monospace" font-size="12">#1b4ed8</text>
+<rect x="596" y="503" width="34" height="34" rx="8" fill="#10b981" fill-opacity="1" stroke="#71717b" stroke-opacity="0.3"/>
+      <text x="644" y="517" fill="#27272a" font-size="14">Success</text>
+      <text x="644" y="534" fill="#71717b" font-size="11">success.background</text>
+      <text x="1079" y="526" text-anchor="end" fill="#71717b" font-family="Menlo, monospace" font-size="12">#10b981</text>
+<rect x="596" y="556" width="34" height="34" rx="8" fill="#f59e0b" fill-opacity="1" stroke="#71717b" stroke-opacity="0.3"/>
+      <text x="644" y="570" fill="#27272a" font-size="14">Warning</text>
+      <text x="644" y="587" fill="#71717b" font-size="11">warning.background</text>
+      <text x="1079" y="579" text-anchor="end" fill="#71717b" font-family="Menlo, monospace" font-size="12">#f59e0b</text>
+<rect x="596" y="609" width="34" height="34" rx="8" fill="#fb2c36" fill-opacity="1" stroke="#71717b" stroke-opacity="0.3"/>
+      <text x="644" y="623" fill="#27272a" font-size="14">Error</text>
+      <text x="644" y="640" fill="#71717b" font-size="11">danger.background</text>
+      <text x="1079" y="632" text-anchor="end" fill="#71717b" font-family="Menlo, monospace" font-size="12">#fb2c36</text>
+  <text x="24" y="714" fill="#52525b" font-size="12">Base tokens · Surface alpha is adjusted by glass.rs · Use cx.theme() in feature code</text>
+  </g></svg>

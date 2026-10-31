@@ -108,6 +108,18 @@ export const layer = Layer.effect(
             ),
           );
     const wake = (userId: string) => config.wake(userId).pipe(Effect.ignore); // durable outbox + cron cover a lost wakeup
+    const overview = (
+      state: Parameters<typeof publicOverview>[0],
+      userId: string,
+      now: number,
+    ): CloudOverview => ({
+      ...publicOverview(state, config.enabled, now),
+      ...(config.github.accounts
+        ? {
+            githubManageUrl: `${config.controlUrl.replace(/\/$/, "")}/account/github?user=${encodeURIComponent(userId)}`,
+          }
+        : {}),
+    });
     return CloudService.of({
       registerMobileDevice: Effect.fn("cloud.mobile_register")(function* (userId, registration) {
         yield* allowed(userId);
@@ -151,7 +163,16 @@ export const layer = Layer.effect(
           yield* store.mutate(userId, (doc) => backfillProjects(doc.state));
           document = yield* store.read(userId);
         }
-        return publicOverview(document.state, config.enabled, yield* currentMillis);
+        if (config.github.accounts && document.state.githubAccounts === undefined) {
+          const accounts = yield* fromPromise(() => config.github.accounts!.list(userId));
+          yield* store.mutate(userId, (doc) => {
+            doc.state.githubAccounts = Object.fromEntries(
+              accounts.map((account) => [account.id, account]),
+            );
+          });
+          document = yield* store.read(userId);
+        }
+        return overview(document.state, userId, yield* currentMillis);
       }),
       projectSnapshots: Effect.fn("cloud.project_snapshots")(function* (userId, projectId) {
         yield* allowed(userId);
@@ -202,14 +223,18 @@ export const layer = Layer.effect(
             );
           return {
             entityId: receipt.entityId,
-            overview: publicOverview(current.state, config.enabled, now),
+            overview: overview(current.state, userId, now),
           };
         }
+        const githubAccounts =
+          command.type === "github.refresh" && config.github.accounts
+            ? yield* fromPromise(() => config.github.accounts!.list(userId))
+            : undefined;
         if (command.type === "repository.save")
           command = {
             ...command,
             repository: yield* fromPromise(() =>
-              new GitHubCloudClient(config.github).verifyRepository(
+              new GitHubCloudClient(config.github, fetch, userId).verifyRepository(
                 (command as Extract<CloudCommand, { type: "repository.save" }>).repository,
                 now,
               ),
@@ -310,7 +335,7 @@ export const layer = Layer.effect(
             const revision = snapshotHead
               ? { sha: snapshotHead }
               : yield* fromPromise(() =>
-                  new GitHubCloudClient(config.github).resolve(
+                  new GitHubCloudClient(config.github, fetch, userId).resolve(
                     repository,
                     command.source?.kind === "github"
                       ? command.source.revision
@@ -335,6 +360,10 @@ export const layer = Layer.effect(
               "Repository settings changed while resolving the branch; retry",
             );
           }
+          if (githubAccounts)
+            document.state.githubAccounts = Object.fromEntries(
+              githubAccounts.map((account) => [account.id, account]),
+            );
           const entityId = applyCommand(
             document.state,
             command,
@@ -357,7 +386,7 @@ export const layer = Layer.effect(
             task.worker?.state === "ready" &&
             isResidentWorker(task);
           return {
-            response: { entityId, overview: publicOverview(document.state, config.enabled, now) },
+            response: { entityId, overview: overview(document.state, userId, now) },
             // A ready resident already polls for its next turn. Avoid making the
             // caller wait for an R2 marker and queue send when no scheduler work
             // exists. Cold starts, stops and unrelated outbox work still wake it.

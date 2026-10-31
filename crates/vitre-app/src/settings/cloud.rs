@@ -42,7 +42,15 @@ impl CloudPanel {
         self.store.update(cx, |store, cx| {
             if store.session == SessionState::SignedIn {
                 store.refresh(cx);
-                store.load_available(cx);
+                if store
+                    .overview
+                    .as_ref()
+                    .is_some_and(|o| o.github_manage_url.is_some())
+                {
+                    store.refresh_github(cx);
+                } else {
+                    store.load_available(cx);
+                }
             }
         });
         cx.notify();
@@ -356,6 +364,92 @@ impl CloudPanel {
         self.card("Providers", body, cx)
     }
 
+    fn render_github(&self, cx: &mut Context<Self>) -> AnyElement {
+        let store = self.store.read(cx);
+        let overview = store.overview.as_ref();
+        let manage_url = overview.and_then(|o| o.github_manage_url.clone());
+        let accounts = overview.and_then(|o| o.github_accounts.as_ref());
+        let mut body = v_flex().gap_3().child(div().text_xs().text_color(cx.theme().muted_foreground)
+            .child("Link personal and work accounts once. Sign in with either account to use both on desktop and mobile."));
+        for account in accounts.into_iter().flatten() {
+            body = body.child(
+                h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(Icon::new(IconName::Github).size_4())
+                    .child(div().text_sm().child(format!("@{}", account.login)))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(
+                                if account.state
+                                    == vitre_contracts::CloudGitHubAccountState::Connected
+                                {
+                                    "Connected"
+                                } else {
+                                    "Needs sign-in"
+                                },
+                            ),
+                    ),
+            );
+        }
+        if accounts.is_none_or(|accounts| accounts.is_empty()) {
+            body = body.child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child("No GitHub accounts linked yet."),
+            );
+        }
+        body = body.child(
+            h_flex()
+                .gap_2()
+                .child(
+                    Button::new("manage-github-accounts")
+                        .outline()
+                        .xsmall()
+                        .label("Manage GitHub accounts")
+                        .disabled(manage_url.is_none())
+                        .on_click(move |_, _, cx| {
+                            if let Some(url) = &manage_url {
+                                cx.open_url(url);
+                            }
+                        }),
+                )
+                .child(
+                    Button::new("refresh-github-accounts")
+                        .ghost()
+                        .xsmall()
+                        .label("Refresh")
+                        .loading(store.is_pending(&Op::GitHubAccounts))
+                        .disabled(
+                            store.session != SessionState::SignedIn
+                                || overview.is_none_or(|o| o.github_manage_url.is_none()),
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.store.update(cx, |store, cx| store.refresh_github(cx))
+                        })),
+                ),
+        );
+        self.card("GitHub accounts", body, cx)
+    }
+
+    fn github_label(store: &CloudStore, repo: &CloudRepository) -> String {
+        repo.github_account_id
+            .as_ref()
+            .map(|id| {
+                store
+                    .overview
+                    .as_ref()
+                    .and_then(|o| o.github_accounts.as_ref())
+                    .and_then(|accounts| accounts.iter().find(|a| &a.id == id))
+                    .map(|a| format!("@{}", a.login))
+                    .unwrap_or_else(|| "Account needs reconnecting".into())
+            })
+            .unwrap_or_else(|| "Deployment access".into())
+    }
+
     fn render_repositories(&self, cx: &mut Context<Self>) -> AnyElement {
         let store = self.store.read(cx);
         let configured: Vec<CloudRepository> = store.repositories().to_vec();
@@ -411,7 +505,12 @@ impl CloudPanel {
                                     .text_xs()
                                     .truncate()
                                     .text_color(cx.theme().muted_foreground)
-                                    .child(format!("{} · {}", repo.default_branch, setup)),
+                                    .child(format!(
+                                        "{} · {} · {}",
+                                        Self::github_label(store, repo),
+                                        repo.default_branch,
+                                        setup
+                                    )),
                             ),
                     )
                     .child(
@@ -429,7 +528,11 @@ impl CloudPanel {
         }
         let installable: Vec<&CloudRepository> = available
             .iter()
-            .filter(|r| !configured.iter().any(|c| c.id == r.id))
+            .filter(|r| {
+                !configured
+                    .iter()
+                    .any(|c| c.id == r.id && c.github_account_id == r.github_account_id)
+            })
             .collect();
         if !installable.is_empty() {
             body = body.child(
@@ -442,7 +545,14 @@ impl CloudPanel {
             );
             for repo in installable.into_iter().take(20) {
                 let pending = store.is_pending(&Op::SaveRepository(repo.id.clone()));
-                let add = repo.clone();
+                let mut add = repo.clone();
+                let replacing = configured.iter().find(|c| c.id == repo.id);
+                if let Some(prior) = replacing {
+                    add.revision = prior.revision;
+                    add.setup_command = prior.setup_command.clone();
+                    add.test_command = prior.test_command.clone();
+                }
+                let is_new = replacing.is_none();
                 body = body.child(
                     h_flex()
                         .gap_2()
@@ -452,24 +562,29 @@ impl CloudPanel {
                                 .size_4()
                                 .text_color(cx.theme().muted_foreground),
                         )
+                        .child(div().flex_1().min_w_0().text_sm().child(format!(
+                            "{}/{} · {}",
+                            repo.owner,
+                            repo.name,
+                            Self::github_label(store, repo)
+                        )))
                         .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .text_sm()
-                                .child(format!("{}/{}", repo.owner, repo.name)),
-                        )
-                        .child(
-                            Button::new(SharedString::from(format!("add-repo-{}", repo.id)))
-                                .outline()
-                                .xsmall()
-                                .label("Connect")
-                                .loading(pending)
-                                .disabled(pending)
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    let sheet = Sheet::repository(add.clone(), true, window, cx);
+                            Button::new(SharedString::from(format!(
+                                "add-repo-{}-{}",
+                                repo.id,
+                                repo.github_account_id.as_deref().unwrap_or("legacy")
+                            )))
+                            .outline()
+                            .xsmall()
+                            .label(if is_new { "Connect" } else { "Use account" })
+                            .loading(pending)
+                            .disabled(pending)
+                            .on_click(cx.listener(
+                                move |this, _, window, cx| {
+                                    let sheet = Sheet::repository(add.clone(), is_new, window, cx);
                                     this.open_sheet(sheet, cx);
-                                })),
+                                },
+                            )),
                         ),
                 );
             }
@@ -534,6 +649,7 @@ impl Render for CloudPanel {
             })
             .child(self.render_account(cx))
             .children(self.render_usage(cx))
+            .child(self.render_github(cx))
             .child(self.render_providers(cx))
             .child(self.render_repositories(cx))
             .child(
@@ -584,6 +700,7 @@ mod tests {
             }))
             .ok();
             store.available = Some(vec![CloudRepository {
+                github_account_id: None,
                 default_branch: "main".into(),
                 id: "r2".into(),
                 installation_id: "1".into(),

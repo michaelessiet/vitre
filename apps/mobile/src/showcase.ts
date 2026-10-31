@@ -67,6 +67,10 @@ export function makeShowcaseClient(): CloudClient {
   };
   let overview = decodeOverview({
     enabled: true,
+    githubAccounts: [
+      { id: "personal", login: "personal-example", state: "connected" },
+      { id: "work", login: "work-example", state: "connected" },
+    ],
     revision: 1,
     tasks: [
       task,

@@ -20,7 +20,7 @@ export const make = Effect.gen(function* () {
   const artifacts = yield* CloudArtifacts;
   const crypto = yield* Crypto.Crypto;
   const executor = computeExecutor(config);
-  const github = new GitHubCloudClient(config.github);
+  const github = new GitHubCloudClient(config.github, fetch, config.allowedUserId);
   const vault = () => new CredentialVault(config.encryptionKey);
   const own = (userId: string) =>
     userId === config.allowedUserId && !!userId

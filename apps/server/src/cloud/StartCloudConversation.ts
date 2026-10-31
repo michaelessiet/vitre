@@ -284,9 +284,14 @@ async function prepareAndStartCloudConversation(
           `/repositories/public/${encodeURIComponent(identity.owner)}/${encodeURIComponent(identity.name)}`,
         ),
       );
-      const repository =
-        publicRepository ??
-        decodeRepositories(await api("/repositories/available")).find(matchesIdentity);
+      const available = publicRepository
+        ? []
+        : decodeRepositories(await api("/repositories/available")).filter(matchesIdentity);
+      if (available.length > 1)
+        throw new Error(
+          "Choose a GitHub account for this repository in Settings → Cloud before starting it in the cloud.",
+        );
+      const repository = publicRepository ?? available[0];
       if (!repository)
         throw new Error(
           "This repository is private or unavailable; connect GitHub access or choose Cloud: Local",

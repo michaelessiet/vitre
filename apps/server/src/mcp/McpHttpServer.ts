@@ -1,3 +1,4 @@
+import { CloudScreenshotRegistrationLive } from "./toolkits/cloudScreenshot/registration.ts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -237,6 +238,7 @@ const McpTransportLive = McpServer.layerHttp({
 
 export const layer = Layer.mergeAll(
   PreviewToolkitRegistrationLive,
+  CloudScreenshotRegistrationLive,
   GraphToolkitRegistrationLive,
   SystemBrowserToolkitRegistrationLive,
   MobileToolkitRegistrationLive,

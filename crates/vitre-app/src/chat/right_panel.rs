@@ -22,8 +22,7 @@ use gpui::{
     SharedString, WeakEntity, Window, div, prelude::*, px,
 };
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, StyledExt as _,
-    WindowExt as _,
+    ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
     h_flex,
     menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenuItem},
@@ -747,6 +746,7 @@ impl ChatApp {
         // Only kinds the landed slices can host; the menu disables the rest,
         // so an unknown kind arriving here is a bug, not user input.
         match kind {
+            SurfaceKind::Devices => self.open_devices(window, cx),
             SurfaceKind::Files => self.dock_open_files_surface(window, cx),
             SurfaceKind::Diff => {
                 let Some(key) = self.dock_thread_key() else {
@@ -1639,7 +1639,20 @@ impl ChatApp {
 
     /// Electron's empty state: header + a two-column grid of action cards.
     fn render_dock_empty_state(&self, cx: &mut Context<Self>) -> AnyElement {
-        let offers = self.dock_surface_offers();
+        let mut offers = self.dock_surface_offers();
+        if cfg!(target_os = "macos") && !self.is_cloud_thread() {
+            offers.push(SurfaceOffer {
+                kind: SurfaceKind::Devices,
+                label: "Devices",
+                description: if self.mobile_opening {
+                    "Connecting devices…"
+                } else {
+                    "Connect a simulator or emulator."
+                },
+                icon: || Icon::new(IconName::Globe),
+                disabled: self.mobile_opening.then(|| "Connecting devices…".into()),
+            });
+        }
         let mut grid = v_flex().gap_2().w_full().max_w(px(576.));
         for pair in offers.chunks(2) {
             // Plain flex row, not `h_flex`: its `items_center` would defeat
@@ -1647,7 +1660,15 @@ impl ChatApp {
             // the same height (Electron's CSS grid rows stretch likewise).
             let mut row = div().flex().gap_2().w_full().min_w_0();
             for offer in pair {
-                row = row.child(self.render_dock_card(offer, cx));
+                // Equal-width wrappers keep a lone card aligned with the
+                // columns above, including the card's padding and border.
+                row = row.child(
+                    div()
+                        .flex()
+                        .flex_1()
+                        .min_w_0()
+                        .child(self.render_dock_card(offer, cx)),
+                );
             }
             if pair.len() == 1 {
                 row = row.child(div().flex_1().min_w_0());
@@ -1680,25 +1701,6 @@ impl ChatApp {
                     ),
             )
             .child(grid)
-            .when(
-                cfg!(target_os = "macos") && !self.is_cloud_thread(),
-                |view| {
-                    view.child(
-                        Button::new("dock-open-devices")
-                            .mt_3()
-                            .label(if self.mobile_opening {
-                                "Connecting devices…"
-                            } else {
-                                "Open Devices"
-                            })
-                            .icon(IconName::Globe)
-                            .disabled(self.mobile_opening)
-                            .on_click(
-                                cx.listener(|app, _, window, cx| app.open_devices(window, cx)),
-                            ),
-                    )
-                },
-            )
             .into_any_element()
     }
 

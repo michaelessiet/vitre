@@ -39,6 +39,7 @@ export function NewConversation({
     attachments: [],
   });
   const [loaded, setLoaded] = useState(false);
+  const [githubAccountId, setGitHubAccountId] = useState<string>();
   const [repository, setRepository] = useState<CloudRepository | null>(null);
   const [snapshots, setSnapshots] = useState<readonly CloudProjectSnapshot[]>([]);
   const [pending, setPending] = useState<PendingCreation | null>(null);
@@ -93,6 +94,7 @@ export function NewConversation({
         cloud.client,
         draft.url,
         cloud.overview?.repositories ?? [],
+        githubAccountId,
       );
       setRepository(found);
       patch({ branch: found.defaultBranch });
@@ -234,6 +236,34 @@ export function NewConversation({
                   setRepository(null);
                 }}
               />
+              {!!cloud.overview?.githubAccounts?.length && (
+                <>
+                  <Text style={styles.label}>GitHub account</Text>
+                  <Button
+                    disabled={locked}
+                    primary={!githubAccountId}
+                    onPress={() => {
+                      setGitHubAccountId(undefined);
+                      setRepository(null);
+                    }}
+                  >
+                    Saved account or public access
+                  </Button>
+                  {cloud.overview.githubAccounts.map((account) => (
+                    <Button
+                      key={account.id}
+                      disabled={locked || account.state !== "connected"}
+                      primary={githubAccountId === account.id}
+                      onPress={() => {
+                        setGitHubAccountId(account.id);
+                        setRepository(null);
+                      }}
+                    >
+                      @{account.login}
+                    </Button>
+                  ))}
+                </>
+              )}
               <Button
                 disabled={locked || !draft.url || !cloud.online}
                 onPress={() => {
@@ -248,7 +278,9 @@ export function NewConversation({
                     {repository.owner}/{repository.name} ·{" "}
                     {repository.installationId === "public"
                       ? "Public repository"
-                      : "Connected GitHub access"}
+                      : repository.githubAccountId
+                        ? `@${cloud.overview?.githubAccounts?.find((account) => account.id === repository.githubAccountId)?.login ?? "Linked GitHub account"}`
+                        : "Deployment access"}
                   </Text>
                   <Text style={styles.label}>Base branch</Text>
                   <TextInput

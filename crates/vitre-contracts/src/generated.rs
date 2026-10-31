@@ -1386,6 +1386,11 @@ pub struct CloudCheckpoint {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum CloudCommand {
+    #[serde(rename = "github.refresh")]
+    GithubRefresh {
+        #[serde(rename = "idempotencyKey")]
+        idempotency_key: String,
+    },
     #[serde(rename = "project.delete")]
     ProjectDelete {
         #[serde(rename = "expectedRevision")]
@@ -1900,6 +1905,24 @@ pub struct CloudGetDesktopSessionPayload {
 /// Void payload — send `{}` on the wire.
 pub type CloudGetRelayClientStatusPayload = serde_json::Value;
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudGitHubAccount {
+    pub id: String,
+    pub login: String,
+    pub state: CloudGitHubAccountState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CloudGitHubAccountState {
+    #[serde(rename = "connected")]
+    Connected,
+    #[serde(rename = "needs_auth")]
+    NeedsAuth,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum CloudHandoffErrorDisposition {
     #[serde(rename = "retryable")]
@@ -2074,6 +2097,12 @@ pub struct CloudOverview {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capabilities: Option<CloudOverviewCapabilities>,
     pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "githubAccounts")]
+    pub github_accounts: Option<Vec<CloudGitHubAccount>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "githubManageUrl")]
+    pub github_manage_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handoffs: Option<Vec<CloudHandoffOperation>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2282,6 +2311,9 @@ pub enum CloudPublicationState {
 pub struct CloudRepository {
     #[serde(rename = "defaultBranch")]
     pub default_branch: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "githubAccountId")]
+    pub github_account_id: Option<String>,
     pub id: String,
     #[serde(rename = "installationId")]
     pub installation_id: String,

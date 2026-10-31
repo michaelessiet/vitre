@@ -1,3 +1,5 @@
+import { githubAccountPage } from "./cloud/githubAccountPage.ts";
+import { createGitHubAccounts } from "./cloud/githubAccounts.ts";
 import * as Alchemy from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
 import * as Config from "effect/Config";
@@ -309,6 +311,7 @@ export default class Api extends Cloudflare.Worker<Api>()(
                 }
               : {}),
             github: {
+              accounts: createGitHubAccounts(Redacted.value(clerkSecretKey)),
               appId: githubAppId,
               privateKey: Redacted.value(githubPrivateKey),
               installationIds: githubInstallationIds
@@ -487,7 +490,25 @@ export default class Api extends Cloudflare.Worker<Api>()(
     );
 
     const routeLayers = {
-      documentation: Layer.merge(documentationLayer, relayDocsRedirectRoute),
+      documentation: Layer.mergeAll(
+        documentationLayer,
+        relayDocsRedirectRoute,
+        HttpRouter.add(
+          "GET",
+          "/account/github",
+          Effect.sync(() =>
+            HttpServerResponse.text(githubAccountPage(clerkPublishableKey), {
+              contentType: "text/html",
+              headers: {
+                "cache-control": "no-store",
+                "referrer-policy": "no-referrer",
+                "x-frame-options": "DENY",
+                "x-content-type-options": "nosniff",
+              },
+            }),
+          ),
+        ),
+      ),
       cloud: HttpApiBuilder.layer(CloudApi).pipe(Layer.provide(cloudAppLayer)),
       relay: HttpApiBuilder.layer(RelayApi).pipe(Layer.provide(appLayer)),
     };

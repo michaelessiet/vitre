@@ -9,6 +9,12 @@
 
 - Target Vitre (`crates/vitre-app`) for application changes unless the user explicitly specifies another application. Shared backend changes may be made when required to support Vitre.
 
+## Vitre Design Language
+
+- Before changing native UI, read `docs/design-language/README.md` and the relevant component guidance. Inspect its reference images and the linked implementation.
+- Reuse the documented theme tokens, glass helpers, and shared components. Device/resource choices use searchable command rows; workspace entry points use the shared surface cards.
+- Verify new UI in the native application, including keyboard interaction and long/empty content. Update the design-language documentation and reference images when introducing a reusable pattern.
+
 ## Task Completion Requirements
 
 - Keep local verification focused on the files and packages changed. Run the smallest relevant test set; do not run the full workspace test suite as a routine completion step.

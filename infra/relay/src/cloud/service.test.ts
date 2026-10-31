@@ -70,6 +70,42 @@ const auth = JSON.stringify({
 });
 
 describe("cloud account and credential boundaries", () => {
+  it.effect(
+    "syncs linked GitHub identities for the same account and refuses another Vitre user",
+    () =>
+      Effect.gen(function* () {
+        const f = fixture();
+        f.config.github.accounts = {
+          list: async (user) => {
+            expect(user).toBe("user");
+            return [
+              { id: "personal", login: "person", state: "connected" },
+              { id: "work", login: "work", state: "connected" },
+            ];
+          },
+          credential: async () => {
+            throw new Error("Overview must never request GitHub tokens");
+          },
+        };
+        const first = yield* f.run(
+          CloudService.pipe(Effect.flatMap((service) => service.overview("user"))),
+        );
+        expect(first.githubAccounts?.map((account) => account.id)).toEqual(["personal", "work"]);
+        expect(first.githubManageUrl).toBe("https://cloud.example.com/account/github?user=user");
+        const result = yield* f.run(
+          CloudService.pipe(
+            Effect.flatMap((service) =>
+              service.command("user", { type: "github.refresh", idempotencyKey: "sync" }),
+            ),
+          ),
+        );
+        expect(result.overview.githubAccounts).toEqual(first.githubAccounts);
+        const denied = yield* Effect.flip(
+          f.run(CloudService.pipe(Effect.flatMap((service) => service.overview("different-user")))),
+        );
+        expect(denied.code).toBe("forbidden");
+      }),
+  );
   it.effect("stores mobile tokens encrypted and keeps registration account scoped", () =>
     Effect.gen(function* () {
       const f = fixture();

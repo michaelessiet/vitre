@@ -50,7 +50,7 @@ export const make = Effect.gen(function* () {
   const store = yield* CloudStore;
   const artifacts = yield* CloudArtifacts;
   const vault = () => new CredentialVault(config.encryptionKey);
-  const github = new GitHubCloudClient(config.github);
+  const github = new GitHubCloudClient(config.github, fetch, config.allowedUserId);
   const authenticateDocument = (document: CloudAccountDocument, taskId: string, hash: string) => {
     if (document.private.workerTokens[taskId]?.hash !== hash)
       throw new CloudError("unauthorized", "Invalid worker credential", 401);

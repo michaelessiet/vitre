@@ -34,6 +34,7 @@
     "@vtsls/language-server": "^0.3.0",
     "effect": "catalog:",
     "node-pty": "^1.1.0",
+    "playwright-core": "1.60.0",
     "proper-lockfile": "4.1.2",
     "typescript": "catalog:",
     "vscode-jsonrpc": "8.2.0",

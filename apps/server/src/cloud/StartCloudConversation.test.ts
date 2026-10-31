@@ -226,6 +226,7 @@ describe("cloud conversation preparation", () => {
 
 it.each([
   { isPublic: false, configured: "new" },
+  { isPublic: false, configured: "new", ambiguous: true },
   { isPublic: true, configured: "new" },
   { isPublic: false, configured: "github" },
   { isPublic: true, configured: "github" },
@@ -234,7 +235,7 @@ it.each([
   { isPublic: true, configured: "github", withUpstream: false },
 ])(
   "uses uploaded history (public=$isPublic, configured=$configured, upstream=$withUpstream)",
-  async ({ isPublic, configured, withUpstream }) => {
+  async ({ isPublic, configured, withUpstream, ambiguous }) => {
     const NodeChildProcess = await import("node:child_process");
     const NodeUtil = await import("node:util");
     const exec = NodeUtil.promisify(NodeChildProcess.execFile);
@@ -302,7 +303,14 @@ it.each([
         lookups.push("private");
         expect(configured).not.toBe("github");
         expect(isPublic).toBe(false);
-        return Response.json([repository]);
+        return Response.json(
+          ambiguous
+            ? [
+                { ...repository, githubAccountId: "personal" },
+                { ...repository, githubAccountId: "work" },
+              ]
+            : [repository],
+        );
       }
       if (url.pathname.endsWith("/status")) return Response.json({ present: false });
       if (url.pathname.endsWith("/chunks"))
@@ -319,7 +327,7 @@ it.each([
       commands.push(body);
       return Response.json({ entityId: "task", overview });
     };
-    await startCloudConversation(
+    const started = startCloudConversation(
       {
         idempotencyKey: "github",
         roots: [{ id: "root", path: root }],
@@ -331,6 +339,12 @@ it.each([
       { relayUrl: "https://relay.example", accessToken: "token" },
       request,
     );
+    if (ambiguous) {
+      await expect(started).rejects.toThrow("Choose a GitHub account");
+      expect(commands).toEqual([]);
+      return;
+    }
+    await started;
     if (configured === "github") {
       expect(lookups).toEqual([]);
       expect(commands).toHaveLength(1);

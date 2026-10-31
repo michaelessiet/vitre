@@ -8,6 +8,8 @@ const image = process.argv[2];
 if (!image) throw new Error("Usage: node scripts/vitre/cloud/smoke-image.mjs IMAGE:VERSION");
 const name = `vitre-cloud-smoke-${NodeCrypto.randomUUID()}`;
 const token = NodeCrypto.randomUUID();
+// Docker needs namespace syscalls for Chromium's sandbox. Production uses bwrap.
+const seccompProfile = process.env.VITRE_SMOKE_SECCOMP_PROFILE;
 try {
   const child = NodeChildProcess.spawn(
     "docker",
@@ -21,6 +23,7 @@ try {
       name,
       "--user",
       "10001:10001",
+      ...(seccompProfile ? ["--security-opt", `seccomp=${seccompProfile}`] : []),
       "--publish",
       "127.0.0.1::3773",
       "--entrypoint",
@@ -95,8 +98,35 @@ try {
   });
   if (!ticket.ok || typeof (await ticket.json()).ticket !== "string")
     throw new Error("Packaged backend WebSocket authentication failed");
+  const browserProbe = await exec(
+    "docker",
+    [
+      "exec",
+      "--user",
+      "10001:10001",
+      "--workdir",
+      "/opt/vitre/server",
+      name,
+      "node",
+      "--input-type=module",
+      "-e",
+      `
+      import { chromium } from "playwright-core";
+      const browser = await chromium.launch({ headless: true, chromiumSandbox: true });
+      try {
+        const page = await browser.newPage();
+        await page.setContent("<h1>Vitre cloud screenshot</h1>");
+        const png = await page.screenshot();
+        if (png.subarray(1, 4).toString() !== "PNG" || png.length < 1000)
+          throw new Error("Chromium did not produce a PNG");
+        console.log(png.length);
+      } finally { await browser.close(); }
+    `,
+    ],
+    { timeout: 45000 },
+  );
   console.log(
-    "Linux image smoke test passed: backend bootstrap, authenticated snapshot, and WebSocket ticket.",
+    `Linux image smoke test passed: backend bootstrap, authenticated snapshot, WebSocket ticket, and sandboxed Chromium PNG (${browserProbe.stdout.trim()} bytes).`,
   );
 } finally {
   await exec("docker", ["rm", "--force", name]).catch(() => {});

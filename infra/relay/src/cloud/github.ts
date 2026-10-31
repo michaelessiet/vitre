@@ -1,3 +1,4 @@
+import type { GitHubAccounts } from "./githubAccounts.ts";
 import { CloudError } from "./policy.ts";
 import type { CloudRepository, CloudTask, CloudPublication } from "@t3tools/contracts/cloud";
 
@@ -53,6 +54,7 @@ export function githubPrivateKeyBytes(pem: string): Uint8Array<ArrayBuffer> {
 }
 
 export interface GitHubConfiguration {
+  accounts?: GitHubAccounts;
   appId: string;
   privateKey: string;
   installationIds: ReadonlyArray<string>;
@@ -60,8 +62,10 @@ export interface GitHubConfiguration {
 export class GitHubCloudClient {
   private readonly config: GitHubConfiguration;
   private readonly fetcher: typeof fetch;
-  constructor(config: GitHubConfiguration, fetcher: typeof fetch = fetch) {
+  private readonly userId: string | undefined;
+  constructor(config: GitHubConfiguration, fetcher: typeof fetch = fetch, userId?: string) {
     this.config = config;
+    this.userId = userId;
     this.fetcher = fetcher.bind(globalThis);
   }
   private async appToken(now: number): Promise<string> {
@@ -154,7 +158,8 @@ export class GitHubCloudClient {
     now: number,
     permission: "read" | "write" = "read",
   ): Promise<string> {
-    if (!this.config.installationIds.includes(repository.installationId))
+    if (repository.githubAccountId) await this.authorize(repository, permission);
+    else if (!this.config.installationIds.includes(repository.installationId))
       throw new CloudError(
         "github_installation_denied",
         "GitHub installation is not allowlisted",
@@ -185,12 +190,79 @@ export class GitHubCloudClient {
       );
     return result.token;
   }
+  private async identity(accountId: string) {
+    if (!this.userId || !this.config.accounts)
+      throw new CloudError("github_needs_auth", "Sign in to manage GitHub accounts", 403);
+    const identity = await this.config.accounts.credential(this.userId, accountId);
+    const user = (await this.request("/user", identity.token)) as { id?: number };
+    if (String(user.id) !== identity.providerUserId)
+      throw new CloudError(
+        "github_identity_changed",
+        "GitHub returned a different account; reconnect it",
+        403,
+      );
+    return identity;
+  }
+
+  /** Validate the selected user's current access before issuing any installation token. */
+  private async authorize(repository: CloudRepository, permission: "read" | "write") {
+    const identity = await this.identity(repository.githubAccountId!);
+    const repo = (await this.request(
+      `/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.name)}`,
+      identity.token,
+    )) as {
+      id?: number;
+      permissions?: { pull?: boolean; push?: boolean };
+    };
+    if (
+      String(repo.id) !== repository.id ||
+      repo.permissions?.[permission === "write" ? "push" : "pull"] !== true
+    )
+      throw new CloudError(
+        "github_access_denied",
+        "The selected GitHub account no longer has the required repository access",
+        403,
+      );
+    // GitHub also verifies the repository belongs to this app installation when minting the scoped token.
+  }
+
   async repositories(now: number): Promise<CloudRepository[]> {
+    const accounts =
+      this.config.accounts && this.userId ? await this.config.accounts.list(this.userId) : [];
+    const access = new Map<string, Set<string>>();
+    for (const account of accounts) {
+      if (account.state !== "connected") continue;
+      const identity = await this.identity(account.id);
+      const ids = new Set<string>();
+      for (let page = 1; page <= 100; page++) {
+        const repos = (await this.request(
+          `/user/repos?per_page=100&page=${page}`,
+          identity.token,
+        )) as Array<{ id: number; permissions?: { pull?: boolean } }>;
+        for (const repo of repos) if (repo.permissions?.pull) ids.add(String(repo.id));
+        if (repos.length < 100) break;
+      }
+      access.set(account.id, ids);
+    }
+    if (!this.config.appId || !this.config.privateKey) return [];
+    const appToken = await this.appToken(now);
+    const installations = new Set(this.config.installationIds);
+    // Linked identities may use any installation of this Vitre app. Its private key
+    // cannot issue tokens for another app. User permissions are intersected below.
+    if (access.size)
+      for (let page = 1; page <= 100; page++) {
+        const items = (await this.request(
+          `/app/installations?per_page=100&page=${page}`,
+          appToken,
+        )) as Array<{ id: number; suspended_at: string | null }>;
+        for (const item of items) if (!item.suspended_at) installations.add(String(item.id));
+        if (items.length < 100) break;
+      }
     const repositories: CloudRepository[] = [];
-    for (const installationId of this.config.installationIds) {
+    for (const installationId of installations) {
       const auth = (await this.request(
         `/app/installations/${encodeURIComponent(installationId)}/access_tokens`,
-        await this.appToken(now),
+        appToken,
         "POST",
         { permissions: { contents: "read", metadata: "read" } },
       )) as { token: string };
@@ -206,17 +278,26 @@ export class GitHubCloudClient {
             default_branch: string;
           }>;
         };
-        for (const repo of result.repositories)
-          repositories.push({
-            id: String(repo.id),
-            installationId,
-            owner: repo.owner.login,
-            name: repo.name,
-            defaultBranch: repo.default_branch,
-            setupCommand: "",
-            testCommand: "",
-            revision: 0,
-          });
+        for (const repo of result.repositories) {
+          const matches = [...access]
+            .filter(([, ids]) => ids.has(String(repo.id)))
+            .map(([id]) => id);
+          // Legacy deployment installations remain usable until a linked identity is chosen.
+          if (!matches.length && this.config.installationIds.includes(installationId))
+            matches.push("");
+          for (const githubAccountId of matches)
+            repositories.push({
+              id: String(repo.id),
+              installationId,
+              ...(githubAccountId ? { githubAccountId } : {}),
+              owner: repo.owner.login,
+              name: repo.name,
+              defaultBranch: repo.default_branch,
+              setupCommand: "",
+              testCommand: "",
+              revision: 0,
+            });
+        }
         if (result.repositories.length < 100) break;
       }
     }
@@ -270,12 +351,20 @@ export class GitHubCloudClient {
     return { sha: result.sha, token };
   }
   async verifyRepository(repository: CloudRepository, now: number): Promise<CloudRepository> {
+    if (repository.installationId === "public" && repository.githubAccountId)
+      throw new CloudError(
+        "repository_access",
+        "Select a GitHub installation for this account",
+        403,
+      );
     const resolved =
       repository.installationId === "public"
         ? await this.publicRepository(repository.owner, repository.name)
         : (await this.repositories(now)).find(
             (entry) =>
-              entry.id === repository.id && entry.installationId === repository.installationId,
+              entry.id === repository.id &&
+              entry.installationId === repository.installationId &&
+              entry.githubAccountId === repository.githubAccountId,
           );
     if (
       !resolved ||

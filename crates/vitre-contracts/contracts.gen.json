@@ -2245,6 +2245,25 @@
         {
           "additionalProperties": false,
           "properties": {
+            "idempotencyKey": {
+              "allOf": [
+                {
+                  "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+                }
+              ],
+              "type": "string"
+            },
+            "type": {
+              "enum": ["github.refresh"],
+              "type": "string"
+            }
+          },
+          "required": ["type", "idempotencyKey"],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "expectedRevision": {
               "allOf": [
                 {
@@ -3600,6 +3619,36 @@
         }
       ]
     },
+    "CloudGitHubAccount": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
+            }
+          ],
+          "type": "string"
+        },
+        "login": {
+          "allOf": [
+            {
+              "minLength": 1
+            },
+            {
+              "maxLength": 65536
+            }
+          ],
+          "type": "string"
+        },
+        "state": {
+          "enum": ["connected", "needs_auth"],
+          "type": "string"
+        }
+      },
+      "required": ["id", "login", "state"],
+      "type": "object"
+    },
     "CloudHandoffErrorDisposition": {
       "enum": ["retryable", "terminal", "unknown"],
       "type": "string"
@@ -3864,6 +3913,23 @@
         },
         "enabled": {
           "type": "boolean"
+        },
+        "githubAccounts": {
+          "items": {
+            "$ref": "#/$defs/CloudGitHubAccount"
+          },
+          "type": "array"
+        },
+        "githubManageUrl": {
+          "allOf": [
+            {
+              "minLength": 1
+            },
+            {
+              "maxLength": 65536
+            }
+          ],
+          "type": "string"
         },
         "handoffs": {
           "items": {
@@ -4343,6 +4409,14 @@
             },
             {
               "maxLength": 65536
+            }
+          ],
+          "type": "string"
+        },
+        "githubAccountId": {
+          "allOf": [
+            {
+              "pattern": "^[a-zA-Z0-9_-]{1,128}$"
             }
           ],
           "type": "string"

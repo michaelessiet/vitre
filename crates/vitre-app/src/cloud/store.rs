@@ -107,6 +107,7 @@ pub enum Op {
     SignIn,
     Overview,
     Repositories,
+    GitHubAccounts,
     SaveRepository(String),
     CreateTask,
     Task(String, &'static str),
@@ -757,6 +758,18 @@ impl CloudStore {
         );
     }
 
+    pub fn refresh_github(&mut self, cx: &mut Context<Self>) {
+        self.command(
+            Op::GitHubAccounts,
+            CloudCommand::GithubRefresh {
+                idempotency_key: key(),
+            },
+            |_, _| None,
+            cx,
+        );
+        self.load_available(cx);
+    }
+
     pub fn load_available(&mut self, cx: &mut Context<Self>) {
         let Some(client) = self.client.clone() else {
             return;
@@ -769,14 +782,7 @@ impl CloudStore {
             async move { Ok(client.repositories().await?) },
             |store, response, _| match response {
                 Ok(repos) => {
-                    let configured: HashSet<String> =
-                        store.repositories().iter().map(|r| r.id.clone()).collect();
-                    store.available = Some(
-                        repos
-                            .into_iter()
-                            .filter(|r| !configured.contains(&r.id))
-                            .collect(),
-                    );
+                    store.available = Some(repos);
                 }
                 Err(error) => store.error = Some(error.to_string()),
             },
@@ -1502,6 +1508,7 @@ pub fn repository_with_setup(
     test_command: String,
 ) -> CloudRepository {
     CloudRepository {
+        github_account_id: None,
         default_branch,
         setup_command,
         test_command,
