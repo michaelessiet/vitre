@@ -164,6 +164,41 @@ it("shows authorization expiry and stops retaining an unusable pending request",
   expect(f.elements.error!.textContent).toContain("Code expired");
   expect(f.storage.size).toBe(0);
 });
+it.each([429, 503, 504, "network"])(
+  "retains the authorization code and resumes polling after a transient %s failure",
+  async (failure) => {
+    const f = await fixture("vitre-user");
+    await f.click("Connect GitHub account");
+    f.fetcher.mockImplementationOnce(async () => {
+      if (failure === "network") throw new TypeError("Failed to fetch");
+      return new Response("Temporarily unavailable", { status: Number(failure) });
+    });
+    await f.timers.at(-1)!();
+    expect(f.storage.size).toBe(1);
+    expect(f.elements.connection!.children.some((el) => el.textContent === "ABCD-EFGH")).toBe(true);
+    expect(f.elements.error!.textContent).toContain("Retrying automatically");
+    f.result({
+      status: "connected",
+      account: { id: "gha_456", login: "work", state: "connected" },
+    });
+    await f.timers.at(-1)!();
+    expect(f.storage.size).toBe(0);
+    expect(f.elements.error!.textContent).toBe("");
+    expect(f.elements.status!.textContent).toContain("@work is connected");
+  },
+);
+it("does not retry polling or retain the code after authentication is revoked", async () => {
+  const f = await fixture("vitre-user");
+  await f.click("Connect GitHub account");
+  const scheduled = f.timers.length;
+  f.fetcher.mockImplementationOnce(async () =>
+    Response.json({ message: "Sign in again" }, { status: 401 }),
+  );
+  await f.timers.at(-1)!();
+  expect(f.timers).toHaveLength(scheduled);
+  expect(f.storage.size).toBe(0);
+  expect(f.elements.error!.textContent).toContain("Sign in again");
+});
 it("keeps the sign-in identity and disconnects only the selected repository connection", async () => {
   const f = await fixture("vitre-user");
   const personal = f.elements.accounts!.children[0]!;
