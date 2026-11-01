@@ -30,6 +30,13 @@ archive and delete remain in the conversation menu. Settings → Cloud manages
 accounts and limits; usage separates money **used** from money **held** for active
 work.
 
+Use **Manage GitHub accounts** in Cloud settings to connect repository accounts.
+Choose **Connect GitHub account**, enter the displayed code on GitHub, select the
+account, and review its permissions. Keep the Vitre page open until it confirms
+the connection. Private repositories also need the Vitre GitHub App installed.
+Sign in to the same Vitre account on desktop and mobile to use these connections;
+connecting another repository account does not add a new Vitre sign-in method.
+
 Cloud sign-in is persisted and shared across desktop windows and subprocesses.
 Project data stays separate. Selecting a location updates immediately while the
 move runs; failed moves restore the previous selection.

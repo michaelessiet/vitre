@@ -27,7 +27,7 @@ import * as Layer from "effect/Layer";
 import { CloudConfiguration } from "./config.ts";
 import { CloudStore, type CloudAccountDocument } from "./store.ts";
 import { CredentialVault, sha256 } from "./crypto.ts";
-import { GitHubCloudClient } from "./github.ts";
+import { GitHubCloudClient, githubForRequest } from "./github.ts";
 import { CloudError, iso } from "./policy.ts";
 import { currentMillis, fromPromise } from "./service.ts";
 import {
@@ -51,7 +51,11 @@ export const make = Effect.gen(function* () {
   const store = yield* CloudStore;
   const artifacts = yield* CloudArtifacts;
   const vault = () => new CredentialVault(config.encryptionKey);
-  const github = new GitHubCloudClient(config.github, fetch, config.allowedUserId);
+  const github = githubForRequest(config.github).pipe(
+    Effect.map(
+      (configuration) => new GitHubCloudClient(configuration, fetch, config.allowedUserId),
+    ),
+  );
   const authenticateDocument = (document: CloudAccountDocument, taskId: string, hash: string) => {
     if (document.private.workerTokens[taskId]?.hash !== hash)
       throw new CloudError("unauthorized", "Invalid worker credential", 401);
@@ -87,7 +91,8 @@ export const make = Effect.gen(function* () {
           new CloudError("invalid_snapshot", "No legacy project workspace is selected", 400),
         );
       const now = yield* currentMillis;
-      return yield* fromPromise(() => github.resolve(task.repository, task.baseSha!, now));
+      const client = yield* github;
+      return yield* fromPromise(() => client.resolve(task.repository, task.baseSha!, now));
     }),
     workspaceChunkStatus: (userId: string, hash: string) =>
       workspaceChunkStatus(userId, hash).pipe(Effect.provideService(CloudArtifacts, artifacts)),
@@ -325,6 +330,7 @@ export const make = Effect.gen(function* () {
           yieldIdle: shouldYieldIdleWorker(document.state, task, yield* currentMillis),
         };
       const now = yield* currentMillis;
+      const client = yield* github;
       const snapshotHead =
         task.source?.kind === "github"
           ? yield* readWorkspace(config.allowedUserId, task.source.snapshot.sha256).pipe(
@@ -347,10 +353,10 @@ export const make = Effect.gen(function* () {
               : task.baseSha
                 ? {
                     sha: task.baseSha,
-                    token: yield* fromPromise(() => github.readAccess(task.repository, now)),
+                    token: yield* fromPromise(() => client.readAccess(task.repository, now)),
                   }
                 : yield* fromPromise(() =>
-                    github.resolve(
+                    client.resolve(
                       task.repository,
                       task.source?.kind === "github"
                         ? task.source.revision
@@ -368,10 +374,10 @@ export const make = Effect.gen(function* () {
         task.issueNumber === null
           ? null
           : yield* fromPromise(async () =>
-              github.issue(
+              client.issue(
                 task.repository,
                 task.issueNumber!,
-                snapshotHead ? await github.readAccess(task.repository, now) : resolved.token,
+                snapshotHead ? await client.readAccess(task.repository, now) : resolved.token,
               ),
             );
       return {

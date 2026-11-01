@@ -1,5 +1,5 @@
 import { githubAccountPage } from "./cloud/githubAccountPage.ts";
-import { GitHubConnections } from "./cloud/githubConnections.ts";
+import { githubConnectionsForRequest } from "./cloud/githubConnections.ts";
 import { CredentialVault } from "./cloud/crypto.ts";
 import { createGitHubAccounts } from "./cloud/githubAccounts.ts";
 import * as Alchemy from "alchemy";
@@ -303,7 +303,6 @@ export default class Api extends Cloudflare.Worker<Api>()(
             CloudConfiguration,
             Effect.gen(function* () {
               const store = yield* CloudStore.CloudStore;
-              const run = Effect.runPromiseWith(yield* Effect.context<never>());
               const github = {
                 appId: githubAppId,
                 privateKey: Redacted.value(githubPrivateKey),
@@ -313,17 +312,14 @@ export default class Api extends Cloudflare.Worker<Api>()(
                   .filter(Boolean),
               };
               const clerkAccounts = createGitHubAccounts(Redacted.value(clerkSecretKey));
-              const accounts = Redacted.value(cloudEncryptionKey)
-                ? new GitHubConnections(
+              const accountsForRequest = Redacted.value(cloudEncryptionKey)
+                ? githubConnectionsForRequest(
                     clerkAccounts,
                     github,
-                    {
-                      read: (userId) => run(store.read(userId)),
-                      mutate: (userId, reduce) => run(store.mutate(userId, reduce)),
-                    },
+                    store,
                     new CredentialVault(Redacted.value(cloudEncryptionKey)),
                   )
-                : clerkAccounts;
+                : undefined;
               return CloudConfiguration.of({
                 enabled: cloudEnabled,
                 allowedUserId: cloudAllowedUserId,
@@ -339,7 +335,8 @@ export default class Api extends Cloudflare.Worker<Api>()(
                     }
                   : {}),
                 github: {
-                  accounts,
+                  accounts: clerkAccounts,
+                  ...(accountsForRequest ? { accountsForRequest } : {}),
                   appId: githubAppId,
                   privateKey: Redacted.value(githubPrivateKey),
                   installationIds: githubInstallationIds

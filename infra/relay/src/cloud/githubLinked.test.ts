@@ -86,6 +86,70 @@ describe("linked repository access", () => {
     const { client } = fixture();
     expect(await client.repositories(0)).toEqual([repository]);
   });
+  it("loads paginated user and installation access concurrently before intersecting them", async () => {
+    let releaseInstallation = () => {};
+    const installationStarted = new Promise<void>((resolve) => {
+      releaseInstallation = resolve;
+    });
+    const pages: string[] = [];
+    const client = new GitHubCloudClient(
+      {
+        appId: "999",
+        privateKey,
+        installationIds: [],
+        accounts: {
+          list: async () => [{ id: "work", login: "work", state: "connected" }],
+          credential: async () => ({ id: "work", providerUserId: "2", token: "user-token" }),
+        },
+      },
+      async (url) => {
+        const request = new URL(String(url));
+        const path = request.pathname;
+        const page = request.searchParams.get("page");
+        if (path === "/user") return Response.json({ id: 2 });
+        if (path === "/app/installations") return Response.json([{ id: 123, suspended_at: null }]);
+        if (path.endsWith("/access_tokens")) return Response.json({ token: "app-token" });
+        pages.push(path + ":" + page);
+        if (path === "/user/repos") {
+          // A serial implementation cannot reach the installation fetch that releases this.
+          await installationStarted;
+          return Response.json(
+            page === "1"
+              ? Array.from({ length: 100 }, (_, index) => ({
+                  id: 1000 + index,
+                  permissions: { pull: true },
+                }))
+              : [{ id: 42, permissions: { pull: true } }],
+          );
+        }
+        if (path === "/installation/repositories") {
+          releaseInstallation();
+          return Response.json({
+            repositories: (page === "1"
+              ? Array.from({ length: 100 }, (_, i) => 2000 + i)
+              : [42, 44]
+            ).map((id) => ({ id, owner: { login: "org" }, name: "repo", default_branch: "main" })),
+          });
+        }
+        throw new Error("Unexpected request " + path);
+      },
+      "vitre",
+    );
+    expect(await client.repositories(0)).toEqual([repository]);
+    expect(pages).toEqual(
+      expect.arrayContaining([
+        "/user/repos:1",
+        "/user/repos:2",
+        "/installation/repositories:1",
+        "/installation/repositories:2",
+      ]),
+    );
+  });
+  it("does not expose installation results when concurrent identity verification fails", async () => {
+    await expect(fixture({ identity: 3 }).client.repositories(0)).rejects.toMatchObject({
+      code: "github_identity_changed",
+    });
+  });
   it("rechecks the selected account and issues a repository-scoped read token", async () => {
     const { client, minted } = fixture();
     expect(await client.repositoryToken(repository, 0)).toBe("scoped-token");

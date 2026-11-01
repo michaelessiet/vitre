@@ -1,6 +1,7 @@
 import type { GitHubAccounts } from "./githubAccounts.ts";
 import { CloudError } from "./policy.ts";
 import type { CloudRepository, CloudTask, CloudPublication } from "@t3tools/contracts/cloud";
+import * as Effect from "effect/Effect";
 
 const utf8 = new TextEncoder();
 const encode = (bytes: Uint8Array) =>
@@ -9,6 +10,16 @@ const encode = (bytes: Uint8Array) =>
     .replaceAll("+", "-")
     .replaceAll("/", "_");
 const json64 = (value: unknown) => encode(utf8.encode(JSON.stringify(value)));
+
+async function inBatches<A, B>(
+  items: ReadonlyArray<A>,
+  run: (item: A) => Promise<B>,
+): Promise<B[]> {
+  const results: B[] = [];
+  for (let index = 0; index < items.length; index += 4)
+    results.push(...(await Promise.all(items.slice(index, index + 4).map(run))));
+  return results;
+}
 
 const der = (tag: number, bytes: Uint8Array): Uint8Array<ArrayBuffer> => {
   const length: number[] = [];
@@ -55,10 +66,20 @@ export function githubPrivateKeyBytes(pem: string): Uint8Array<ArrayBuffer> {
 
 export interface GitHubConfiguration {
   accounts?: GitHubAccounts;
+  accountsForRequest?: Effect.Effect<GitHubAccounts>;
   appId: string;
   privateKey: string;
   installationIds: ReadonlyArray<string>;
 }
+/** Resolve request-bound database access only inside the calling Worker event. */
+export const githubForRequest = (config: GitHubConfiguration): Effect.Effect<GitHubConfiguration> =>
+  config.accountsForRequest
+    ? Effect.map(config.accountsForRequest, (accounts) => {
+        const resolved = { ...config, accounts };
+        delete resolved.accountsForRequest;
+        return resolved;
+      })
+    : Effect.succeed(config);
 export class GitHubCloudClient {
   private readonly config: GitHubConfiguration;
   private readonly fetcher: typeof fetch;
@@ -244,81 +265,89 @@ export class GitHubCloudClient {
   }
 
   async repositories(now: number): Promise<CloudRepository[]> {
-    const accounts =
-      this.config.accounts && this.userId ? await this.config.accounts.list(this.userId) : [];
-    const access = new Map<string, Set<string>>();
-    for (const account of accounts) {
-      if (account.state !== "connected") continue;
-      const identity = await this.identity(account.id);
-      const ids = new Set<string>();
-      for (let page = 1; page <= 100; page++) {
-        const repos = (await this.request(
-          `/user/repos?per_page=100&page=${page}`,
-          identity.token,
-        )) as Array<{ id: number; permissions?: { pull?: boolean } }>;
-        for (const repo of repos) if (repo.permissions?.pull) ids.add(String(repo.id));
-        if (repos.length < 100) break;
-      }
-      access.set(account.id, ids);
-    }
     if (!this.config.appId || !this.config.privateKey) return [];
-    const appToken = await this.appToken(now);
-    const installations = new Set(this.config.installationIds);
-    // Linked identities may use any installation of this Vitre app. Its private key
-    // cannot issue tokens for another app. User permissions are intersected below.
-    if (access.size)
-      for (let page = 1; page <= 100; page++) {
-        const items = (await this.request(
-          `/app/installations?per_page=100&page=${page}`,
-          appToken,
-        )) as Array<{ id: number; suspended_at: string | null }>;
-        for (const item of items) if (!item.suspended_at) installations.add(String(item.id));
-        if (items.length < 100) break;
-      }
-    const repositories: CloudRepository[] = [];
-    for (const installationId of installations) {
-      const auth = (await this.request(
-        `/app/installations/${encodeURIComponent(installationId)}/access_tokens`,
-        appToken,
-        "POST",
-        { permissions: { contents: "read", metadata: "read" } },
-      )) as { token: string };
-      for (let page = 1; page <= 100; page++) {
-        const result = (await this.request(
-          `/installation/repositories?per_page=100&page=${page}`,
-          auth.token,
-        )) as {
-          repositories: Array<{
-            id: number;
-            owner: { login: string };
-            name: string;
-            default_branch: string;
-          }>;
-        };
-        for (const repo of result.repositories) {
-          const matches = [...access]
-            .filter(([, ids]) => ids.has(String(repo.id)))
-            .map(([id]) => id);
-          // Legacy deployment installations remain usable until a linked identity is chosen.
-          if (!matches.length && this.config.installationIds.includes(installationId))
-            matches.push("");
-          for (const githubAccountId of matches)
-            repositories.push({
-              id: String(repo.id),
-              installationId,
-              ...(githubAccountId ? { githubAccountId } : {}),
-              owner: repo.owner.login,
-              name: repo.name,
-              defaultBranch: repo.default_branch,
-              setupCommand: "",
-              testCommand: "",
-              revision: 0,
-            });
+    const loadAccess = async () => {
+      const accounts =
+        this.config.accounts && this.userId ? await this.config.accounts.list(this.userId) : [];
+      return new Map(
+        await inBatches(
+          accounts.filter((account) => account.state === "connected"),
+          async (account) => {
+            const identity = await this.identity(account.id);
+            const ids = new Set<string>();
+            for (let page = 1; page <= 100; page++) {
+              const repos = (await this.request(
+                `/user/repos?per_page=100&page=${page}`,
+                identity.token,
+              )) as Array<{ id: number; permissions?: { pull?: boolean } }>;
+              for (const repo of repos) if (repo.permissions?.pull) ids.add(String(repo.id));
+              if (repos.length < 100) break;
+            }
+            return [account.id, ids] as const;
+          },
+        ),
+      );
+    };
+    const loadInstallations = async () => {
+      const appToken = await this.appToken(now);
+      const installations = new Set(this.config.installationIds);
+      // App visibility and user visibility are independent. Load both concurrently,
+      // then intersect them before exposing any repositories to the caller.
+      if (this.config.accounts && this.userId)
+        for (let page = 1; page <= 100; page++) {
+          const items = (await this.request(
+            `/app/installations?per_page=100&page=${page}`,
+            appToken,
+          )) as Array<{ id: number; suspended_at: string | null }>;
+          for (const item of items) if (!item.suspended_at) installations.add(String(item.id));
+          if (items.length < 100) break;
         }
-        if (result.repositories.length < 100) break;
-      }
-    }
-    return repositories;
+      return (
+        await inBatches([...installations], async (installationId) => {
+          const auth = (await this.request(
+            `/app/installations/${encodeURIComponent(installationId)}/access_tokens`,
+            appToken,
+            "POST",
+            { permissions: { contents: "read", metadata: "read" } },
+          )) as { token: string };
+          const repositories: CloudRepository[] = [];
+          for (let page = 1; page <= 100; page++) {
+            const result = (await this.request(
+              `/installation/repositories?per_page=100&page=${page}`,
+              auth.token,
+            )) as {
+              repositories: Array<{
+                id: number;
+                owner: { login: string };
+                name: string;
+                default_branch: string;
+              }>;
+            };
+            for (const repo of result.repositories)
+              repositories.push({
+                id: String(repo.id),
+                installationId,
+                owner: repo.owner.login,
+                name: repo.name,
+                defaultBranch: repo.default_branch,
+                setupCommand: "",
+                testCommand: "",
+                revision: 0,
+              });
+            if (result.repositories.length < 100) break;
+          }
+          return repositories;
+        })
+      ).flat();
+    };
+    const [access, repositories] = await Promise.all([loadAccess(), loadInstallations()]);
+    return repositories.flatMap((repository) => {
+      const matches = [...access].filter(([, ids]) => ids.has(repository.id)).map(([id]) => id);
+      // Legacy deployment installations remain usable until a linked identity is chosen.
+      if (!matches.length && this.config.installationIds.includes(repository.installationId))
+        return [repository];
+      return matches.map((githubAccountId) => ({ ...repository, githubAccountId }));
+    });
   }
   async readAccess(repository: CloudRepository, now: number): Promise<string> {
     // Connected repositories use their scoped installation credential. Anonymous

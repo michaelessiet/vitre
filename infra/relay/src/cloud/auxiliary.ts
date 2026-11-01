@@ -10,7 +10,7 @@ import { CloudStore } from "./store.ts";
 import { CloudArtifacts, artifactPrefix, type CheckpointManifest } from "./artifacts.ts";
 import { CredentialVault, sha256 } from "./crypto.ts";
 import { computeExecutor } from "./compute.ts";
-import { GitHubCloudClient } from "./github.ts";
+import { GitHubCloudClient, githubForRequest } from "./github.ts";
 import { accrueJobs, reserveJob } from "./jobs.ts";
 import { CloudError, iso } from "./policy.ts";
 import { currentMillis, fromPromise } from "./service.ts";
@@ -22,7 +22,11 @@ export const make = Effect.gen(function* () {
   const artifacts = yield* CloudArtifacts;
   const crypto = yield* Crypto.Crypto;
   const executor = computeExecutor(config);
-  const github = new GitHubCloudClient(config.github, fetch, config.allowedUserId);
+  const github = githubForRequest(config.github).pipe(
+    Effect.map(
+      (configuration) => new GitHubCloudClient(configuration, fetch, config.allowedUserId),
+    ),
+  );
   const vault = () => new CredentialVault(config.encryptionKey);
   const own = (userId: string) =>
     userId === config.allowedUserId && !!userId
@@ -63,12 +67,14 @@ export const make = Effect.gen(function* () {
       name: string,
     ) {
       yield* own(userId);
-      return yield* fromPromise(() => github.publicRepository(owner, name));
+      const client = yield* github;
+      return yield* fromPromise(() => client.publicRepository(owner, name));
     }),
     repositories: Effect.fn("cloud.available_repositories")(function* (userId: string) {
       yield* own(userId);
       const now = yield* currentMillis;
-      return yield* fromPromise(() => github.repositories(now));
+      const client = yield* github;
+      return yield* fromPromise(() => client.repositories(now));
     }),
     login: Effect.fnUntraced(function* (userId: string, key: string) {
       yield* own(userId);
@@ -148,6 +154,7 @@ export const make = Effect.gen(function* () {
       const { task, manifest } = yield* manifestFor(id);
       const publication = doc.state.publications[job.publicationId!]!;
       const now = yield* currentMillis;
+      const client = yield* github;
       return {
         kind: "publication",
         done: false,
@@ -157,7 +164,7 @@ export const make = Effect.gen(function* () {
         deadlineAt: job.deadlineAt,
         sequence: job.sequence,
         repositoryToken: yield* fromPromise(() =>
-          github.repositoryToken(task.repository, now, "write"),
+          client.repositoryToken(task.repository, now, "write"),
         ),
       };
     }),
@@ -333,8 +340,9 @@ export const make = Effect.gen(function* () {
                   current.publicationAttempted = true;
                   return allow;
                 });
+                const client = yield* github;
                 const outcome = yield* fromPromise(() =>
-                  github.publish(task, publication, job.commit ?? null, now, allowCreate),
+                  client.publish(task, publication, job.commit ?? null, now, allowCreate),
                 ).pipe(Effect.result);
                 yield* store.mutate(userId, (next) => {
                   const p = next.state.publications[publication.id]!;

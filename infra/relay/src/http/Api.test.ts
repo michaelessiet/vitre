@@ -17,6 +17,7 @@ import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 import { RelayClientAuth, RelayEnvironmentAuth } from "@t3tools/contracts/relay";
 
 import {
+  CLOUD_REQUEST_DEADLINE_MS,
   RELAY_REQUEST_DEADLINE_MS,
   relayCors,
   relayDocsRedirectRoute,
@@ -202,13 +203,41 @@ describe("relay request tracing", () => {
   it.effect("keeps the deadline without constructing an exporter when tracing is disabled", () =>
     Effect.gen(function* () {
       const exporter = Layer.effectDiscard(Effect.die("Exporter must not be constructed"));
-      const request = HttpServerRequest.fromWeb(new Request("https://relay.test/v1/cloud"));
+      const request = HttpServerRequest.fromWeb(
+        new Request("https://relay.test/v1/mobile/devices"),
+      );
       const fiber = yield* traceRelayHttpRequestWith(Effect.never, exporter, false).pipe(
         Effect.provideService(HttpServerRequest.HttpServerRequest, request),
         Effect.forkChild,
       );
       yield* TestClock.adjust(Duration.millis(RELAY_REQUEST_DEADLINE_MS));
       expect((yield* Fiber.join(fiber)).status).toBe(504);
+    }),
+  );
+  it.effect("allows cloud operations to finish beyond the relay deadline", () =>
+    Effect.gen(function* () {
+      const request = HttpServerRequest.fromWeb(
+        new Request("https://relay.test/v1/cloud/repositories/available"),
+      );
+      const fiber = yield* traceRelayHttpRequestWith(
+        Effect.sleep("12 seconds").pipe(Effect.as(HttpServerResponse.empty({ status: 200 }))),
+        Layer.empty,
+        false,
+      ).pipe(Effect.provideService(HttpServerRequest.HttpServerRequest, request), Effect.forkChild);
+      yield* TestClock.adjust("12 seconds");
+      expect((yield* Fiber.join(fiber)).status).toBe(200);
+    }),
+  );
+  it.effect("still ends hung cloud operations before the cloud client's 30s abort", () =>
+    Effect.gen(function* () {
+      const request = HttpServerRequest.fromWeb(new Request("https://relay.test/v1/cloud?after=1"));
+      const fiber = yield* traceRelayHttpRequestWith(Effect.never, Layer.empty, false).pipe(
+        Effect.provideService(HttpServerRequest.HttpServerRequest, request),
+        Effect.forkChild,
+      );
+      yield* TestClock.adjust(Duration.millis(CLOUD_REQUEST_DEADLINE_MS));
+      expect((yield* Fiber.join(fiber)).status).toBe(504);
+      expect(CLOUD_REQUEST_DEADLINE_MS).toBeLessThan(30_000);
     }),
   );
   it.effect(

@@ -1,5 +1,5 @@
-/** Shared desktop/mobile account page. Clerk verifies new identities on the
- * existing user; this page never creates or merges Vitre accounts by email. */
+/** Shared desktop/mobile page for repository connections on an existing Vitre
+ * account. This page never creates or merges Vitre accounts by email. */
 export function githubAccountPage(publishableKey: string): string {
   const host = atob(publishableKey.replace(/^pk_(test|live)_/, "")).replace(/\$$/, "");
   if (!/^[a-z0-9.-]+$/.test(host)) throw new Error("Invalid Clerk frontend domain");
@@ -25,6 +25,8 @@ window.addEventListener('load', async () => {
   if (expected) returnUrl.searchParams.set('user', expected);
   const storageKey = 'vitre.github.connection.' + expected;
   let timer;
+  let expiresAt = Date.now() + 15 * 60_000;
+  let retryDelay = 5000;
   const currentAccount = () => expected && Clerk.user?.id === expected;
   const stopPolling = () => { if (timer) clearTimeout(timer); timer = undefined; };
   const request = async (path, body) => {
@@ -33,13 +35,21 @@ window.addEventListener('load', async () => {
     const token = await Clerk.session?.getToken({ template: 't3-relay' });
     if (!token || !currentAccount() || Clerk.session?.id !== session)
       throw new Error('Your session changed. Reload this page and sign in again.');
-    const response = await fetch(path, {
-      method: body ? 'POST' : 'GET',
-      headers: { Authorization: 'Bearer ' + token, ...(body ? { 'Content-Type': 'application/json' } : {}) },
-      ...(body ? { body: JSON.stringify(body) } : {}),
-    });
-    const value = await response.json();
-    if (!response.ok) throw new Error(value.message || 'This operation could not complete. Try again.');
+    let response;
+    try {
+      response = await fetch(path, {
+        method: body ? 'POST' : 'GET',
+        headers: { Authorization: 'Bearer ' + token, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      });
+    } catch {
+      throw Object.assign(new Error('Your connection was interrupted. Try again.'), { retryable: true });
+    }
+    const value = await response.json().catch(() => null);
+    const retryable = response.status === 429 || response.status >= 500 || value?.code === 'concurrent_update';
+    if (!response.ok || !value) throw Object.assign(
+      new Error(value?.message || 'This operation could not complete. Try again.'), { retryable },
+    );
     return value;
   };
   const button = (label, action, requireAccount = true) => {
@@ -63,14 +73,25 @@ window.addEventListener('load', async () => {
     stopPolling();
     if (!currentAccount()) return;
     try {
-      await showConnection(await request('/v1/cloud/github/connections', { type: 'poll', requestId }));
+      const value = await request('/v1/cloud/github/connections', { type: 'poll', requestId });
+      if (!currentAccount() || sessionStorage.getItem(storageKey) !== requestId) return;
+      await showConnection(value);
     } catch (failure) {
+      if (sessionStorage.getItem(storageKey) !== requestId) return;
+      if (failure.retryable && currentAccount() && Date.now() < expiresAt) {
+        error.textContent = 'Connection interrupted. Retrying automatically; you can finish authorizing on GitHub.';
+        timer = setTimeout(() => poll(requestId), retryDelay);
+        retryDelay = Math.min(30000, retryDelay * 2);
+        return;
+      }
       sessionStorage.removeItem(storageKey);
       connection.replaceChildren();
       error.textContent = failure.message || 'The connection expired. Start a new one.';
     }
   };
   const showConnection = async value => {
+    error.textContent = ''; retryDelay = 5000;
+    expiresAt = value.expiresAt || Date.now() + 15 * 60_000;
     connection.replaceChildren();
     if (value.status === 'connected') {
       stopPolling(); sessionStorage.removeItem(storageKey);
@@ -138,8 +159,10 @@ window.addEventListener('load', async () => {
       rows.append(row);
     }
     actions.append(button('Connect GitHub account', async () => {
-      stopPolling(); sessionStorage.removeItem(storageKey);
-      await showConnection(await request('/v1/cloud/github/connections', { type: 'start', requestId: crypto.randomUUID() }));
+      stopPolling();
+      const requestId = sessionStorage.getItem(storageKey) || crypto.randomUUID();
+      sessionStorage.setItem(storageKey, requestId);
+      await showConnection(await request('/v1/cloud/github/connections', { type: 'start', requestId }));
     }));
     actions.append(button('Refresh', async () => {
       await Clerk.user.reload();

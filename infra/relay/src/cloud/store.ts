@@ -56,21 +56,21 @@ export const layer = Layer.effect(
         .limit(1)
         .pipe(Effect.mapError(persistenceError));
     return CloudStore.of({
-      read: (userId) =>
-        load(userId).pipe(
-          Effect.map((rows) => {
-            const document = structuredClone(rows[0]?.document ?? emptyDocument());
-            document.state.revision = rows[0]?.revision ?? 0;
-            return document;
-          }),
-        ),
-      users: db
-        .select({ userId: relayCloudAccounts.userId })
-        .from(relayCloudAccounts)
-        .pipe(
-          Effect.map((rows) => rows.map((r) => r.userId)),
-          Effect.mapError(persistenceError),
-        ),
+      // requestPostgres returns a lazy query proxy whose iterator must be
+      // evaluated before handing the operation to a runtime or Promise adapter.
+      read: Effect.fnUntraced(function* (userId) {
+        const rows = yield* load(userId);
+        const document = structuredClone(rows[0]?.document ?? emptyDocument());
+        document.state.revision = rows[0]?.revision ?? 0;
+        return document;
+      }),
+      users: Effect.gen(function* () {
+        const rows = yield* db
+          .select({ userId: relayCloudAccounts.userId })
+          .from(relayCloudAccounts)
+          .pipe(Effect.mapError(persistenceError));
+        return rows.map((row) => row.userId);
+      }),
       mutate: <A>(userId: string, reduce: (document: CloudAccountDocument) => A) =>
         Effect.gen(function* () {
           // Retried reducers may run more than once. They must never perform external I/O.

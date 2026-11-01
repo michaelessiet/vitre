@@ -22,6 +22,7 @@ import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import * as HttpApiError from "effect/unstable/httpapi/HttpApiError";
 import { encodeOAuthScope } from "@t3tools/shared/oauthScope";
 import { httpHeaderRedactionLayer } from "@t3tools/shared/httpObservability";
+import { requestRouteFamily } from "./requestRouting.ts";
 
 import {
   RelayApi,
@@ -166,6 +167,9 @@ export const relayDocsRedirectRoute = HttpRouter.add(
 // contains the exact child span that stalled, and the response still carries
 // the traceparent back to the client.
 export const RELAY_REQUEST_DEADLINE_MS = 9_000;
+// Cloud clients allow 30s. GitHub pagination and machine control can legitimately
+// outlast the relay/mobile-registration deadline; still fail before those clients.
+export const CLOUD_REQUEST_DEADLINE_MS = 25_000;
 
 const relayRequestDeadline = <E, R>(
   httpEffect: Effect.Effect<
@@ -174,29 +178,36 @@ const relayRequestDeadline = <E, R>(
     HttpServerRequest.HttpServerRequest | R
   >,
 ) =>
-  httpEffect.pipe(
-    Effect.timeoutOption(Duration.millis(RELAY_REQUEST_DEADLINE_MS)),
-    Effect.flatMap(
-      Option.match({
-        onNone: () =>
-          Effect.gen(function* () {
-            const request = yield* HttpServerRequest.HttpServerRequest;
-            yield* Effect.logError("relay request exceeded deadline", {
-              "http.method": request.method,
-              "http.url": request.url,
-              "relay.request.deadline_ms": RELAY_REQUEST_DEADLINE_MS,
-            });
-            yield* Effect.annotateCurrentSpan({
-              "relay.request.deadline_exceeded": true,
-            });
-            return HttpServerResponse.jsonUnsafe(
-              { error: "relay_request_deadline_exceeded" },
-              { status: 504 },
-            );
+  HttpServerRequest.HttpServerRequest.pipe(
+    Effect.flatMap((request) => {
+      const deadline =
+        requestRouteFamily(request.url) === "cloud"
+          ? CLOUD_REQUEST_DEADLINE_MS
+          : RELAY_REQUEST_DEADLINE_MS;
+      return httpEffect.pipe(
+        Effect.timeoutOption(Duration.millis(deadline)),
+        Effect.flatMap(
+          Option.match({
+            onNone: () =>
+              Effect.gen(function* () {
+                yield* Effect.logError("relay request exceeded deadline", {
+                  "http.method": request.method,
+                  "http.url": request.url,
+                  "relay.request.deadline_ms": deadline,
+                });
+                yield* Effect.annotateCurrentSpan({
+                  "relay.request.deadline_exceeded": true,
+                });
+                return HttpServerResponse.jsonUnsafe(
+                  { error: "relay_request_deadline_exceeded" },
+                  { status: 504 },
+                );
+              }),
+            onSome: Effect.succeed,
           }),
-        onSome: Effect.succeed,
-      }),
-    ),
+        ),
+      );
+    }),
   );
 
 export const traceRelayHttpRequest = <E, R>(
