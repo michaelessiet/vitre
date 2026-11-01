@@ -250,3 +250,16 @@ cloud credential vault and bound to their owner and connection version.
 Polling and refresh use durable leases; disconnecting during a refresh cannot
 restore the connection. Disconnect removes the repository credential from
 Vitre without changing its sign-in identities or deleting conversations.
+
+### Account write concurrency regression
+
+Cloud mutations lock the account row inside a PostgreSQL transaction. This keeps
+background reconciliation and user commands from exhausting optimistic retries.
+Reducers perform no external I/O; rejected reducers roll back the whole transaction.
+The lock wait is bounded to ten seconds.
+
+The focused `src/cloud/store.postgres.test.ts` integration test uses the real
+request-bound connection adapter and runs two batches of 32 concurrent mutations.
+It is opt-in: set `VITRE_STORE_TEST_DATABASE_URL` to a disposable PostgreSQL database
+named `vitre_store` on `127.0.0.1`, then run that test with `vp test run`. The test
+refuses other database targets and removes its account records afterwards.

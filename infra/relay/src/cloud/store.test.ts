@@ -6,8 +6,9 @@ import { proxyChain } from "alchemy/Util/proxy-chain";
 import { RelayDb } from "../db.ts";
 import { CloudStore, emptyDocument, layer, type CloudAccountDocument } from "./store.ts";
 import { publicOverview } from "./state.ts";
+import { CloudError } from "./policy.ts";
 
-/** Exercise the real optimistic store against a deterministic SQL boundary. */
+/** Exercise reducer results and rollback at a deterministic transaction boundary. */
 function fixture(initialRevision?: number, race = false) {
   let row =
     initialRevision === undefined
@@ -20,41 +21,88 @@ function fixture(initialRevision?: number, race = false) {
   if (row) row.document.state.revision = 999;
   const attempted: number[] = [];
   let raced = false;
-  const commit = (candidate: { revision: number; document: CloudAccountDocument }) =>
-    Effect.sync(() => {
-      attempted.push(candidate.revision);
-      if (race && !raced) {
-        raced = true;
-        row = { userId: "user", revision: (row?.revision ?? 0) + 1, document: emptyDocument() };
-        return [];
-      }
-      row = { userId: "user", ...candidate };
-      return [{ userId: "user" }];
-    });
-  const db = {
-    select: () => ({
-      from: () =>
-        Object.assign(Effect.succeed([{ userId: "user" }]), {
-          where: () => ({ limit: () => Effect.sync(() => (row ? [structuredClone(row)] : [])) }),
-        }),
+  const select = () => ({
+    from: () => ({
+      where: () => ({
+        limit: () => {
+          const read = Effect.sync(() => (row ? [structuredClone(row)] : []));
+          return Object.assign(read, {
+            for: () =>
+              Effect.gen(function* () {
+                if (race && !raced && row) {
+                  raced = true;
+                  row = { ...row, revision: row.revision + 1 };
+                }
+                return yield* read;
+              }),
+          });
+        },
+      }),
     }),
+  });
+  const db = {
+    select,
+    execute: () => Effect.void,
+    transaction: <A, E>(reduce: (tx: unknown) => Effect.Effect<A, E>) =>
+      Effect.gen(function* () {
+        const prior = structuredClone(row);
+        return yield* reduce(db).pipe(
+          Effect.onError(() =>
+            Effect.sync(() => {
+              row = prior;
+            }),
+          ),
+        );
+      }),
     insert: () => ({
-      values: (candidate: { revision: number; document: CloudAccountDocument }) => ({
-        onConflictDoNothing: () => ({ returning: () => commit(candidate) }),
+      values: (candidate: typeof row) => ({
+        onConflictDoNothing: () =>
+          Effect.sync(() => {
+            if (!row)
+              row = race ? { userId: "user", revision: 1, document: emptyDocument() } : candidate;
+            raced = true;
+          }),
       }),
     }),
     update: () => ({
       set: (candidate: { revision: number; document: CloudAccountDocument }) => ({
-        where: () => ({ returning: () => commit(candidate) }),
+        where: () =>
+          Effect.sync(() => {
+            attempted.push(candidate.revision);
+            row = { userId: "user", ...candidate };
+          }),
       }),
     }),
-  } as unknown as RelayDb["Service"];
+  };
   const run = <A, E>(effect: Effect.Effect<A, E, CloudStore>) =>
-    effect.pipe(Effect.provide(layer), Effect.provideService(RelayDb, db));
+    effect.pipe(
+      Effect.provide(layer),
+      Effect.provideService(RelayDb, db as unknown as RelayDb["Service"]),
+    );
   return { run, attempted };
 }
 
 describe("account overview revision", () => {
+  it.effect("rolls back account creation and preserves the reducer's rejection", () => {
+    const f = fixture();
+    return f.run(
+      Effect.gen(function* () {
+        const store = yield* CloudStore;
+        const failure = yield* Effect.flip(
+          store.mutate("user", (document) => {
+            document.state.usage.qa = 999;
+            throw new CloudError("not_allowed", "Rejected", 403);
+          }),
+        );
+        expect(failure.code).toBe("not_allowed");
+        const document = yield* store.read("user");
+        expect(document.state.revision).toBe(0);
+        expect(document.state.usage).toEqual({});
+        expect(f.attempted).toEqual([]);
+        expect(yield* store.mutate("user", (value) => value.state.revision)).toBe(1);
+      }),
+    );
+  });
   it.effect("reads SQL revision rather than a stale document copy", () => {
     const f = fixture(7);
     return f.run(
@@ -65,7 +113,7 @@ describe("account overview revision", () => {
       }),
     );
   });
-  it.effect("returns only the winning CAS revision after a concurrent update", () => {
+  it.effect("returns the locked revision after waiting for a concurrent update", () => {
     const f = fixture(7, true);
     return f.run(
       Effect.gen(function* () {
@@ -73,29 +121,26 @@ describe("account overview revision", () => {
         const overview = yield* store.mutate("user", (document) =>
           publicOverview(document.state, true, 0),
         );
-        expect(f.attempted).toEqual([8, 9]);
+        expect(f.attempted).toEqual([9]);
         expect(overview.revision).toBe(9);
         expect((yield* store.read("user")).state.revision).toBe(9);
       }),
     );
   });
-  it.effect(
-    "retries a first-account insert collision without returning the losing revision",
-    () => {
-      const f = fixture(undefined, true);
-      return f.run(
-        Effect.gen(function* () {
-          const store = yield* CloudStore;
-          expect((yield* store.read("user")).state.revision).toBe(0);
-          const overview = yield* store.mutate("user", (document) =>
-            publicOverview(document.state, true, 0),
-          );
-          expect(f.attempted).toEqual([1, 2]);
-          expect(overview.revision).toBe(2);
-        }),
-      );
-    },
-  );
+  it.effect("reloads a concurrent first-account insert before reducing its document", () => {
+    const f = fixture(undefined, true);
+    return f.run(
+      Effect.gen(function* () {
+        const store = yield* CloudStore;
+        expect((yield* store.read("user")).state.revision).toBe(0);
+        const overview = yield* store.mutate("user", (document) =>
+          publicOverview(document.state, true, 0),
+        );
+        expect(f.attempted).toEqual([2]);
+        expect(overview.revision).toBe(2);
+      }),
+    );
+  });
 });
 
 it.effect("returns runnable Effects when the database is a request-bound query proxy", () => {
