@@ -6,7 +6,7 @@ import { emptyDocument, type CloudAccountDocument } from "./store.ts";
 const privateKey = NodeCrypto.generateKeyPairSync("rsa", { modulusLength: 2048 })
   .privateKey.export({ format: "pem", type: "pkcs1" })
   .toString();
-function fixture() {
+function fixture(responses: Record<string, Response> = {}) {
   let now = 2_000_000_000_000;
   const documents = new Map<string, CloudAccountDocument>();
   const store = {
@@ -27,6 +27,9 @@ function fixture() {
     refresh_token_expires_in: 15897600,
   });
   const fetcher = vi.fn<typeof fetch>(async (url, init) => {
+    // Match the Workers runtime rather than Node's broader Fetch implementation.
+    if (init?.redirect === "error") throw new TypeError("Unsupported redirect mode");
+    if (responses[String(url)]) return responses[String(url)]!.clone();
     if (String(url) === "https://api.github.com/app")
       return Response.json({ id: 42, client_id: "Iv1example" });
     if (String(url).endsWith("/device/code")) {
@@ -99,6 +102,38 @@ it("starts once per request and exposes only the user-facing code, with encrypte
   expect(JSON.stringify(first)).not.toContain("private-device-code");
   expect(JSON.stringify(f.documents.get("owner"))).not.toContain("private-device-code");
 });
+it("rejects an OAuth redirect without following it or leaving a stuck connection", async () => {
+  const f = fixture({
+    "https://github.com/login/device/code": new Response("Redirect", {
+      status: 302,
+      headers: { Location: "https://untrusted.example/authorize" },
+    }),
+  });
+  await expect(
+    f.service.connection("owner", { type: "start", requestId: "request" }),
+  ).rejects.toMatchObject({ code: "github_invalid_response", status: 502 });
+  expect(f.documents.get("owner")?.private.githubConnectionFlows?.request).toBeUndefined();
+  expect(f.fetcher.mock.calls.map(([url]) => String(url))).toEqual([
+    "https://api.github.com/app",
+    "https://github.com/login/device/code",
+  ]);
+  expect(f.fetcher.mock.calls[1]![1]?.redirect).toBe("manual");
+});
+it.each(["https://github.com/login/oauth/access_token", "https://api.github.com/user"])(
+  "rejects a redirect from %s without connecting an account",
+  async (url) => {
+    const f = fixture({
+      [url]: new Response("Redirect", {
+        status: 302,
+        headers: { Location: "https://untrusted.example/token" },
+      }),
+    });
+    await expect(f.connect()).rejects.toMatchObject({ status: 502 });
+    expect(f.documents.get("owner")?.private.githubConnections).toBeUndefined();
+    expect(f.fetcher.mock.calls.at(-1)?.[0]).toBe(url);
+    expect(f.fetcher.mock.calls.at(-1)?.[1]?.redirect).toBe("manual");
+  },
+);
 it("refuses cross-user polling and credentials and rejects expired device codes", async () => {
   const f = fixture();
   await f.service.connection("owner", { type: "start", requestId: "request" });

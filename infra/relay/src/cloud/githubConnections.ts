@@ -113,9 +113,17 @@ export class GitHubConnections implements GitHubAccounts {
       method: "POST",
       headers: { Accept: "application/json", "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams(parameters),
-      redirect: "error",
+      // Workers supports manual/follow only. Never forward OAuth credentials
+      // to a redirect destination; reject the response before parsing it.
+      redirect: "manual",
       signal: AbortSignal.timeout(15_000),
     });
+    if (response.status >= 300 && response.status < 400)
+      throw failure(
+        "github_invalid_response",
+        "GitHub authorization returned an unexpected redirect",
+        502,
+      );
     const value = (await response.json()) as Record<string, unknown>;
     if (!response.ok && typeof value.error !== "string")
       throw failure("github_unavailable", "GitHub authorization is temporarily unavailable", 502);
@@ -302,12 +310,17 @@ export class GitHubConnections implements GitHubAccounts {
           Accept: "application/vnd.github+json",
           "User-Agent": "Vitre-Cloud",
         },
-        redirect: "error",
+        redirect: "manual",
         signal: AbortSignal.timeout(15_000),
       });
+      if (!response.ok)
+        throw failure(
+          "github_identity_unavailable",
+          "GitHub could not verify the connected account",
+          502,
+        );
       const identity = (await response.json()) as { id?: number; login?: string };
       if (
-        !response.ok ||
         !Number.isSafeInteger(identity.id) ||
         identity.id! <= 0 ||
         !boundedString(identity.login, 100)
