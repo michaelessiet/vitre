@@ -41,7 +41,7 @@ export interface CloudState {
   projects?: Record<string, CloudProject>;
   deletedProjects?: string[];
   projectSnapshots?: Record<string, Record<string, CloudProjectSnapshot>>;
-  /** Supplied from the SQL account row on load/CAS; never an independent counter. */
+  /** Supplied from the SQL account row on load/commit; never an independent counter. */
   revision?: number;
   providerLeaseTurns?: Partial<Record<CloudProvider, string | null>>;
   bindings?: HandoffState["bindings"];

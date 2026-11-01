@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -73,48 +73,50 @@ export const layer = Layer.effect(
       }),
       mutate: <A>(userId: string, reduce: (document: CloudAccountDocument) => A) =>
         Effect.gen(function* () {
-          // Retried reducers may run more than once. They must never perform external I/O.
-          for (let attempt = 0; attempt < 12; attempt++) {
-            const existing = (yield* load(userId))[0];
-            const document = structuredClone(existing?.document ?? emptyDocument());
-            // The candidate revision is visible to the reducer's response, but
-            // only returned after this exact CAS commits. Losing candidates and
-            // their responses are discarded together.
-            document.state.revision = (existing?.revision ?? 0) + 1;
-            const result = yield* Effect.try({
-              try: () => reduce(document),
-              catch: (error) => (error instanceof CloudError ? error : persistenceError()),
-            });
-            if (!existing) {
-              const inserted = yield* db
-                .insert(relayCloudAccounts)
-                .values({ userId, revision: 1, document })
-                .onConflictDoNothing()
-                .returning({ userId: relayCloudAccounts.userId })
-                .pipe(Effect.mapError(persistenceError));
-              if (inserted.length) return result;
-            } else {
-              const updated = yield* db
-                .update(relayCloudAccounts)
-                .set({ revision: existing.revision + 1, document })
-                .where(
-                  and(
-                    eq(relayCloudAccounts.userId, userId),
-                    eq(relayCloudAccounts.revision, existing.revision),
-                  ),
-                )
-                .returning({ userId: relayCloudAccounts.userId })
-                .pipe(Effect.mapError(persistenceError));
-              if (updated.length) return result;
-            }
-          }
-          return yield* Effect.fail(
-            new CloudError(
-              "concurrent_update",
-              "Cloud state changed repeatedly; retry the request",
-              409,
-            ),
-          );
+          // Serialize this account in PostgreSQL, including across Worker isolates.
+          // Reducers remain synchronous and must never perform external I/O.
+          const committed = yield* db
+            .transaction((tx) =>
+              Effect.gen(function* () {
+                yield* tx.execute(sql`SET LOCAL lock_timeout = '10s'`);
+                const locked = () =>
+                  tx
+                    .select()
+                    .from(relayCloudAccounts)
+                    .where(eq(relayCloudAccounts.userId, userId))
+                    .limit(1)
+                    .for("update");
+                let existing = (yield* locked())[0];
+                if (!existing) {
+                  // Another first request may insert while we wait; lock and reload
+                  // its committed document instead of overwriting it with an empty one.
+                  yield* tx
+                    .insert(relayCloudAccounts)
+                    .values({ userId, revision: 0, document: emptyDocument() })
+                    .onConflictDoNothing();
+                  existing = (yield* locked())[0];
+                }
+                if (!existing) return yield* Effect.fail(persistenceError());
+                const document = structuredClone(existing.document);
+                const revision = existing.revision + 1;
+                document.state.revision = revision;
+                const result = yield* Effect.try({
+                  try: () => reduce(document),
+                  catch: (error) => (error instanceof CloudError ? error : persistenceError()),
+                });
+                yield* tx
+                  .update(relayCloudAccounts)
+                  .set({ revision, document })
+                  .where(eq(relayCloudAccounts.userId, userId));
+                return result;
+              }),
+            )
+            .pipe(
+              Effect.mapError((error) =>
+                error instanceof CloudError ? error : persistenceError(),
+              ),
+            );
+          return committed;
         }),
     });
   }),
