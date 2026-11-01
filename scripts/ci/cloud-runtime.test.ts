@@ -10,7 +10,7 @@ import {
 
 const revision = "a".repeat(40);
 const sha256 = "b".repeat(64);
-const ready = { ready: true, protocol: 1, runtime: { revision, sha256 } };
+const ready = { ready: true, protocol: 1, runtime: { revision, sha256, verified: true } };
 
 describe("cloud runtime deployment", () => {
   it("uses immutable artifacts on a single HTTPS origin", () => {
@@ -45,6 +45,7 @@ describe("cloud runtime deployment", () => {
       {},
       { ...ready, ready: false },
       { ...ready, protocol: 2 },
+      { ...ready, runtime: { revision, sha256, verified: false } },
       { ...ready, runtime: { revision: "c".repeat(40), sha256 } },
       { ...ready, runtime: { revision, sha256: "d".repeat(64) } },
     ])

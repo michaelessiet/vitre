@@ -55,11 +55,12 @@ export function runtimeHealthMatches(body: unknown, revision: string, sha256: st
   const result = body as {
     ready?: unknown;
     protocol?: unknown;
-    runtime?: { revision?: unknown; sha256?: unknown };
+    runtime?: { revision?: unknown; sha256?: unknown; verified?: unknown };
   };
   return (
     result.ready === true &&
     result.protocol === 1 &&
+    result.runtime?.verified === true &&
     result.runtime?.revision === revision &&
     result.runtime.sha256 === sha256
   );
