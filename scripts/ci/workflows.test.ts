@@ -73,6 +73,8 @@ describe("workflow boundaries", () => {
   it("runs PR labeling exclusively from trusted base code without dependency installation", () => {
     const pr = workflow("pr-size");
     expect(Object.keys(pr.on)).toEqual(["pull_request_target"]);
+    expect(pr.jobs.label.permissions["pull-requests"]).toBe("write");
+    expect(pr.jobs.label.permissions.issues).toBeUndefined();
     const steps = pr.jobs.label.steps;
     expect(steps[0].with.ref).toBe("${{ github.event.pull_request.base.sha }}");
     expect(steps[0].with["persist-credentials"]).toBe(false);
