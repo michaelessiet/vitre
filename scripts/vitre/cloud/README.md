@@ -97,7 +97,7 @@ intentionally pausing releases. Missing configuration fails the deployment visib
 
 Runtime changes build and smoke-test the Linux image using the provider versions
 in `toolchain.json`. The archive is published under a key containing its full Git
-revision and SHA-256. SSM downloads it on the existing machine, and
+revision and SHA-256. A systemd timer pulls the release on the existing machine, and
 `upgrade-machine.py` verifies the checksum before extracting into a new directory.
 Identical files can share hard links; changed files never overwrite an older
 runtime. The supervisor switches through a durable systemd override, verifies its
@@ -111,42 +111,33 @@ with existing conversation workers must be drained separately. The workflow
 deploys the relay only after the matching runtime is verified, and does not record
 success until the live feature routes are present.
 
-Use a dedicated GitHub OIDC role rather than long-lived AWS credentials. Trust
-`https://token.actions.githubusercontent.com` with audience `sts.amazonaws.com`
-and the exact production environment subject. Read the repository's subject prefix
-with `gh api repos/OWNER/REPO/actions/oidc/customization/sub`; newer repositories
-include immutable owner/repository IDs. Append `:environment:production` to that
-prefix, and restrict the GitHub `production` environment to the `main` branch.
+The workflow publishes the verified archive, a checksum-addressed installer, and
+finally `runtime-production.json` to the existing R2 distribution bucket. The host
+checks that pointer about once a minute. Its root-owned configuration pins one
+HTTPS origin; redirects, malformed manifests, oversized downloads, checksum
+mismatches, and stale pointers are rejected. No inbound deployment endpoint,
+GitHub runner, AWS access key, or AWS OIDC provider is required. Existing AWS account
+policies remain unchanged. CI uses the existing Cloudflare token to publish and the
+existing machine token to verify the exact active revision through authenticated
+health before deploying the relay.
 
-The role needs only these permissions (replace the installation identifiers):
+Bootstrap the updater **once on the existing host**, using an already authorized
+SSM session or administrative shell. Copy these four files from the reviewed
+checkout into one directory: `pull-runtime.py`, `vitre-runtime-pull.service`,
+`vitre-runtime-pull.timer`, and `install-runtime-pull.sh`. Then run:
 
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": "ssm:SendCommand",
-      "Resource": [
-        "arn:aws:ec2:REGION:ACCOUNT:instance/INSTANCE_ID",
-        "arn:aws:ssm:REGION::document/AWS-RunShellScript"
-      ]
-    },
-    {
-      "Effect": "Allow",
-      "Action": "ssm:GetCommandInvocation",
-      "Resource": "*",
-      "Condition": { "StringEquals": { "aws:RequestedRegion": "REGION" } }
-    }
-  ]
-}
+```sh
+sudo sh install-runtime-pull.sh https://artifacts.example.com
 ```
 
-`GetCommandInvocation` does not support resource-level restrictions. The role
-cannot provision or terminate hosts, read machine secrets through Parameter Store,
-or change IAM. SSM command payloads contain the reviewed installer and the public
-artifact URL; machine credentials stay on the host. See the
-[GitHub OIDC guide](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-aws).
+The origin must match `VITRE_CLOUD_RUNTIME_URL` and serve the root of
+`VITRE_CLOUD_RUNTIME_BUCKET`. Keep `runtime-production.json` uncached (the publisher
+sets `Cache-Control: no-store`; do not override it with an edge cache rule).
+Inspect `systemctl status vitre-runtime-pull.timer` and
+`journalctl -u vitre-runtime-pull.service` for installation failures. A failed
+release retries on the next tick; only verified activation advances the local
+release receipt. Disable the timer to pause host updates independently of CI.
+The installer also updates the polling script from the verified runtime bundle.
 
 The machine agent stays running under systemd and launches isolated conversation
 processes against the installed filesystem. Worker startup does not download or

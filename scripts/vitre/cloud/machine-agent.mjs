@@ -153,6 +153,8 @@ export async function createMachineAgent({
   driver,
   fetcher = fetch,
   recoveryIntervalMs = 5000,
+  runtime,
+  readReleaseReceipt = async () => null,
 }) {
   if (!ownerId || token.length < 32 || new URL(controlUrl).protocol !== "https:")
     throw new Error("Invalid machine configuration");
@@ -246,8 +248,22 @@ export async function createMachineAgent({
       )
         return reply(401, { error: "Unauthorized" });
       const url = new URL(req.url, "http://localhost");
-      if (url.pathname === "/v1/health" && req.method === "GET")
-        return reply(200, { ready: true, protocol: 1 });
+      if (url.pathname === "/v1/health" && req.method === "GET") {
+        const receipt = runtime ? await readReleaseReceipt() : null;
+        return reply(200, {
+          ready: true,
+          protocol: 1,
+          ...(runtime
+            ? {
+                runtime: {
+                  ...runtime,
+                  verified:
+                    receipt?.revision === runtime.revision && receipt?.sha256 === runtime.sha256,
+                },
+              }
+            : {}),
+        });
+      }
       let body = "";
       for await (const chunk of req) {
         body += chunk;
@@ -504,6 +520,21 @@ if (process.argv[1] && import.meta.url === NodeURL.pathToFileURL(process.argv[1]
       token: process.env.VITRE_MACHINE_TOKEN ?? "",
       controlUrl: process.env.VITRE_MACHINE_CONTROL_URL,
       driver: systemdDriver(rootfs),
+      runtime: await NodeFSP.readFile(NodePath.join(rootfs, ".vitre-runtime.json"), "utf8")
+        .then(JSON.parse)
+        .catch((error) => {
+          if (error.code === "ENOENT") return undefined;
+          throw error;
+        }),
+      // Written only after activation, rollback checks, and worker preservation
+      // complete. Merely starting the new supervisor is not deployment success.
+      readReleaseReceipt: () =>
+        NodeFSP.readFile("/opt/vitre-machine/.runtime-pull.json", "utf8")
+          .then(JSON.parse)
+          .catch((error) => {
+            if (error.code === "ENOENT") return null;
+            throw error;
+          }),
     });
     server.requestTimeout = 30_000;
     server.headersTimeout = 10_000;

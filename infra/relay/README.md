@@ -180,12 +180,13 @@ Optional configuration and feature-dependent requirements:
   starts so existing accounts, workers, and cleanup continue to function.
 - An existing GitHub App integration requires variables `VITRE_GITHUB_APP_ID`,
   `VITRE_GITHUB_INSTALLATION_IDS`, and secret `VITRE_GITHUB_PRIVATE_KEY` together.
-- Machine runtime updates require variables `VITRE_CLOUD_AWS_ROLE_ARN`,
-  `VITRE_CLOUD_AWS_REGION`, `VITRE_CLOUD_INSTANCE_ID`,
-  `VITRE_CLOUD_RUNTIME_BUCKET`, and `VITRE_CLOUD_RUNTIME_URL`. The bucket and HTTPS
-  artifact origin must refer to the same existing runtime distribution bucket.
-  Use the [AWS role setup](../../scripts/vitre/cloud/README.md#automatic-production-deployment)
-  for short-lived GitHub credentials. Do not store an AWS login session in secrets.
+- Machine runtime updates require variables `VITRE_CLOUD_RUNTIME_BUCKET` and
+  `VITRE_CLOUD_RUNTIME_URL`, plus the cloud machine URL, owner ID, and token above.
+  The HTTPS origin must serve the root of the existing runtime distribution bucket.
+  Install the [host release updater](../../scripts/vitre/cloud/README.md#automatic-production-deployment)
+  once using existing administrative access. GitHub needs no AWS role, OIDC provider,
+  login session, or access key. It publishes through the existing Cloudflare token
+  and waits for authenticated health to confirm the exact installed runtime.
 
 Account-wide credentials can be repository secrets; installation-specific values
 belong in `production`. Restrict this environment to the `main` branch. No secrets

@@ -85,6 +85,23 @@ it("fences machine access by both account and credential", async () => {
   ).toBe(401);
   expect((await f.request("/health")).status).toBe(200);
 });
+it("reports the installed runtime identity only through authenticated health", async () => {
+  const runtime = { revision: "a".repeat(40), sha256: "b".repeat(64) };
+  let receipt = null;
+  const f = await fixture(undefined, { runtime, readReleaseReceipt: async () => receipt });
+  expect(await (await f.request("/health")).json()).toEqual({
+    ready: true,
+    protocol: 1,
+    runtime: { ...runtime, verified: false },
+  });
+  receipt = { revision: "c".repeat(40), sha256: runtime.sha256 };
+  expect((await (await f.request("/health")).json()).runtime.verified).toBe(false);
+  receipt = runtime;
+  expect((await (await f.request("/health")).json()).runtime.verified).toBe(true);
+  expect(
+    (await f.request("/health", "GET", undefined, { authorization: "Bearer wrong" })).status,
+  ).toBe(401);
+});
 it("serializes retries and does not replay work after agent restart", async () => {
   let starts = 0;
   const f = await fixture({

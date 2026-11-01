@@ -40,7 +40,10 @@ describe("workflow boundaries", () => {
     expect(names.indexOf("Validate production configuration")).toBeLessThan(
       names.indexOf("Build and smoke test cloud runtime"),
     );
-    expect(names.indexOf("Publish and install matching runtime")).toBeLessThan(
+    expect(names.indexOf("Publish and verify matching runtime")).toBeGreaterThan(
+      names.indexOf("Build and smoke test cloud runtime"),
+    );
+    expect(names.indexOf("Publish and verify matching runtime")).toBeLessThan(
       names.indexOf("Deploy existing relay stack"),
     );
     expect(names.indexOf("Verify deployed routes")).toBeGreaterThan(
@@ -50,8 +53,9 @@ describe("workflow boundaries", () => {
       (step: { name?: string }) => step.name === "Build and smoke test cloud runtime",
     );
     expect(JSON.stringify(build)).not.toContain("secrets.");
-    expect(job.permissions["id-token"]).toBe("write");
-    expect(workflow("ci").jobs.relay.permissions["id-token"]).toBe("write");
+    expect(job.permissions["id-token"]).toBeUndefined();
+    expect(workflow("ci").jobs.relay.permissions["id-token"]).toBeUndefined();
+    expect(JSON.stringify(job)).not.toContain("configure-aws-credentials");
   });
 
   it("keeps build artifacts free of deployment environments and credentials", () => {
