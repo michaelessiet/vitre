@@ -2,20 +2,21 @@
 
 ## One Vitre account on every device
 
-The Clerk user ID is the Vitre account ID. Verified GitHub identities belong to
-that user, alongside its other supported login methods. Linking is a one-time
-account operation: signing in on mobile through either linked GitHub identity,
-Google, or an email method already on the same Vitre account loads the same cloud
-workspaces and GitHub account list. A separate Vitre account is not automatically
-merged by matching an email address or a GitHub username.
+The Clerk user ID is the Vitre account ID. Sign in to that same Vitre account on
+desktop and mobile to share cloud workspaces and repository connections. Clerk
+supports one GitHub sign-in identity per user. Additional repository accounts use
+the Vitre GitHub App's device authorization flow; they do not become Vitre login
+methods. Separate Vitre accounts are never merged by email or GitHub username.
 
 Open **Settings → Cloud → GitHub accounts → Manage** on desktop, or **Settings →
 GitHub accounts → Manage GitHub accounts** on mobile. Both open `/account/github`
 on the relay. The browser must be signed in to the Vitre account that opened the
-page. Link, reconnect, and remove use Clerk's verified external-account flow.
-If Clerk requires a fresh session, the page offers **Sign in again**. An identity
-already owned by another Vitre account must be resolved through account support;
-this page does not transfer it.
+page. **Connect GitHub account** displays a short-lived code to enter at GitHub,
+where the user selects an account and reviews the app's permissions. The page
+polls until authorization completes. Repository connections can be disconnected
+individually; the Vitre sign-in identity uses Clerk's reconnect flow. If Clerk
+requires a fresh session, the page offers **Sign in again**. This page does not
+transfer or merge sign-in identities owned by another Vitre account.
 
 Mobile refreshes linked identities after signing in and after returning from
 account management. Desktop refreshes them when opening Cloud settings. An
@@ -23,7 +24,8 @@ explicit refresh action is also available.
 
 ### Repository access
 
-- Each repository selection pins a Clerk external account ID (`githubAccountId`).
+- Each repository selection pins a `githubAccountId`: a stable Clerk external
+  account ID or `gha_<GitHub numeric user ID>` for a repository connection.
   Account display names are labels, never authorization keys.
 - Discovery intersects repositories readable by that GitHub user with repositories
   installed on the Vitre GitHub App. Installing the app alone does not grant an
@@ -37,12 +39,16 @@ explicit refresh action is also available.
   or reuse its saved choice.
 - Existing installation allowlists remain compatible. Anonymous public repository
   access carries no GitHub account ID.
-- OAuth tokens stay in Clerk/server memory. Cloud overview data contains only
-  account IDs, login names, and connection state.
+- Clerk manages sign-in OAuth credentials. Repository OAuth tokens and device
+  codes are encrypted in the existing private cloud document, bound to their
+  owner and version. Refresh and polling use durable leases. Cloud overview data
+  contains only account IDs, login names, and connection state.
 
-GitHub OAuth needs the `repo` scope for private repositories, and the Vitre GitHub
-App must be installed on those repositories. Organization restrictions and SSO
-approval still apply. Reconnect an existing identity to grant missing scopes.
+Clerk's GitHub OAuth needs the `repo` scope for private repositories. Repository
+connections use the installed GitHub App's permissions. The app must be installed
+on the relevant repositories and have **Device Flow** enabled. Organization
+restrictions and SSO approval still apply. Reconnect an account when GitHub access
+is revoked or expires.
 
 ## Screenshots requested by the user
 
@@ -78,7 +84,8 @@ Do not disable Chromium's sandbox to make the smoke test pass.
 Deploy the updated relay, native/mobile clients, and versioned worker runtime.
 Existing resident workers need a drained runtime upgrade before they expose the
 new screenshot tool. No additional credential database or data migration is
-required: linked identities are owned by Clerk and cloud metadata is additive.
+required: repository connections use encrypted, additive fields in the existing
+cloud account document.
 
 Focused automated coverage includes identity ownership, token selection,
 repository access intersection, selected-account revocation, wrong-browser
@@ -88,10 +95,11 @@ Settings/account selection were exercised locally; account UI verification uses
 development fixtures. The packaged Linux image passes backend authentication and
 sandboxed Chromium PNG smoke checks.
 
-Before release, complete a real two-account OAuth round trip on the deployed
-Clerk instance: link personal/work GitHub identities, sign out, sign in through
-each identity and another supported method on that same Vitre account, verify
-both repository lists, then unlink one and verify its access is rejected. Also
+Before release, complete a real two-account GitHub device authorization round
+trip: connect personal/work repository accounts, sign into the same Vitre account
+on desktop and mobile, verify both repository lists, then disconnect one and
+verify its access is rejected. Confirm repository connection does not change the
+Vitre sign-in identity. Also
 request a screenshot from a deployed cloud conversation and open its saved file.
 Local fixture tests do not substitute for this provider/deployment acceptance.
 
