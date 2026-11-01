@@ -45,8 +45,8 @@ window.addEventListener('load', async () => {
     } catch {
       throw Object.assign(new Error('Your connection was interrupted. Try again.'), { retryable: true });
     }
-    const retryable = response.status === 429 || response.status >= 500;
     const value = await response.json().catch(() => null);
+    const retryable = response.status === 429 || response.status >= 500 || value?.code === 'concurrent_update';
     if (!response.ok || !value) throw Object.assign(
       new Error(value?.message || 'This operation could not complete. Try again.'), { retryable },
     );
@@ -159,8 +159,10 @@ window.addEventListener('load', async () => {
       rows.append(row);
     }
     actions.append(button('Connect GitHub account', async () => {
-      stopPolling(); sessionStorage.removeItem(storageKey);
-      await showConnection(await request('/v1/cloud/github/connections', { type: 'start', requestId: crypto.randomUUID() }));
+      stopPolling();
+      const requestId = sessionStorage.getItem(storageKey) || crypto.randomUUID();
+      sessionStorage.setItem(storageKey, requestId);
+      await showConnection(await request('/v1/cloud/github/connections', { type: 'start', requestId }));
     }));
     actions.append(button('Refresh', async () => {
       await Clerk.user.reload();

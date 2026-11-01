@@ -1,6 +1,7 @@
 import type { GitHubAccounts } from "./githubAccounts.ts";
 import { CloudError } from "./policy.ts";
 import type { CloudRepository, CloudTask, CloudPublication } from "@t3tools/contracts/cloud";
+import * as Effect from "effect/Effect";
 
 const utf8 = new TextEncoder();
 const encode = (bytes: Uint8Array) =>
@@ -65,10 +66,20 @@ export function githubPrivateKeyBytes(pem: string): Uint8Array<ArrayBuffer> {
 
 export interface GitHubConfiguration {
   accounts?: GitHubAccounts;
+  accountsForRequest?: Effect.Effect<GitHubAccounts>;
   appId: string;
   privateKey: string;
   installationIds: ReadonlyArray<string>;
 }
+/** Resolve request-bound database access only inside the calling Worker event. */
+export const githubForRequest = (config: GitHubConfiguration): Effect.Effect<GitHubConfiguration> =>
+  config.accountsForRequest
+    ? Effect.map(config.accountsForRequest, (accounts) => {
+        const resolved = { ...config, accounts };
+        delete resolved.accountsForRequest;
+        return resolved;
+      })
+    : Effect.succeed(config);
 export class GitHubCloudClient {
   private readonly config: GitHubConfiguration;
   private readonly fetcher: typeof fetch;

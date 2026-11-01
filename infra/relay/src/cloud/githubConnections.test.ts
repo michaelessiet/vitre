@@ -1,8 +1,82 @@
-import { expect, it, vi } from "vite-plus/test";
+import { expect, vi } from "vite-plus/test";
+import { it } from "@effect/vitest";
 import * as NodeCrypto from "node:crypto";
-import { GitHubConnections } from "./githubConnections.ts";
+import { GitHubConnections, githubConnectionsForRequest } from "./githubConnections.ts";
+import { githubForRequest } from "./github.ts";
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import { CloudError } from "./policy.ts";
 import { CredentialVault } from "./crypto.ts";
 import { emptyDocument, type CloudAccountDocument } from "./store.ts";
+
+it.effect(
+  "binds database operations to each calling request instead of a cached configuration context",
+  () =>
+    Effect.gen(function* () {
+      const RequestName = Context.Reference("test/github/request-name", {
+        defaultValue: () => "outside-request",
+      });
+      const seen: string[] = [];
+      const clerk = {
+        list: async () => [],
+        credential: async () => ({ id: "primary", providerUserId: "1", token: "token" }),
+      };
+      const store = {
+        read: () =>
+          Effect.map(RequestName, (name) => {
+            seen.push(name);
+            return emptyDocument();
+          }),
+        mutate: <A>(_user: string, reduce: (doc: CloudAccountDocument) => A) =>
+          Effect.map(RequestName, (name) => {
+            seen.push(name);
+            return reduce(emptyDocument());
+          }),
+        users: Effect.succeed([]),
+      };
+      const base = { appId: "42", privateKey: "unused", installationIds: [] };
+      const config = {
+        ...base,
+        accounts: clerk,
+        accountsForRequest: githubConnectionsForRequest(
+          clerk,
+          base,
+          store,
+          new CredentialVault(btoa("x".repeat(32))),
+        ),
+      };
+      const request = (name: string) =>
+        Effect.gen(function* () {
+          const resolved = yield* githubForRequest(config);
+          yield* Effect.promise(() => resolved.accounts!.list("owner"));
+          yield* Effect.promise(() =>
+            resolved.accounts!.connection!("owner", { type: "disconnect", accountId: "gha_123" }),
+          );
+        }).pipe(Effect.provideService(RequestName, name));
+      yield* request("first");
+      yield* request("second");
+      expect(seen).toEqual(["first", "first", "second", "second"]);
+    }),
+);
+it.effect("preserves typed persistence failures across the request-bound Promise adapter", () =>
+  Effect.gen(function* () {
+    const failure = new CloudError("persistence_unavailable", "Try again", 503);
+    const accounts = yield* githubConnectionsForRequest(
+      {
+        list: async () => [],
+        credential: async () => ({ id: "primary", providerUserId: "1", token: "token" }),
+      },
+      { appId: "42", privateKey: "unused", installationIds: [] },
+      {
+        read: () => Effect.fail(failure),
+        mutate: () => Effect.fail(failure),
+        users: Effect.succeed([]),
+      },
+      new CredentialVault(btoa("x".repeat(32))),
+    );
+    yield* Effect.promise(() => expect(accounts.list("owner")).rejects.toBe(failure));
+  }),
+);
 const privateKey = NodeCrypto.generateKeyPairSync("rsa", { modulusLength: 2048 })
   .privateKey.export({ format: "pem", type: "pkcs1" })
   .toString();

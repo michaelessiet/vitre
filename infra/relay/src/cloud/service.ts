@@ -33,7 +33,7 @@ import { CloudConfiguration } from "./config.ts";
 import { CredentialVault, sha256 } from "./crypto.ts";
 import { CloudError, iso } from "./policy.ts";
 import { CloudStore } from "./store.ts";
-import { GitHubCloudClient } from "./github.ts";
+import { GitHubCloudClient, githubForRequest } from "./github.ts";
 import { validateSubscriptionCredential } from "./subscription.ts";
 import {
   acceptCallback,
@@ -129,7 +129,7 @@ export const layer = Layer.effect(
     return CloudService.of({
       githubConnection: Effect.fn("cloud.github_connection")(function* (userId, command) {
         yield* allowed(userId);
-        const accounts = config.github.accounts;
+        const accounts = (yield* githubForRequest(config.github)).accounts;
         if (!accounts?.connection)
           return yield* Effect.fail(
             new CloudError(
@@ -183,7 +183,8 @@ export const layer = Layer.effect(
           document = yield* store.read(userId);
         }
         if (config.github.accounts && document.state.githubAccounts === undefined) {
-          const accounts = yield* fromPromise(() => config.github.accounts!.list(userId));
+          const github = yield* githubForRequest(config.github);
+          const accounts = yield* fromPromise(() => github.accounts!.list(userId));
           yield* store.mutate(userId, (doc) => {
             doc.state.githubAccounts = Object.fromEntries(
               accounts.map((account) => [account.id, account]),
@@ -227,6 +228,7 @@ export const layer = Layer.effect(
       }),
       command: Effect.fn("cloud.command")(function* (userId, command) {
         yield* allowed(userId);
+        const github = yield* githubForRequest(config.github);
         const now = yield* currentMillis;
         const id = yield* cryptoService.randomUUIDv4.pipe(Effect.orDie);
         const fingerprint = yield* fromPromise(() => sha256(JSON.stringify(command)));
@@ -246,14 +248,14 @@ export const layer = Layer.effect(
           };
         }
         const githubAccounts =
-          command.type === "github.refresh" && config.github.accounts
-            ? yield* fromPromise(() => config.github.accounts!.list(userId))
+          command.type === "github.refresh" && github.accounts
+            ? yield* fromPromise(() => github.accounts!.list(userId))
             : undefined;
         if (command.type === "repository.save")
           command = {
             ...command,
             repository: yield* fromPromise(() =>
-              new GitHubCloudClient(config.github, fetch, userId).verifyRepository(
+              new GitHubCloudClient(github, fetch, userId).verifyRepository(
                 (command as Extract<CloudCommand, { type: "repository.save" }>).repository,
                 now,
               ),
@@ -354,7 +356,7 @@ export const layer = Layer.effect(
             const revision = snapshotHead
               ? { sha: snapshotHead }
               : yield* fromPromise(() =>
-                  new GitHubCloudClient(config.github, fetch, userId).resolve(
+                  new GitHubCloudClient(github, fetch, userId).resolve(
                     repository,
                     command.source?.kind === "github"
                       ? command.source.revision

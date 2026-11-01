@@ -5,6 +5,29 @@ import { GitHubCloudClient, type GitHubConfiguration } from "./github.ts";
 import { CredentialVault, type SealedCredential } from "./crypto.ts";
 import type { CloudAccountDocument } from "./store.ts";
 import { CloudError } from "./policy.ts";
+import * as Effect from "effect/Effect";
+import type { CloudStore } from "./store.ts";
+
+export const githubConnectionsForRequest = (
+  clerk: GitHubAccounts,
+  config: GitHubConfiguration,
+  store: CloudStore["Service"],
+  vault: CredentialVault,
+) =>
+  Effect.gen(function* () {
+    // A Layer can outlive its first request. Capture the event context when an
+    // operation runs, so PostgreSQL uses that event's live pool and scope.
+    const run = Effect.runPromiseWith(yield* Effect.context<never>());
+    return new GitHubConnections(
+      clerk,
+      config,
+      {
+        read: (userId) => run(store.read(userId)),
+        mutate: (userId, reduce) => run(store.mutate(userId, reduce)),
+      },
+      vault,
+    );
+  });
 
 export type GitHubConnectionCommand =
   | { type: "start"; requestId: string }
