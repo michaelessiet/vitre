@@ -60,9 +60,15 @@ const decodeWorkspaceManifest = Schema.decodeUnknownEffect(
 );
 export const currentMillis = DateTime.now.pipe(Effect.map(DateTime.toEpochMillis));
 
+import type { GitHubConnectionCommand, GitHubConnectionStatus } from "./githubConnections.ts";
+
 export class CloudService extends Context.Service<
   CloudService,
   {
+    readonly githubConnection: (
+      userId: string,
+      command: GitHubConnectionCommand,
+    ) => Effect.Effect<GitHubConnectionStatus, CloudError>;
     readonly overview: (userId: string) => Effect.Effect<CloudOverview, CloudError>;
     readonly registerMobileDevice: (
       userId: string,
@@ -121,6 +127,19 @@ export const layer = Layer.effect(
         : {}),
     });
     return CloudService.of({
+      githubConnection: Effect.fn("cloud.github_connection")(function* (userId, command) {
+        yield* allowed(userId);
+        const accounts = config.github.accounts;
+        if (!accounts?.connection)
+          return yield* Effect.fail(
+            new CloudError(
+              "github_unavailable",
+              "Repository account connections are unavailable",
+              503,
+            ),
+          );
+        return yield* fromPromise(() => accounts.connection!(userId, command));
+      }),
       registerMobileDevice: Effect.fn("cloud.mobile_register")(function* (userId, registration) {
         yield* allowed(userId);
         const now = yield* currentMillis;

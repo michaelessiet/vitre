@@ -1,4 +1,6 @@
 import { githubAccountPage } from "./cloud/githubAccountPage.ts";
+import { GitHubConnections } from "./cloud/githubConnections.ts";
+import { CredentialVault } from "./cloud/crypto.ts";
 import { createGitHubAccounts } from "./cloud/githubAccounts.ts";
 import * as Alchemy from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
@@ -262,7 +264,6 @@ export default class Api extends Cloudflare.Worker<Api>()(
         Layer.provideMerge(CloudAuxiliary.layer),
         Layer.provideMerge(CloudLens.layer),
         Layer.provideMerge(CloudService.layer),
-        Layer.provideMerge(CloudStore.layer),
         Layer.provideMerge(
           Layer.effect(
             CloudArtifacts,
@@ -298,51 +299,79 @@ export default class Api extends Cloudflare.Worker<Api>()(
           ),
         ),
         Layer.provideMerge(
-          Layer.succeed(CloudConfiguration, {
-            enabled: cloudEnabled,
-            allowedUserId: cloudAllowedUserId,
-            controlUrl: relayPublicOrigin,
-            encryptionKey: Redacted.value(cloudEncryptionKey),
-            ...(machineUrl
-              ? {
-                  machine: {
-                    url: machineUrl,
-                    token: Redacted.value(machineToken),
-                    ownerId: cloudAllowedUserId,
-                  },
-                }
-              : {}),
-            github: {
-              accounts: createGitHubAccounts(Redacted.value(clerkSecretKey)),
-              appId: githubAppId,
-              privateKey: Redacted.value(githubPrivateKey),
-              installationIds: githubInstallationIds
-                .split(",")
-                .map((s) => s.trim())
-                .filter(Boolean),
-            },
-            wake: (userId) =>
-              Effect.gen(function* () {
-                const bucket = yield* cloudBucket.raw;
-                // Queue remains available if the marker write fails; the hourly sweep
-                // also recovers durable operations if both wakeup channels fail.
-                yield* Effect.tryPromise(() => wakeReconciliation(bucket, userId)).pipe(
-                  Effect.ignore,
-                );
-                yield* cloudQueueSender.send({ userId });
-              }).pipe(
-                Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
-                Effect.mapError(
-                  () =>
-                    new CloudError(
-                      "queue_unavailable",
-                      "Cloud scheduling wakeup will be retried",
-                      503,
+          Layer.effect(
+            CloudConfiguration,
+            Effect.gen(function* () {
+              const store = yield* CloudStore.CloudStore;
+              const run = Effect.runPromiseWith(yield* Effect.context<never>());
+              const github = {
+                appId: githubAppId,
+                privateKey: Redacted.value(githubPrivateKey),
+                installationIds: githubInstallationIds
+                  .split(",")
+                  .map((s) => s.trim())
+                  .filter(Boolean),
+              };
+              const clerkAccounts = createGitHubAccounts(Redacted.value(clerkSecretKey));
+              const accounts = Redacted.value(cloudEncryptionKey)
+                ? new GitHubConnections(
+                    clerkAccounts,
+                    github,
+                    {
+                      read: (userId) => run(store.read(userId)),
+                      mutate: (userId, reduce) => run(store.mutate(userId, reduce)),
+                    },
+                    new CredentialVault(Redacted.value(cloudEncryptionKey)),
+                  )
+                : clerkAccounts;
+              return CloudConfiguration.of({
+                enabled: cloudEnabled,
+                allowedUserId: cloudAllowedUserId,
+                controlUrl: relayPublicOrigin,
+                encryptionKey: Redacted.value(cloudEncryptionKey),
+                ...(machineUrl
+                  ? {
+                      machine: {
+                        url: machineUrl,
+                        token: Redacted.value(machineToken),
+                        ownerId: cloudAllowedUserId,
+                      },
+                    }
+                  : {}),
+                github: {
+                  accounts,
+                  appId: githubAppId,
+                  privateKey: Redacted.value(githubPrivateKey),
+                  installationIds: githubInstallationIds
+                    .split(",")
+                    .map((s) => s.trim())
+                    .filter(Boolean),
+                },
+                wake: (userId) =>
+                  Effect.gen(function* () {
+                    const bucket = yield* cloudBucket.raw;
+                    // Queue remains available if the marker write fails; the hourly sweep
+                    // also recovers durable operations if both wakeup channels fail.
+                    yield* Effect.tryPromise(() => wakeReconciliation(bucket, userId)).pipe(
+                      Effect.ignore,
+                    );
+                    yield* cloudQueueSender.send({ userId });
+                  }).pipe(
+                    Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
+                    Effect.mapError(
+                      () =>
+                        new CloudError(
+                          "queue_unavailable",
+                          "Cloud scheduling wakeup will be retried",
+                          503,
+                        ),
                     ),
-                ),
-              ),
-          }),
+                  ),
+              });
+            }),
+          ),
         ),
+        Layer.provideMerge(CloudStore.layer),
         Layer.provideMerge(MobileRegistrations.layer),
         Layer.provideMerge(AgentActivityPublisher.layer),
         Layer.provideMerge(EnvironmentConnector.layer),

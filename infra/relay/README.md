@@ -227,3 +227,25 @@ and schedule settings, read markers, and permission-gated cleanup. Existing
 auxiliary-job maintenance runs scheduled sweeps. Deploy the matching machine agent
 and runtime image for the new `lens` job mode. See [Lens](../../docs/lens.md) for
 behavior, inventory limits, isolation, verification, and coordinated rollout.
+
+## GitHub repository connections
+
+Vitre sign-in and repository authorization are separate. Clerk supports a single
+GitHub sign-in identity per user; do not use createExternalAccount to promise
+multiple GitHub identities. The account management page uses the existing Vitre
+session and the t3-relay JWT template, then starts GitHub's device authorization
+flow for additional repository accounts. Sign in to the same Vitre account on
+desktop and mobile to use those connections.
+
+Enable **Device Flow** in the existing Vitre GitHub App's settings. The server
+derives its client ID from the authenticated App API, requests expiring
+offline_access credentials, and intersects account permissions with installed
+App repository access before issuing worker credentials. No new client secret
+or broad personal access token is required. Each person still approves the
+specific GitHub authorization in their browser.
+
+Device codes, access tokens, and refresh tokens are encrypted with the existing
+cloud credential vault and bound to their owner and connection version.
+Polling and refresh use durable leases; disconnecting during a refresh cannot
+restore the connection. Disconnect removes the repository credential from
+Vitre without changing its sign-in identities or deleting conversations.

@@ -767,8 +767,8 @@ export function CloudScreen({
             </Text>
             <Text style={styles.label}>GitHub accounts</Text>
             <Text style={styles.muted}>
-              Sign in with either linked GitHub account, or another login method on your Vitre
-              account, to access all your repositories.
+              Connect personal and work GitHub accounts for repository access. Use your existing
+              Vitre sign-in to access these connections on desktop and mobile.
             </Text>
             {cloud.overview?.githubAccounts?.map((account) => (
               <Text key={account.id} style={styles.text}>

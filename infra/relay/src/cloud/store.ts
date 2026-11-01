@@ -9,7 +9,11 @@ import { initialState, type CloudState } from "./state.ts";
 import type { SealedCredential } from "./crypto.ts";
 import type { CloudMobileDevice, CloudPushEvent } from "./notifications.ts";
 
+import type { StoredGitHubConnection, GitHubConnectionFlow } from "./githubConnections.ts";
+
 export interface CloudPrivateData {
+  githubConnections?: Record<string, StoredGitHubConnection>;
+  githubConnectionFlows?: Record<string, GitHubConnectionFlow>;
   mobileDevices?: Record<string, CloudMobileDevice>;
   pushEvents?: Record<string, CloudPushEvent>;
   credentials: Partial<Record<"codex" | "claude", { version: number; sealed: SealedCredential }>>;
