@@ -13,6 +13,8 @@ To inspect the interface without cloud credentials, run `EXPO_PUBLIC_SHOWCASE=1 
 
 EAS development, preview, and production profiles are included. Set `EXPO_PUBLIC_EAS_PROJECT_ID` to this app's EAS project before building with push support. Configure that project's APNs/FCM credentials and the Clerk native OAuth callback `vitre://auth/callback`. No existing app's signing or EAS project is reused.
 
+The shared app icon and iOS scene lifecycle are configured in `app.config.ts`. The local `withIosSceneLifecycle` plugin connects Expo 57's scene delegate to the generated native project; iOS 27 otherwise terminates the app at launch. Keep this plugin until Expo's prebuild template adopts scenes, and regenerate the native project after changing this configuration. Its focused regression test checks the installed SDK's template: `vp test run apps/mobile/plugins/withIosSceneLifecycle.test.ts`.
+
 ## Cloud rollout
 
 Deploy the updated relay and rebuild the cloud worker image together. Existing account documents migrate lazily to a durable project/snapshot registry. There is no desktop dependency or project-name-based merge. Older deployments omit the new capability flags, and the app explains which features require an upgrade.
