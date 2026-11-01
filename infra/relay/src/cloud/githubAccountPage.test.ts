@@ -15,79 +15,170 @@ class Element {
 }
 async function fixture(userId: string | null) {
   const elements = Object.fromEntries(
-    ["accounts", "actions", "status", "error", "auth"].map((id) => [id, new Element()]),
+    ["accounts", "actions", "status", "error", "auth", "connection"].map((id) => [
+      id,
+      new Element(),
+    ]),
   );
-  const createExternalAccount = vi.fn(async () => ({
-    verification: {
-      externalVerificationRedirectURL: new URL("https://github.com/login/oauth/authorize"),
-    },
-  }));
-  const account = (id: string) => ({
-    id,
-    provider: "github",
-    username: id,
-    verification: { status: "verified" },
-  });
+  const accounts = [
+    { id: "eac-personal", login: "personal", state: "connected" },
+    { id: "gha_123", login: "work", state: "connected" },
+  ];
+  const storage = new Map<string, string>();
+  const timers: (() => Promise<void>)[] = [];
+  const getToken = vi.fn(async () => "session-jwt");
+  const createExternalAccount = vi.fn();
   const Clerk = {
     load: vi.fn(async () => {}),
     user: userId
       ? {
           id: userId,
-          externalAccounts: [account("personal"), account("work")],
+          externalAccounts: [{ id: "eac-personal", reauthorize: vi.fn() }],
           createExternalAccount,
+          reload: vi.fn(),
         }
       : null,
+    session: { id: "session", getToken },
     mountSignIn: vi.fn(),
   };
+  let connectionResult: Record<string, unknown> = {
+    status: "pending",
+    requestId: "request",
+    userCode: "ABCD-EFGH",
+    verificationUri: "https://github.com/login/device",
+    pollAfterMs: 5000,
+  };
+  const fetcher = vi.fn(async (path: string, init: RequestInit) => {
+    expect(init.headers).toMatchObject({ Authorization: "Bearer session-jwt" });
+    return Response.json(
+      path.endsWith("/connections") ? connectionResult : { githubAccounts: accounts },
+    );
+  });
   const location = {
     href: "https://vitre.example/account/github?user=vitre-user",
     origin: "https://vitre.example",
     assign: vi.fn(),
   };
   let ready: () => Promise<void> = async () => {};
-  const html = githubAccountPage(`pk_test_${btoa("test.clerk.accounts.dev$")}`);
+  const html = githubAccountPage("pk_test_" + btoa("test.clerk.accounts.dev$"));
   const script = html.match(/<script>\n([\s\S]*?)<\/script>/)![1]!;
   NodeVM.runInNewContext(script, {
     URL,
     Clerk,
     location,
+    fetch: fetcher,
+    crypto: { randomUUID: () => "request" },
+    setTimeout: (fn: () => Promise<void>) => {
+      timers.push(fn);
+      return timers.length;
+    },
+    clearTimeout: vi.fn(),
+    confirm: () => true,
+    sessionStorage: {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => storage.set(key, value),
+      removeItem: (key: string) => storage.delete(key),
+    },
     document: { getElementById: (id: string) => elements[id], createElement: () => new Element() },
     window: {
-      addEventListener: (_: string, fn: () => Promise<void>) => {
-        ready = fn;
+      addEventListener: (event: string, fn: () => Promise<void>) => {
+        if (event === "load") ready = fn;
       },
     },
   });
   await ready();
-  return { elements, Clerk, location, createExternalAccount };
+  const click = (text: string) =>
+    elements.actions!.children.find((el) => el.textContent === text)!.onclick!();
+  return {
+    elements,
+    Clerk,
+    location,
+    fetcher,
+    getToken,
+    createExternalAccount,
+    storage,
+    timers,
+    click,
+    result: (value: typeof connectionResult) => {
+      connectionResult = value;
+    },
+  };
 }
-it("links new GitHub identities to the current Vitre user and preserves the callback account", async () => {
+it("starts GitHub device authorization without trying to add a second Clerk identity", async () => {
   const f = await fixture("vitre-user");
   expect(f.elements.accounts!.children).toHaveLength(2);
-  await f.elements.actions!.children.find(
-    (element) => element.textContent === "Link another GitHub account",
-  )!.onclick!();
-  expect(f.createExternalAccount).toHaveBeenCalledWith({
-    strategy: "oauth_github",
-    oidcPrompt: "select_account",
-    redirectUrl: "https://vitre.example/account/github?user=vitre-user",
-    additionalScopes: ["repo"],
+  await f.click("Connect GitHub account");
+  expect(f.createExternalAccount).not.toHaveBeenCalled();
+  expect(f.fetcher.mock.calls.at(-1)).toMatchObject([
+    "/v1/cloud/github/connections",
+    { body: JSON.stringify({ type: "start", requestId: "request" }) },
+  ]);
+  expect(f.elements.connection!.children.some((el) => el.textContent === "ABCD-EFGH")).toBe(true);
+  expect(
+    f.elements.connection!.children.find((el) => el.textContent === "Continue on GitHub"),
+  ).toMatchObject({
+    href: "https://github.com/login/device",
+    target: "_blank",
+    rel: "noopener noreferrer",
   });
-  expect(f.location.assign).toHaveBeenCalledWith("https://github.com/login/oauth/authorize");
+  expect(f.getToken).toHaveBeenCalledWith({ template: "t3-relay" });
 });
-it("blocks linking in a different browser account and after the session changes", async () => {
+it("blocks linking in another browser account and after the active session changes", async () => {
   const wrong = await fixture("another-user");
   expect(wrong.elements.status!.textContent).toContain("different Vitre account");
-  expect(wrong.elements.actions!.children.map((element) => element.textContent)).toEqual([
-    "Switch account",
-  ]);
+  expect(wrong.fetcher).not.toHaveBeenCalled();
+  expect(wrong.elements.actions!.children.map((el) => el.textContent)).toEqual(["Switch account"]);
   const f = await fixture("vitre-user");
+  f.fetcher.mockClear();
   f.Clerk.user!.id = "another-user";
-  await f.elements.actions!.children[0]!.onclick!();
-  expect(f.createExternalAccount).not.toHaveBeenCalled();
+  await f.click("Connect GitHub account");
+  expect(f.fetcher).not.toHaveBeenCalled();
 });
-it("lets a signed-out browser use the supported Vitre sign-in methods first", async () => {
+it("does not send a token if the account changes while it is being obtained", async () => {
+  const f = await fixture("vitre-user");
+  f.fetcher.mockClear();
+  f.getToken.mockImplementation(async () => {
+    f.Clerk.session.id = "different";
+    return "wrong-session-token";
+  });
+  await f.click("Connect GitHub account");
+  expect(f.fetcher).not.toHaveBeenCalled();
+  expect(f.elements.error!.textContent).toContain("session changed");
+});
+it("polls completion and shows the connected repository account", async () => {
+  const f = await fixture("vitre-user");
+  await f.click("Connect GitHub account");
+  f.result({ status: "connected", account: { id: "gha_456", login: "work", state: "connected" } });
+  await f.timers.at(-1)!();
+  expect(f.elements.status!.textContent).toBe("@work is connected for repository access.");
+  expect(f.storage.size).toBe(0);
+  expect(f.elements.connection!.children).toHaveLength(0);
+});
+it("shows authorization expiry and stops retaining an unusable pending request", async () => {
+  const f = await fixture("vitre-user");
+  await f.click("Connect GitHub account");
+  f.fetcher.mockImplementation(async () =>
+    Response.json({ message: "Code expired. Start a new connection." }, { status: 409 }),
+  );
+  await f.timers.at(-1)!();
+  expect(f.elements.error!.textContent).toContain("Code expired");
+  expect(f.storage.size).toBe(0);
+});
+it("keeps the sign-in identity and disconnects only the selected repository connection", async () => {
+  const f = await fixture("vitre-user");
+  const personal = f.elements.accounts!.children[0]!;
+  const work = f.elements.accounts!.children[1]!;
+  expect(personal.children.map((el) => el.textContent)).not.toContain("Disconnect");
+  await work.children.find((el) => el.textContent === "Disconnect")!.onclick!();
+  expect(
+    f.fetcher.mock.calls.some(
+      ([, init]) => init.body === JSON.stringify({ type: "disconnect", accountId: "gha_123" }),
+    ),
+  ).toBe(true);
+});
+it("lets a signed-out browser use the existing Vitre sign-in first", async () => {
   const f = await fixture(null);
   expect(f.Clerk.mountSignIn).toHaveBeenCalledOnce();
+  expect(f.fetcher).not.toHaveBeenCalled();
   expect(f.createExternalAccount).not.toHaveBeenCalled();
 });

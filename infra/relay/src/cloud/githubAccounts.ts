@@ -2,12 +2,15 @@ import { createClerkClient } from "@clerk/backend";
 import type { CloudGitHubAccount } from "@t3tools/contracts/cloud";
 import { CloudError } from "./policy.ts";
 
+import type { GitHubConnectionCommand, GitHubConnectionStatus } from "./githubConnections.ts";
+
 export interface GitHubIdentity {
   id: string;
   providerUserId: string;
   token: string;
 }
 export interface GitHubAccounts {
+  connection?(userId: string, command: GitHubConnectionCommand): Promise<GitHubConnectionStatus>;
   list(userId: string): Promise<CloudGitHubAccount[]>;
   credential(userId: string, accountId: string): Promise<GitHubIdentity>;
 }

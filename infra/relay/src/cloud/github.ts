@@ -79,6 +79,23 @@ export class GitHubCloudClient {
     const claims = `${json64({ alg: "RS256", typ: "JWT" })}.${json64({ iat: Math.floor(now / 1000) - 60, exp: Math.floor(now / 1000) + 540, iss: this.config.appId })}`;
     return `${claims}.${encode(new Uint8Array(await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, utf8.encode(claims))))}`;
   }
+  async application(now: number): Promise<{ clientId: string }> {
+    const value = (await this.request("/app", await this.appToken(now))) as {
+      client_id?: unknown;
+      id?: unknown;
+    };
+    if (
+      String(value.id) !== this.config.appId ||
+      typeof value.client_id !== "string" ||
+      !/^[A-Za-z0-9_]{5,100}$/.test(value.client_id)
+    )
+      throw new CloudError(
+        "github_invalid_response",
+        "GitHub App identity could not be verified",
+        502,
+      );
+    return { clientId: value.client_id };
+  }
   async request(path: string, token: string, method = "GET", body?: unknown): Promise<unknown> {
     const response = await this.fetcher(`https://api.github.com${path}`, {
       method,

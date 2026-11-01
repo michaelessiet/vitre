@@ -370,7 +370,7 @@ impl CloudPanel {
         let manage_url = overview.and_then(|o| o.github_manage_url.clone());
         let accounts = overview.and_then(|o| o.github_accounts.as_ref());
         let mut body = v_flex().gap_3().child(div().text_xs().text_color(cx.theme().muted_foreground)
-            .child("Link personal and work accounts once. Sign in with either account to use both on desktop and mobile."));
+            .child("Connect personal and work GitHub accounts for repository access on desktop and mobile. Your Vitre sign-in stays separate."));
         for account in accounts.into_iter().flatten() {
             body = body.child(
                 h_flex()

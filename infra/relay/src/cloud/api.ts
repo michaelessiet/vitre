@@ -2,6 +2,7 @@ import { LensCommand, LensOverview, LensModelReply } from "@t3tools/contracts/le
 import { CloudLens } from "./lens.ts";
 import {
   CloudCommand,
+  CloudGitHubAccount,
   CloudConnection,
   CloudOverview,
   CloudProvider,
@@ -112,6 +113,10 @@ const cloudError = (error: CloudError) => {
 const Ok = Schema.Struct({ ok: Schema.Literal(true) });
 const errors = [...cloudErrors, RelayAuthInvalidError];
 const Id = Schema.String.check(Schema.isPattern(/^[a-zA-Z0-9_-]{1,128}$/));
+const GitHubRequestId = Schema.String.check(
+  Schema.isPattern(/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/),
+);
+const GitHubRepositoryAccountId = Schema.String.check(Schema.isPattern(/^gha_[1-9][0-9]{0,19}$/));
 const taskParams = Schema.Struct({ taskId: Id });
 const workerHeaders = Schema.Struct({ authorization: Schema.String });
 const Manifest = Schema.Struct({
@@ -133,6 +138,23 @@ const Manifest = Schema.Struct({
 });
 const cloudGroup = HttpApiGroup.make("cloud")
   .add(
+    HttpApiEndpoint.post("githubConnection", "/v1/cloud/github/connections", {
+      payload: Schema.Union([
+        Schema.Struct({ type: Schema.Literal("start"), requestId: GitHubRequestId }),
+        Schema.Struct({ type: Schema.Literal("poll"), requestId: GitHubRequestId }),
+        Schema.Struct({ type: Schema.Literal("disconnect"), accountId: GitHubRepositoryAccountId }),
+      ]),
+      success: Schema.Struct({
+        status: Schema.Literals(["pending", "connected", "disconnected"]),
+        requestId: Schema.optionalKey(Schema.String),
+        userCode: Schema.optionalKey(Schema.String),
+        verificationUri: Schema.optionalKey(Schema.String),
+        expiresAt: Schema.optionalKey(Schema.Number),
+        pollAfterMs: Schema.optionalKey(Schema.Number),
+        account: Schema.optionalKey(CloudGitHubAccount),
+      }),
+      error: errors,
+    }),
     HttpApiEndpoint.get("lensOverview", "/v1/cloud/lens", { success: LensOverview, error: errors }),
     HttpApiEndpoint.post("lensCommand", "/v1/cloud/lens/commands", {
       payload: LensCommand,
@@ -414,6 +436,12 @@ export const cloudApiLayer = HttpApiBuilder.group(
       return userId;
     });
     return handlers
+      .handle("githubConnection", ({ payload }) =>
+        Effect.gen(function* () {
+          const { userId } = yield* RelayClientPrincipal;
+          return yield* service.githubConnection(userId, payload).pipe(Effect.mapError(cloudError));
+        }),
+      )
       .handle("lensOverview", () =>
         Effect.gen(function* () {
           const { userId } = yield* RelayClientPrincipal;

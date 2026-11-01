@@ -70,6 +70,34 @@ const auth = JSON.stringify({
 });
 
 describe("cloud account and credential boundaries", () => {
+  it.effect("authorizes repository connection commands before contacting GitHub", () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      const connection = vi.fn(async () => ({ status: "disconnected" as const }));
+      f.config.github.accounts = {
+        list: async () => [],
+        credential: async () => {
+          throw new Error("unused");
+        },
+        connection,
+      };
+      const command = { type: "disconnect" as const, accountId: "gha_123" };
+      yield* f.run(
+        CloudService.pipe(Effect.flatMap((service) => service.githubConnection("user", command))),
+      );
+      expect(connection).toHaveBeenCalledWith("user", command);
+      const denied = yield* Effect.result(
+        f.run(
+          CloudService.pipe(
+            Effect.flatMap((service) => service.githubConnection("other", command)),
+          ),
+        ),
+      );
+      expect(denied._tag).toBe("Failure");
+      expect(connection).toHaveBeenCalledTimes(1);
+    }),
+  );
+
   it.effect(
     "syncs linked GitHub identities for the same account and refuses another Vitre user",
     () =>
