@@ -31,6 +31,7 @@ import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 
 import RelayStack from "../alchemy.run.ts";
 import { prepareRelayDatabase } from "./database.ts";
+import { deploymentTeardown } from "./teardown.ts";
 
 const relayDeployOutputFields = [
   "url",
@@ -519,6 +520,6 @@ if (import.meta.main) {
   Command.run(relayDeployCommand, { version: "0.0.0" }).pipe(
     Effect.provide(deployServices),
     Effect.scoped,
-    NodeRuntime.runMain,
+    NodeRuntime.runMain({ teardown: deploymentTeardown }),
   );
 }

@@ -139,11 +139,11 @@ the URL manually.
 
 ### Deployment CI
 
-`.github/workflows/deploy-relay.yml` is reusable and runs only after successful
-main validation in `Vitre CI`. Deployment remains disabled until the repository
-variable `RELAY_DEPLOY_ENABLED` is explicitly `true`. Pull requests and manual CI
-builds never deploy. Development DMGs do not read deployment secrets or tracing
-credentials.
+`.github/workflows/deploy-relay.yml` automatically deploys cloud changes after
+successful main validation in `Vitre CI`. No opt-in flag is required. Set the
+repository variable `RELAY_DEPLOY_ENABLED=false` to pause deployments explicitly.
+Pull requests and manual CI builds never deploy. Development DMGs do not read
+deployment secrets or tracing credentials.
 
 Use the existing `production` GitHub environment. Configure its values to match
 the existing installation; do not rename the stack, switch the database, or
@@ -180,23 +180,34 @@ Optional configuration and feature-dependent requirements:
   starts so existing accounts, workers, and cleanup continue to function.
 - An existing GitHub App integration requires variables `VITRE_GITHUB_APP_ID`,
   `VITRE_GITHUB_INSTALLATION_IDS`, and secret `VITRE_GITHUB_PRIVATE_KEY` together.
+- Machine runtime updates require variables `VITRE_CLOUD_AWS_ROLE_ARN`,
+  `VITRE_CLOUD_AWS_REGION`, `VITRE_CLOUD_INSTANCE_ID`,
+  `VITRE_CLOUD_RUNTIME_BUCKET`, and `VITRE_CLOUD_RUNTIME_URL`. The bucket and HTTPS
+  artifact origin must refer to the same existing runtime distribution bucket.
+  Use the [AWS role setup](../../scripts/vitre/cloud/README.md#automatic-production-deployment)
+  for short-lived GitHub credentials. Do not store an AWS login session in secrets.
 
 Account-wide credentials can be repository secrets; installation-specific values
-belong in `production`. No secrets are copied automatically. Secrets are exposed
-only to the configuration/deployment step. Preflight errors name missing fields
-without printing their values, before migrations or infrastructure are applied.
+belong in `production`. Restrict this environment to the `main` branch. No secrets
+are copied automatically. Build and smoke-test steps receive no deployment secrets.
+Preflight errors name missing fields without printing their values, before runtime
+installation, migrations, or infrastructure changes.
 
 The workflow serializes baseline selection and deployment. It compares the exact
 validated commit with the last successful production deployment, including all
-intervening changes. Unchanged and superseded commits are skipped; divergent or
-unreadable history fails closed. With no recorded success, the configured existing
-stack is deployed. GitHub records success only after deployment completes, with
-applied/no-op results in the run summary.
+intervening changes. Cloud inputs include `infra/relay`, `scripts/vitre/cloud`,
+`apps/server`, shared packages, and their build dependencies. Unchanged and
+superseded commits are skipped; divergent or unreadable history fails closed.
+With no recorded success, the configured existing stack and runtime are deployed.
 
-Enable the repository flag only after configuration is complete. The next
-successful main push evaluates cumulative relay changes. Unset the flag to stop
-future automatic deployment. This pipeline does not publish or install AWS machine
-runtime images; coordinate those separately when upgrading the cloud protocol.
+For runtime changes, CI builds the pinned Linux image, runs the backend/browser
+smoke test, exports and verifies an immutable archive, and installs it through SSM
+before updating the relay. Existing conversations keep their original filesystem;
+new workers use the new runtime. Protocol changes incompatible with resident
+workers still require a coordinated drain. Relay-only changes skip image building.
+GitHub records success only after installation, relay deployment, and live health,
+Lens-route, and GitHub-account-route checks pass. An old Worker returning a healthy
+`/health` response but missing feature routes is a failed deployment.
 
 See [Vitre CI and development builds](../../docs/operations/release.md) for artifact
 triggers, metadata, and local verification.

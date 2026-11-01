@@ -14,8 +14,8 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
-      issues: write
-      pull-requests: read
+      # Labels on PRs need PR write access, including repositories with Issues disabled.
+      pull-requests: write
     concurrency:
       group: vitre-pr-size-${{ github.event.pull_request.number }}
       cancel-in-progress: true

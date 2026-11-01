@@ -40,11 +40,24 @@ export function affectsNative(path: string): boolean {
 
 export function affectsRelay(path: string): boolean {
   return (
+    affectsCloudRuntime(path) ||
+    path.startsWith("infra/relay/") ||
+    path === ".github/workflows/ci.yml" ||
+    path === ".github/workflows/deploy-relay.yml"
+  );
+}
+
+/** Inputs copied into the Linux runtime or used to build and install it. */
+export function affectsCloudRuntime(path: string): boolean {
+  return (
     sharedFiles.has(path) ||
     sharedPrefixes.some((prefix) => path.startsWith(prefix)) ||
-    path.startsWith("infra/relay/") ||
-    path.startsWith("packages/") ||
-    path === ".github/workflows/ci.yml" ||
+    ["apps/server/", "packages/", "scripts/vitre/cloud/", "oxlint-plugin-t3code/"].some((prefix) =>
+      path.startsWith(prefix),
+    ) ||
+    path === "scripts/vitre/prune-packaged-node-modules.mjs" ||
+    path === "scripts/package.json" ||
+    path === ".dockerignore" ||
     path === ".github/workflows/deploy-relay.yml"
   );
 }

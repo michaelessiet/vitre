@@ -1,7 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off - Standalone deployment preflight; no infrastructure mutations.
 import * as NodeFS from "node:fs";
-import { affectsRelay, changedFiles, git, type Git } from "./changes.ts";
+import { affectsCloudRuntime, affectsRelay, changedFiles, git, type Git } from "./changes.ts";
 import { githubApi, type GitHubApi } from "./github.ts";
+import { validateRuntimeConfiguration } from "./cloud-runtime.ts";
 
 export function deploymentAllowed(input: {
   enabled: string | undefined;
@@ -12,7 +13,7 @@ export function deploymentAllowed(input: {
   sha: string | undefined;
 }): boolean {
   return (
-    input.enabled === "true" &&
+    input.enabled !== "false" &&
     input.event === "push" &&
     input.ref === "refs/heads/main" &&
     input.result === "success" &&
@@ -46,19 +47,24 @@ export async function lastSuccessfulDeployment(
 }
 
 export function relayChanges(candidate: string, baseline: string | null, runGit: Git = git) {
-  if (!baseline) return { deploy: true, reason: "No successful production deployment baseline" };
-  if (candidate === baseline) return { deploy: false, reason: "Commit already deployed" };
+  if (!baseline)
+    return { deploy: true, runtime: true, reason: "No successful production deployment baseline" };
+  if (candidate === baseline)
+    return { deploy: false, runtime: false, reason: "Commit already deployed" };
   // Unlike CI's change selection, missing deployment history must fail closed.
   const mergeBase = runGit(["merge-base", candidate, baseline]).trim();
-  if (mergeBase === candidate) return { deploy: false, reason: "A descendant is already deployed" };
+  if (mergeBase === candidate)
+    return { deploy: false, runtime: false, reason: "A descendant is already deployed" };
   if (mergeBase !== baseline)
     throw new Error("Production deployment history diverges from this commit");
-  const deploy = changedFiles(baseline, candidate, runGit).some(affectsRelay);
+  const paths = changedFiles(baseline, candidate, runGit);
+  const deploy = paths.some(affectsRelay);
   return {
     deploy,
+    runtime: paths.some(affectsCloudRuntime),
     reason: deploy
-      ? "Relay inputs changed since the last deployment"
-      : "No relay changes since the last deployment",
+      ? "Cloud inputs changed since the last deployment"
+      : "No cloud changes since the last deployment",
   };
 }
 
@@ -114,6 +120,7 @@ export function validateRelayConfiguration(env: Record<string, string | undefine
   for (const name of new Set(required)) {
     if (!env[name]?.trim()) errors.push(`${name} is required`);
   }
+  if (env.DEPLOY_CLOUD_RUNTIME === "true") errors.push(...validateRuntimeConfiguration(env));
   return errors;
 }
 
@@ -130,7 +137,11 @@ if (import.meta.main) {
       candidate: process.env.CANDIDATE_SHA,
       sha: process.env.GITHUB_SHA,
     });
-    let result = { deploy: false, reason: "Deployment is disabled or this is not validated main" };
+    let result = {
+      deploy: false,
+      runtime: false,
+      reason: "Deployment is paused or this is not validated main",
+    };
     if (allowed) {
       const baseline = await lastSuccessfulDeployment(
         githubApi(process.env.GH_TOKEN!, process.env.GITHUB_API_URL),
@@ -139,7 +150,10 @@ if (import.meta.main) {
       if (baseline) git(["fetch", "--no-tags", "origin", baseline]);
       result = relayChanges(process.env.CANDIDATE_SHA!, baseline);
     }
-    NodeFS.appendFileSync(process.env.GITHUB_OUTPUT!, `deploy=${result.deploy}\n`);
+    NodeFS.appendFileSync(
+      process.env.GITHUB_OUTPUT!,
+      `deploy=${result.deploy}\nruntime=${result.runtime}\n`,
+    );
     NodeFS.appendFileSync(process.env.GITHUB_STEP_SUMMARY!, `${result.reason}.\n`);
   }
 }
