@@ -102,14 +102,15 @@ jobs:
       ref: ${{ github.sha }}
 
   relay:
-    name: Relay deployment
+    name: Cloud deployment
     needs: result
     if: >-
       !cancelled() && needs.result.result == 'success' && github.event_name == 'push' &&
-      github.ref == 'refs/heads/main' && vars.RELAY_DEPLOY_ENABLED == 'true'
+      github.ref == 'refs/heads/main' && vars.RELAY_DEPLOY_ENABLED != 'false'
     permissions:
       contents: read
       deployments: read
+      id-token: write
     uses: ./.github/workflows/deploy-relay.yml
     secrets: inherit
     with:

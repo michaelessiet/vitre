@@ -4,7 +4,14 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { afterEach, describe, expect, it } from "vite-plus/test";
-import { affectsNative, affectsRelay, changedFiles, selectChecks, type Git } from "./changes.ts";
+import {
+  affectsCloudRuntime,
+  affectsNative,
+  affectsRelay,
+  changedFiles,
+  selectChecks,
+  type Git,
+} from "./changes.ts";
 import { checkResults } from "./result.ts";
 
 const directories: string[] = [];
@@ -72,6 +79,12 @@ describe("CI change selection", () => {
   it("covers relay dependencies and tooling without deploying for native UI or documentation", () => {
     for (const path of [
       "infra/relay/src/worker.ts",
+      "scripts/vitre/cloud/lens.mjs",
+      "scripts/vitre/cloud/Dockerfile",
+      "scripts/vitre/cloud/toolchain.json",
+      "apps/server/src/bootstrap.ts",
+      "scripts/vitre/prune-packaged-node-modules.mjs",
+      ".dockerignore",
       "packages/shared/src/relay.ts",
       "pnpm-lock.yaml",
       "scripts/ci/relay.ts",
@@ -84,6 +97,24 @@ describe("CI change selection", () => {
       "apps/mobile/src/Composer.tsx",
     ])
       expect(affectsRelay(path)).toBe(false);
+  });
+
+  it("rebuilds the runtime for packaged dependencies but not relay-only changes", () => {
+    for (const path of [
+      "apps/server/src/bin.ts",
+      "packages/contracts/src/model.ts",
+      "pnpm-lock.yaml",
+      "scripts/vitre/cloud/worker.mjs",
+      "scripts/vitre/prune-packaged-node-modules.mjs",
+      ".dockerignore",
+    ])
+      expect(affectsCloudRuntime(path)).toBe(true);
+    for (const path of [
+      "infra/relay/src/worker.ts",
+      "crates/vitre-app/src/lens.rs",
+      "docs/lens.md",
+    ])
+      expect(affectsCloudRuntime(path)).toBe(false);
   });
 
   it("selects push checks for deletions and both sides of moves", () => {

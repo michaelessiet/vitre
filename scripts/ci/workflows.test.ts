@@ -24,14 +24,34 @@ describe("workflow boundaries", () => {
     expect(relay.jobs.deploy.env.VITRE_CLOUD_REQUIRE_EXISTING_STACK).toBe("true");
   });
 
-  it("gates privileged deployment on successful main CI and explicit opt-in", () => {
+  it("automatically deploys validated main unless explicitly paused", () => {
     const job = workflow("ci").jobs.relay;
     expect(job.needs).toBe("result");
     expect(job.if).toContain("needs.result.result == 'success'");
     expect(job.if).toContain("github.event_name == 'push'");
     expect(job.if).toContain("github.ref == 'refs/heads/main'");
-    expect(job.if).toContain("vars.RELAY_DEPLOY_ENABLED == 'true'");
+    expect(job.if).toContain("vars.RELAY_DEPLOY_ENABLED != 'false'");
     expect(job.with.ref).toBe("${{ github.sha }}");
+  });
+
+  it("builds and verifies the runtime before deploying the relay", () => {
+    const job = workflow("deploy-relay").jobs.deploy;
+    const names = job.steps.map((step: { name?: string }) => step.name);
+    expect(names.indexOf("Validate production configuration")).toBeLessThan(
+      names.indexOf("Build and smoke test cloud runtime"),
+    );
+    expect(names.indexOf("Publish and install matching runtime")).toBeLessThan(
+      names.indexOf("Deploy existing relay stack"),
+    );
+    expect(names.indexOf("Verify deployed routes")).toBeGreaterThan(
+      names.indexOf("Deploy existing relay stack"),
+    );
+    const build = job.steps.find(
+      (step: { name?: string }) => step.name === "Build and smoke test cloud runtime",
+    );
+    expect(JSON.stringify(build)).not.toContain("secrets.");
+    expect(job.permissions["id-token"]).toBe("write");
+    expect(workflow("ci").jobs.relay.permissions["id-token"]).toBe("write");
   });
 
   it("keeps build artifacts free of deployment environments and credentials", () => {

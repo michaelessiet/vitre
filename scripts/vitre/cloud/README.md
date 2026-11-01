@@ -83,8 +83,70 @@ The exporter prints the archive SHA-256. Publish an immutable version using
 `install-machine.sh ROOTFS.tar SHA256`. The rootfs contains the packaged backend,
 pinned provider tooling and machine supervisor, with no credentials or private
 application data. The installer refuses to overwrite an installed runtime.
-Existing hosts require a drained upgrade to a versioned rootfs; unlink targets
-before replacing files that may be hardlinked to an older runtime.
+Existing hosts use versioned runtimes through the automatic deployment below.
+Drain workers before incompatible protocol upgrades. Unlink targets before
+replacing files that may be hardlinked to an older runtime.
+
+## Automatic production deployment
+
+Validated merges to `main` automatically deploy changed cloud code through
+`.github/workflows/deploy-relay.yml`. See the
+[production configuration](../../../infra/relay/README.md#deployment-ci) for the
+environment variables and secrets. Set `RELAY_DEPLOY_ENABLED=false` only when
+intentionally pausing releases. Missing configuration fails the deployment visibly.
+
+Runtime changes build and smoke-test the Linux image using the provider versions
+in `toolchain.json`. The archive is published under a key containing its full Git
+revision and SHA-256. SSM downloads it on the existing machine, and
+`upgrade-machine.py` verifies the checksum before extracting into a new directory.
+Identical files can share hard links; changed files never overwrite an older
+runtime. The supervisor switches through a durable systemd override, verifies its
+authenticated health, and checks that existing worker PIDs survived. Failed
+activation restores the previous supervisor configuration. Retained conversation
+data and previous runtime directories are preserved. Monitor disk capacity and
+retire old runtimes only after no workers use them.
+
+This supports compatible rolling releases. A protocol change that cannot coexist
+with existing conversation workers must be drained separately. The workflow
+deploys the relay only after the matching runtime is verified, and does not record
+success until the live feature routes are present.
+
+Use a dedicated GitHub OIDC role rather than long-lived AWS credentials. Trust
+`https://token.actions.githubusercontent.com` with audience `sts.amazonaws.com`
+and the exact production environment subject. Read the repository's subject prefix
+with `gh api repos/OWNER/REPO/actions/oidc/customization/sub`; newer repositories
+include immutable owner/repository IDs. Append `:environment:production` to that
+prefix, and restrict the GitHub `production` environment to the `main` branch.
+
+The role needs only these permissions (replace the installation identifiers):
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "ssm:SendCommand",
+      "Resource": [
+        "arn:aws:ec2:REGION:ACCOUNT:instance/INSTANCE_ID",
+        "arn:aws:ssm:REGION::document/AWS-RunShellScript"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": "ssm:GetCommandInvocation",
+      "Resource": "*",
+      "Condition": { "StringEquals": { "aws:RequestedRegion": "REGION" } }
+    }
+  ]
+}
+```
+
+`GetCommandInvocation` does not support resource-level restrictions. The role
+cannot provision or terminate hosts, read machine secrets through Parameter Store,
+or change IAM. SSM command payloads contain the reviewed installer and the public
+artifact URL; machine credentials stay on the host. See the
+[GitHub OIDC guide](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-aws).
 
 The machine agent stays running under systemd and launches isolated conversation
 processes against the installed filesystem. Worker startup does not download or

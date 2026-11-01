@@ -37,7 +37,6 @@ describe("deployment eligibility", () => {
   it("allows only the exact validated main push", () => {
     expect(deploymentAllowed(allowed)).toBe(true);
     for (const override of [
-      { enabled: undefined },
       { enabled: "false" },
       { event: "pull_request" },
       { event: "workflow_dispatch" },
@@ -49,6 +48,30 @@ describe("deployment eligibility", () => {
       { sha: undefined },
     ])
       expect(deploymentAllowed({ ...allowed, ...override })).toBe(false);
+  });
+
+  it("deploys validated main by default and supports an explicit emergency pause", () => {
+    expect(deploymentAllowed({ ...allowed, enabled: undefined })).toBe(true);
+    expect(deploymentAllowed({ ...allowed, enabled: "" })).toBe(true);
+    expect(deploymentAllowed({ ...allowed, enabled: "false" })).toBe(false);
+  });
+
+  it("coordinates runtime updates for worker and backend changes", () => {
+    for (const path of [
+      "scripts/vitre/cloud/lens.mjs",
+      "apps/server/src/cloud.ts",
+      "packages/contracts/src/model.ts",
+    ]) {
+      const result = relayChanges("head", "deployed", (args) =>
+        args[0] === "merge-base" ? "deployed" : `${path}\0`,
+      );
+      expect(result).toMatchObject({ deploy: true, runtime: true });
+    }
+    expect(
+      relayChanges("head", "deployed", (args) =>
+        args[0] === "merge-base" ? "deployed" : "infra/relay/src/worker.ts\0",
+      ),
+    ).toMatchObject({ deploy: true, runtime: false });
   });
 
   it("compares cumulatively to the deployed revision, including after unrelated pushes", () => {
