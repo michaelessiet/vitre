@@ -111,17 +111,13 @@ export async function publishRuntime({
         .catch(() => {});
   }
 }
-async function main() {
-  const [file, bucket, key] = process.argv.slice(2);
-  const account = process.env.CLOUDFLARE_ACCOUNT_ID;
-  if (!file || !bucket || !key || !account)
-    throw new Error(
-      "Usage: node --env-file=PRIVATE_ENV scripts/vitre/cloud/publish-runtime.mjs FILE BUCKET IMMUTABLE_KEY",
-    );
-  let accessKeyId = process.env.R2_ACCESS_KEY_ID,
-    secretAccessKey = process.env.R2_SECRET_ACCESS_KEY;
+export async function createArtifactClient(env = process.env) {
+  const account = env.CLOUDFLARE_ACCOUNT_ID;
+  if (!account) throw new Error("CLOUDFLARE_ACCOUNT_ID is required");
+  let accessKeyId = env.R2_ACCESS_KEY_ID,
+    secretAccessKey = env.R2_SECRET_ACCESS_KEY;
   if (!accessKeyId || !secretAccessKey) {
-    const token = process.env.CLOUDFLARE_API_TOKEN;
+    const token = env.CLOUDFLARE_API_TOKEN;
     if (!token)
       throw new Error("R2 credentials or a Cloudflare account token with R2 access are required");
     const response = await fetch(
@@ -134,12 +130,18 @@ async function main() {
     accessKeyId = result.result.id;
     secretAccessKey = NodeCrypto.createHash("sha256").update(token).digest("hex");
   }
-  const client = new S3Client({
+  return new S3Client({
     region: "auto",
     endpoint: `https://${account}.r2.cloudflarestorage.com`,
     credentials: { accessKeyId, secretAccessKey },
     maxAttempts: 4,
   });
+}
+async function main() {
+  const [file, bucket, key] = process.argv.slice(2);
+  if (!file || !bucket || !key)
+    throw new Error("Usage: publish-runtime.mjs FILE BUCKET IMMUTABLE_KEY");
+  const client = await createArtifactClient();
   try {
     const result = await publishRuntime({
       file,

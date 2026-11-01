@@ -1,69 +1,98 @@
-// @effect-diagnostics nodeBuiltinImport:off - Focused runtime deployment command validation.
+// @effect-diagnostics nodeBuiltinImport:off - Focused runtime deployment verification.
 import { describe, expect, it } from "vite-plus/test";
 import {
   runtimeKey,
   runtimeUrl,
-  upgradeCommand,
+  runtimeHealthMatches,
   validateRuntimeConfiguration,
-  verifiedInvocation,
+  waitForRuntime,
 } from "./cloud-runtime.ts";
 
 const revision = "a".repeat(40);
 const sha256 = "b".repeat(64);
+const ready = { ready: true, protocol: 1, runtime: { revision, sha256 } };
 
 describe("cloud runtime deployment", () => {
-  it("uses immutable versioned artifacts and rejects invalid revisions and URLs", () => {
-    expect(runtimeUrl("https://artifacts.example.com/releases", revision, sha256)).toBe(
-      `https://artifacts.example.com/releases/${runtimeKey(revision, sha256)}`,
+  it("uses immutable artifacts on a single HTTPS origin", () => {
+    expect(runtimeUrl("https://artifacts.example.com", revision, sha256)).toBe(
+      `https://artifacts.example.com/${runtimeKey(revision, sha256)}`,
     );
     expect(() => runtimeKey("main; echo bad", sha256)).toThrow();
     for (const url of [
       "http://example.com",
       "https://token@example.com",
       "https://example.com?token=secret",
+      "https://example.com/releases",
     ])
       expect(() => runtimeUrl(url, revision, sha256)).toThrow();
   });
-  it("requires the existing host and short-lived CI role before publishing", () => {
+  it("requires artifact distribution and authenticated health without AWS credentials", () => {
     expect(validateRuntimeConfiguration({})).toHaveLength(5);
     expect(
       validateRuntimeConfiguration({
-        VITRE_CLOUD_AWS_ROLE_ARN: "role",
-        VITRE_CLOUD_AWS_REGION: "eu-north-1",
-        VITRE_CLOUD_INSTANCE_ID: "i-0123456789abcdef0",
+        VITRE_CLOUD_MACHINE_URL: "https://machine.example.com",
+        VITRE_CLOUD_MACHINE_TOKEN: "machine-token",
+        VITRE_CLOUD_ALLOWED_USER_ID: "user-a",
         VITRE_CLOUD_RUNTIME_BUCKET: "runtime",
         VITRE_CLOUD_RUNTIME_URL: "https://artifacts.example.com",
       }),
     ).toEqual([]);
   });
-  it("quotes the artifact URL and encodes the installer instead of interpolating its shell syntax", () => {
-    const script = "print('$(do-not-run)')";
-    const command = upgradeCommand("https://example.com/a'b", sha256, revision, script, 1000);
-    expect(command).toContain("https://example.com/a'\\''b");
-    expect(command).not.toContain("$(do-not-run)");
-    expect(command).toContain(Buffer.from(script).toString("base64"));
-    expect(command).toContain("flock -n");
-    expect(command).toContain("--max-filesize 1000");
-    expect(() => upgradeCommand("https://example.com", sha256, revision, script, -1)).toThrow();
-  });
-  it("does not report success for failed, unhealthy, or wrong-revision installations", () => {
-    const result = { revision, sha256, health: "ready", warmWorkersPreserved: 2 };
-    expect(
-      verifiedInvocation(
-        { Status: "Success", StandardOutputContent: JSON.stringify(result) },
-        revision,
-        sha256,
-      ),
-    ).toEqual(result);
-    for (const invocation of [
-      { Status: "Failed", StandardOutputContent: JSON.stringify(result) },
-      {
-        Status: "Success",
-        StandardOutputContent: JSON.stringify({ ...result, revision: "c".repeat(40) }),
-      },
-      { Status: "Success", StandardOutputContent: JSON.stringify({ ...result, health: "failed" }) },
-      { Status: "Success" },
+  it("requires authenticated readiness at the exact revision and checksum", () => {
+    expect(runtimeHealthMatches(ready, revision, sha256)).toBe(true);
+    for (const body of [
+      null,
+      {},
+      { ...ready, ready: false },
+      { ...ready, protocol: 2 },
+      { ...ready, runtime: { revision: "c".repeat(40), sha256 } },
+      { ...ready, runtime: { revision, sha256: "d".repeat(64) } },
     ])
-      expect(() => verifiedInvocation(invocation, revision, sha256)).toThrow();
+      expect(runtimeHealthMatches(body, revision, sha256)).toBe(false);
+  });
+  it("waits through restart and an old runtime without accepting generic health", async () => {
+    const responses = [
+      new Response("restarting", { status: 503 }),
+      Response.json({ ready: true, protocol: 1 }),
+      Response.json(ready),
+    ];
+    await waitForRuntime({
+      origin: "https://machine.example.com",
+      token: "secret",
+      owner: "user-a",
+      revision,
+      sha256,
+      intervalMs: 0,
+      fetcher: async (url, options) => {
+        expect(String(url)).toBe("https://machine.example.com/v1/health");
+        expect(options?.headers).toEqual({
+          authorization: "Bearer secret",
+          "x-vitre-owner": "user-a",
+        });
+        expect(options?.redirect).toBe("error");
+        return responses.shift()!;
+      },
+    });
+    expect(responses).toHaveLength(0);
+  });
+  it("fails on invalid credentials or a release that never arrives", async () => {
+    const input = {
+      origin: "https://machine.example.com",
+      token: "secret",
+      owner: "user-a",
+      revision,
+      sha256,
+      intervalMs: 0,
+      timeoutMs: 0,
+    };
+    await expect(
+      waitForRuntime({ ...input, fetcher: async () => new Response("", { status: 401 }) }),
+    ).rejects.toThrow("credentials were rejected");
+    await expect(
+      waitForRuntime({
+        ...input,
+        fetcher: async () => Response.json({ ready: true, protocol: 1 }),
+      }),
+    ).rejects.toThrow("not installed");
   });
 });

@@ -41,5 +41,6 @@ RUN node /opt/vitre/server/node_modules/playwright-core/cli.js install --with-de
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /opt/vitre/models.json /opt/vitre/cloud/models.json
 COPY scripts/vitre/cloud/*.mjs /opt/vitre/cloud/
+COPY scripts/vitre/cloud/pull-runtime.py /opt/vitre/cloud/
 WORKDIR /workspace
 ENTRYPOINT ["node", "/opt/vitre/cloud/worker.mjs"]

@@ -213,6 +213,10 @@ def main(archive, sha256, revision):
             atomic(staged / ".vitre-runtime.json", (json.dumps(metadata) + "\n").encode(), 0o644)
             os.rename(staged, new)
     count = activate(new, old)
+    # Future reviewed releases can update the small polling client as well.
+    updater = new / "opt/vitre/cloud/pull-runtime.py"
+    if updater.is_file() and updater.resolve().is_relative_to(new.resolve()):
+        atomic(BASE / "pull-runtime.py", updater.read_bytes(), 0o755)
     print(json.dumps({**metadata, "rootfs": str(new), "previousRootfs": str(old), "warmWorkersPreserved": count, "health": "ready"}))
 
 

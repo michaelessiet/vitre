@@ -153,6 +153,7 @@ export async function createMachineAgent({
   driver,
   fetcher = fetch,
   recoveryIntervalMs = 5000,
+  runtime,
 }) {
   if (!ownerId || token.length < 32 || new URL(controlUrl).protocol !== "https:")
     throw new Error("Invalid machine configuration");
@@ -247,7 +248,7 @@ export async function createMachineAgent({
         return reply(401, { error: "Unauthorized" });
       const url = new URL(req.url, "http://localhost");
       if (url.pathname === "/v1/health" && req.method === "GET")
-        return reply(200, { ready: true, protocol: 1 });
+        return reply(200, { ready: true, protocol: 1, ...(runtime ? { runtime } : {}) });
       let body = "";
       for await (const chunk of req) {
         body += chunk;
@@ -504,6 +505,12 @@ if (process.argv[1] && import.meta.url === NodeURL.pathToFileURL(process.argv[1]
       token: process.env.VITRE_MACHINE_TOKEN ?? "",
       controlUrl: process.env.VITRE_MACHINE_CONTROL_URL,
       driver: systemdDriver(rootfs),
+      runtime: await NodeFSP.readFile(NodePath.join(rootfs, ".vitre-runtime.json"), "utf8")
+        .then(JSON.parse)
+        .catch((error) => {
+          if (error.code === "ENOENT") return undefined;
+          throw error;
+        }),
     });
     server.requestTimeout = 30_000;
     server.headersTimeout = 10_000;

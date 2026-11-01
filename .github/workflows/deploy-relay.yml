@@ -56,7 +56,6 @@ jobs:
     permissions:
       contents: read
       deployments: read
-      id-token: write
     environment:
       name: production
     env:
@@ -82,9 +81,6 @@ jobs:
       VITRE_GITHUB_APP_ID: ${{ vars.VITRE_GITHUB_APP_ID }}
       VITRE_GITHUB_INSTALLATION_IDS: ${{ vars.VITRE_GITHUB_INSTALLATION_IDS }}
       DEPLOY_CLOUD_RUNTIME: ${{ needs.eligibility.outputs.runtime == 'true' && vars.VITRE_CLOUD_MACHINE_URL != '' }}
-      VITRE_CLOUD_AWS_ROLE_ARN: ${{ vars.VITRE_CLOUD_AWS_ROLE_ARN }}
-      VITRE_CLOUD_AWS_REGION: ${{ vars.VITRE_CLOUD_AWS_REGION }}
-      VITRE_CLOUD_INSTANCE_ID: ${{ vars.VITRE_CLOUD_INSTANCE_ID }}
       VITRE_CLOUD_RUNTIME_BUCKET: ${{ vars.VITRE_CLOUD_RUNTIME_BUCKET }}
       VITRE_CLOUD_RUNTIME_URL: ${{ vars.VITRE_CLOUD_RUNTIME_URL }}
       VITRE_CLOUD_REQUIRE_EXISTING_STACK: "true"
@@ -125,18 +121,12 @@ jobs:
           VITRE_SMOKE_SECCOMP_PROFILE="$RUNNER_TEMP/seccomp.json" node scripts/vitre/cloud/smoke-image.mjs "vitre-cloud:$REVISION"
           node scripts/vitre/cloud/export-machine-runtime.mjs "vitre-cloud:$REVISION" "$RUNNER_TEMP/runtime.tar"
           gzip -n "$RUNNER_TEMP/runtime.tar"
-      - name: Authenticate runtime deployment
-        if: env.DEPLOY_CLOUD_RUNTIME == 'true'
-        uses: aws-actions/configure-aws-credentials@v5
-        with:
-          role-to-assume: ${{ vars.VITRE_CLOUD_AWS_ROLE_ARN }}
-          aws-region: ${{ vars.VITRE_CLOUD_AWS_REGION }}
-          role-session-name: vitre-cloud-${{ github.run_id }}
-      - name: Publish and install matching runtime
+      - name: Publish and verify matching runtime
         if: env.DEPLOY_CLOUD_RUNTIME == 'true'
         env:
           REVISION: ${{ inputs.ref }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          VITRE_CLOUD_MACHINE_TOKEN: ${{ secrets.VITRE_CLOUD_MACHINE_TOKEN }}
         run: |
           RUNTIME_SHA=$(sha256sum "$RUNNER_TEMP/runtime.tar.gz" | cut -d ' ' -f 1)
           RUNTIME_KEY="runtime-$REVISION-$RUNTIME_SHA.tar.gz"
