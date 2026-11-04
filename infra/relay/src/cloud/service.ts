@@ -32,7 +32,7 @@ import {
 import { CloudConfiguration } from "./config.ts";
 import { CredentialVault, sha256 } from "./crypto.ts";
 import { CloudError, iso } from "./policy.ts";
-import { CloudStore } from "./store.ts";
+import { CloudStore, controlStore, emptyDocument } from "./store.ts";
 import { GitHubCloudClient, githubForRequest } from "./github.ts";
 import { validateSubscriptionCredential } from "./subscription.ts";
 import {
@@ -102,7 +102,8 @@ export const layer = Layer.effect(
     const config = yield* CloudConfiguration;
     const artifacts = yield* CloudArtifacts;
     const cryptoService = yield* Crypto.Crypto;
-    const store = yield* CloudStore;
+    const fullStore = yield* CloudStore;
+    const store = controlStore(fullStore, { lens: "omit" });
     const allowed = (userId: string) =>
       config.allowedUserId && userId === config.allowedUserId
         ? Effect.void
@@ -228,11 +229,14 @@ export const layer = Layer.effect(
       }),
       command: Effect.fn("cloud.command")(function* (userId, command) {
         yield* allowed(userId);
-        const github = yield* githubForRequest(config.github);
+        // A text-only follow-up has no external validation to skip on replay.
+        // applyCommand checks its receipt in the same CAS as ownership and leases.
+        const directContinuation = command.type === "task.continue" && !command.attachments?.length;
+        const github = directContinuation ? config.github : yield* githubForRequest(config.github);
         const now = yield* currentMillis;
         const id = yield* cryptoService.randomUUIDv4.pipe(Effect.orDie);
         const fingerprint = yield* fromPromise(() => sha256(JSON.stringify(command)));
-        const current = yield* store.read(userId);
+        const current = directContinuation ? emptyDocument() : yield* store.read(userId);
         const receipt = current.state.receipts[command.idempotencyKey];
         if (receipt) {
           if (receipt.fingerprint !== fingerprint)
@@ -346,7 +350,7 @@ export const layer = Layer.effect(
             });
         }
         if (command.type === "task.create" && command.source?.kind !== "local" && config.enabled) {
-          const document = yield* store.read(userId);
+          const document = current;
           if (!document.state.receipts[command.idempotencyKey]) {
             const repository = document.state.repositories[command.repositoryId];
             if (!repository)
@@ -368,6 +372,7 @@ export const layer = Layer.effect(
           }
         }
         const result = yield* store.mutate(userId, (document) => {
+          const replay = document.state.receipts[command.idempotencyKey];
           if (
             command.type === "task.create" &&
             command.source?.kind !== "local" &&
@@ -393,6 +398,13 @@ export const layer = Layer.effect(
             now,
             config.enabled,
           );
+          // A receipt replay must remain a read. Scheduling here can rewrite
+          // unrelated task state and make acknowledgement recovery time out too.
+          if (replay)
+            return {
+              response: { entityId, overview: overview(document.state, userId, now) },
+              needsWake: false,
+            };
           if (command.type === "task.create" && entityId === id && resolved)
             document.state.tasks[id]!.baseSha = resolved.sha;
           backfillProjects(document.state);
@@ -485,7 +497,7 @@ export const layer = Layer.effect(
           );
         const hash = yield* fromPromise(() => sha256(token));
         const now = yield* currentMillis;
-        yield* store.mutate(userId, (document) => {
+        const needsWake = yield* fullStore.mutate(userId, (document) => {
           const credential = document.private.workerTokens[callback.taskId];
           if (!credential || credential.hash !== hash)
             throw new CloudError("unauthorized", "Invalid worker credential", 401);
@@ -510,8 +522,13 @@ export const layer = Layer.effect(
             );
           }
           backfillProjects(document.state);
+          return (
+            ["failed", "needs_auth", "usage_limited"].includes(callback.phase) ||
+            Object.keys(document.state.operations).length > 0 ||
+            Object.values(document.state.tasks).some((task) => task.state === "queued")
+          );
         });
-        yield* wake(userId);
+        if (needsWake) yield* wake(userId);
       }),
     });
   }),

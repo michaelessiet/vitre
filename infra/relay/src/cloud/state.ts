@@ -820,7 +820,8 @@ export function accrue(state: CloudState, task: MutableCloudTask, now: number): 
   const attempt = task.attempt;
   if (attempt && isResidentWorker(task)) {
     // Dedicated machine billing is independent of its number of warm conversations.
-    attempt.billedThrough = iso(now);
+    // Its billing cursor has no accounting purpose. Advancing it on every idle
+    // scheduler tick defeats no-op persistence and contends with user messages.
     attempt.reservedMicroDollars = 0;
     return;
   }

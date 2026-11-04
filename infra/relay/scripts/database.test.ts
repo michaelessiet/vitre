@@ -38,6 +38,16 @@ describe.skipIf(!testUrl)("PostgreSQL database deployment", () => {
         has_schema_privilege('vitre_relay', 'public', 'CREATE') AS ddl,
         has_table_privilege('vitre_relay', 'relay_migrations', 'INSERT') AS journal`;
         expect(privileges[0]).toEqual({ read: true, write: true, ddl: false, journal: false });
+        const settings = yield* sql<{
+          rolconfig: string[];
+        }>`SELECT rolconfig FROM pg_roles WHERE rolname = 'vitre_relay'`;
+        expect(settings[0]!.rolconfig).toEqual(
+          expect.arrayContaining([
+            "statement_timeout=8s",
+            "lock_timeout=2s",
+            "idle_in_transaction_session_timeout=5s",
+          ]),
+        );
         const failed = yield* migrateDatabase([
           {
             id: "bad.sql",

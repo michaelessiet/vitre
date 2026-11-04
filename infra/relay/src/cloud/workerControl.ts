@@ -25,7 +25,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { CloudConfiguration } from "./config.ts";
-import { CloudStore, type CloudAccountDocument } from "./store.ts";
+import { CloudStore, controlStore, type CloudAccountDocument } from "./store.ts";
 import { CredentialVault, sha256 } from "./crypto.ts";
 import { GitHubCloudClient, githubForRequest } from "./github.ts";
 import { CloudError, iso } from "./policy.ts";
@@ -49,6 +49,7 @@ import {
 export const make = Effect.gen(function* () {
   const config = yield* CloudConfiguration;
   const store = yield* CloudStore;
+  const control = controlStore(store);
   const artifacts = yield* CloudArtifacts;
   const vault = () => new CredentialVault(config.encryptionKey);
   const github = githubForRequest(config.github).pipe(
@@ -72,7 +73,7 @@ export const make = Effect.gen(function* () {
   ) {
     if (!config.allowedUserId || !token)
       return yield* Effect.fail(new CloudError("unauthorized", "Invalid worker credential", 401));
-    const document = yield* store.read(config.allowedUserId);
+    const document = yield* control.read(config.allowedUserId);
     const hash = yield* fromPromise(() => sha256(token));
     return yield* Effect.try({
       try: () => authenticateDocument(document, taskId, hash),
@@ -81,6 +82,63 @@ export const make = Effect.gen(function* () {
   });
 
   return {
+    poll: Effect.fn("cloud.worker_poll")(function* (
+      taskId: string,
+      token: string,
+      attemptId: string,
+      lastTurnRequestId?: string,
+    ) {
+      if (!config.allowedUserId || !token)
+        return yield* Effect.fail(new CloudError("unauthorized", "Invalid worker credential", 401));
+      const hash = yield* fromPromise(() => sha256(token));
+      const now = yield* currentMillis;
+      const result = yield* control.mutate(config.allowedUserId, (document) => {
+        const { task, attempt } = authenticateDocument(document, taskId, hash);
+        if (attempt.id !== attemptId)
+          throw new CloudError("stale_worker", "Worker attempt was replaced", 409);
+        const stopRequested = !["running", "waiting_for_input"].includes(task.state);
+        const pending =
+          !stopRequested && task.turnRequestId && task.turnRequestId !== lastTurnRequestId;
+        // Discovery and admission share one revision. Do not grant credentials
+        // for a stale attempt, cancelled turn, inactive handoff, or another owner.
+        const acquired = Boolean(
+          pending &&
+          config.machine &&
+          changeProviderLease(document.state, taskId, attemptId, "acquire", task.turnRequestId),
+        );
+        const credential = acquired ? document.private.credentials[task.provider] : undefined;
+        if (acquired && !credential)
+          throw new CloudError("needs_auth", "Connect the provider account before starting", 401);
+        return {
+          task,
+          attempt,
+          binding: task.handoff
+            ? (document.state.bindings?.[task.handoff.conversationId] ?? null)
+            : null,
+          stopRequested,
+          yieldIdle: shouldYieldIdleWorker(document.state, task, now),
+          ...(pending && config.machine
+            ? { turnLease: { turnRequestId: task.turnRequestId!, acquired } }
+            : {}),
+          credential,
+        };
+      });
+      const { credential, ...status } = result;
+      if (!credential) return status;
+      return {
+        ...status,
+        turnLease: {
+          ...status.turnLease!,
+          version: credential.version,
+          credential: yield* fromPromise(() =>
+            vault().open(
+              credential.sealed,
+              `${config.allowedUserId}:${status.task.provider}:${credential.version}`,
+            ),
+          ),
+        },
+      };
+    }),
     legacyRepository: Effect.fn("cloud.worker_legacy_repository")(function* (
       taskId: string,
       token: string,
@@ -364,7 +422,7 @@ export const make = Effect.gen(function* () {
                       now,
                     ),
                   );
-      yield* store.mutate(config.allowedUserId, (doc) => {
+      yield* control.mutate(config.allowedUserId, (doc) => {
         const t = taskFor(doc.state, taskId);
         if (t.attempt?.id !== attempt.id || t.state !== "preparing")
           throw new CloudError("stale_worker", "Task was cancelled or replaced");
@@ -408,7 +466,7 @@ export const make = Effect.gen(function* () {
           new CloudError("unsupported", "Worker does not support warm leases"),
         );
       const hash = yield* fromPromise(() => sha256(token));
-      const credential = yield* store.mutate(config.allowedUserId, (document) => {
+      const credential = yield* control.mutate(config.allowedUserId, (document) => {
         // Validate against the same revision that grants the lease. This removes
         // an extra database round trip and fences token rotation during CAS retries.
         const { task, attempt } = authenticateDocument(document, taskId, hash);

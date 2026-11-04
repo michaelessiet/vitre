@@ -4,6 +4,7 @@ import {
   beginReconciliation,
   IDLE_RECONCILIATION_MS,
   needsFrequentReconciliation,
+  reconciliationUsers,
   wakeReconciliation,
   type ReconciliationBucket,
 } from "./reconciliation.ts";
@@ -28,6 +29,19 @@ function memoryBucket() {
 }
 
 describe("cloud idle reconciliation", () => {
+  it("coalesces a burst of wakes per account and ignores malformed messages", () => {
+    expect(
+      reconciliationUsers([
+        ...Array.from({ length: 100 }, () => ({ userId: "user" })),
+        null,
+        "user",
+        {},
+        { userId: 1 },
+        { userId: "" },
+        { userId: "other" },
+      ]),
+    ).toEqual(["user", "other"]);
+  });
   it("skips idle SQL work until the hourly recovery sweep", async () => {
     const bucket = memoryBucket();
     const gate = await beginReconciliation(bucket, "user", 1000);

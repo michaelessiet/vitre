@@ -75,6 +75,7 @@ import * as CloudScheduler from "./cloud/scheduler.ts";
 import {
   beginReconciliation,
   needsFrequentReconciliation,
+  reconciliationUsers,
   wakeReconciliation,
 } from "./cloud/reconciliation.ts";
 import * as CloudLens from "./cloud/lens.ts";
@@ -449,23 +450,22 @@ export default class Api extends Cloudflare.Worker<Api>()(
       });
 
     yield* Cloudflare.messages<unknown>(cloudQueue, {
-      batchSize: 1,
+      // Every wake targets the same personal account row. Autoscaling consumers
+      // only adds revision conflicts and can exhaust the database pool.
+      batchSize: 100,
+      maxConcurrency: 1,
       maxRetries: 5,
       maxWaitTime: "1 second",
+      retryDelay: "5 seconds",
     }).subscribe((stream) =>
       stream.pipe(
-        Stream.runForEach((message) =>
-          Effect.gen(function* () {
-            const body = message.body;
-            if (
-              typeof body !== "object" ||
-              body === null ||
-              !("userId" in body) ||
-              typeof body.userId !== "string"
-            )
-              return;
-            yield* reconcileCloud(body.userId, true);
-          }),
+        Stream.runCollect,
+        Effect.flatMap((messages) =>
+          Effect.forEach(
+            reconciliationUsers(messages.map((message) => message.body)),
+            (userId) => reconcileCloud(userId, true),
+            { discard: true },
+          ),
         ),
         Effect.provide(runtimeLayer),
       ),

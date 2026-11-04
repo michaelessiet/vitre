@@ -2,6 +2,8 @@ import { describe, expect, it } from "@effect/vitest";
 import { ExecutionContext } from "alchemy/ExecutionContext";
 import { sql } from "drizzle-orm";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as Redacted from "effect/Redacted";
 import * as Result from "effect/Result";
 import * as Scope from "effect/Scope";
@@ -12,6 +14,8 @@ const database = vi.hoisted(() => ({
   pools: [] as Array<{ end: ReturnType<typeof vi.fn>; options: { connectionString: string } }>,
   queries: [] as string[],
   connectError: null as Error | null,
+  clients: [] as Array<{ end: ReturnType<typeof vi.fn>; release: ReturnType<typeof vi.fn> }>,
+  queryStarted: null as (() => void) | null,
 }));
 
 vi.mock("pg", () => ({
@@ -23,24 +27,40 @@ vi.mock("pg", () => ({
       this.options = options;
       database.pools.push(this);
     }
-    connect(callback: (error: Error | null, client?: object) => void) {
+    connect(callback: (error: Error | null, client?: object, release?: () => void) => void) {
       if (database.connectError) {
         callback(database.connectError);
         return;
       }
-      callback(null, {
+      let pending: ((error: Error) => void) | undefined;
+      let ended = false;
+      const client = {
+        processID: null,
+        on: vi.fn(),
         once: vi.fn(),
         off: vi.fn(),
         release: vi.fn(),
+        end: vi.fn(async () => {
+          ended = true;
+          pending?.(new Error("Connection terminated"));
+        }),
         query: (
           query: string,
           _params: unknown[],
-          done: (error: null, result: { rows: Array<{ answer: number }> }) => void,
+          done: (error: Error | null, result?: { rows: Array<{ answer: number }> }) => void,
         ) => {
           database.queries.push(query);
+          if (ended) return done(new Error("Connection already ended"));
+          if (query === "select blocked") {
+            pending = done;
+            database.queryStarted?.();
+            return;
+          }
           done(null, { rows: [{ answer: 42 }] });
         },
-      });
+      };
+      database.clients.push(client);
+      callback(null, client, client.release);
     }
   },
 }));
@@ -60,7 +80,43 @@ describe("request PostgreSQL connection", () => {
     database.pools.length = 0;
     database.queries.length = 0;
     database.connectError = null;
+    database.clients.length = 0;
+    database.queryStarted = null;
   });
+
+  it.effect(
+    "discards an interrupted Hyperdrive connection without querying a null backend PID",
+    () =>
+      Effect.gen(function* () {
+        const db = yield* requestPostgres(
+          Effect.succeed(Redacted.make("postgresql://user:secret@hyperdrive.test/db")),
+        );
+        yield* request(
+          Effect.gen(function* () {
+            const started = yield* Deferred.make<void>();
+            database.queryStarted = () => {
+              Deferred.doneUnsafe(started, Effect.void);
+            };
+            const fiber = yield* Effect.forkChild(
+              Effect.gen(function* () {
+                yield* db.execute(sql`select blocked`);
+              }),
+            );
+            yield* Deferred.await(started);
+            yield* Effect.yieldNow;
+            expect(database.queries).toEqual(["select blocked"]);
+            yield* Fiber.interrupt(fiber);
+            expect(database.clients[0]!.end).toHaveBeenCalledExactlyOnceWith();
+            expect(database.clients[0]!.release).toHaveBeenCalledTimes(1);
+            expect(yield* db.execute(sql`select 42`)).toEqual([{ answer: 42 }]);
+            expect(database.clients).toHaveLength(2);
+            expect(database.queries.some((query) => query.includes("pg_cancel_backend"))).toBe(
+              false,
+            );
+          }),
+        );
+      }),
+  );
 
   it.effect("runs the first application query without a probe and reuses its pool", () =>
     Effect.gen(function* () {

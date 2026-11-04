@@ -4,6 +4,7 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeUtil from "node:util";
 import * as NodePath from "node:path";
 import * as NodeCrypto from "node:crypto";
+import * as NodeTimersPromises from "node:timers/promises";
 import { cloudStarts, type StartReport } from "./startProgress.ts";
 import {
   CloudRequestFailure,
@@ -59,7 +60,18 @@ export function cloudApi(
   )
     throw new Error("Cloud requires an HTTPS origin");
   return async (path: string, body?: unknown) => {
-    const response = await request(new URL(`/v1/cloud${path}`, origin), {
+    // Replay only a continuation with a durable receipt key. Serialize once so
+    // a lost acknowledgement can never turn a retry into a second user turn.
+    const continuation =
+      path === "/commands" &&
+      body !== null &&
+      typeof body === "object" &&
+      "type" in body &&
+      body.type === "task.continue" &&
+      "idempotencyKey" in body &&
+      typeof body.idempotencyKey === "string" &&
+      body.idempotencyKey.length > 0;
+    const options: RequestInit = {
       method: body === undefined ? "GET" : "POST",
       redirect: "error",
       headers: {
@@ -67,44 +79,64 @@ export function cloudApi(
         "Content-Type": "application/json",
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      // Keep one deadline across all attempts, including response-body reads.
       signal: AbortSignal.timeout(120_000),
-    });
-    if (!response.ok) {
-      const failure: unknown = await response.json().catch(() => null);
-      const code =
-        failure && typeof failure === "object" && "code" in failure ? failure.code : undefined;
-      // Relay codes are stable; never display arbitrary proxy or provider bodies.
-      const messages: Record<string, string> = {
-        worker_busy: "The cloud environment is still stopping. Wait a moment, then send again.",
-        task_busy:
-          "The cloud task is still queued or running. Wait for it to finish before sending again.",
-        switch_pending:
-          "This conversation is still moving. Wait for the location switch to finish.",
-        stale_owner: "This conversation moved to another environment. Reopen it before sending.",
-        idempotency_conflict:
-          "This request changed during a retry. Send it again as a new request.",
-        revision_conflict: "Repository settings changed. Refresh and try again.",
-        incomplete_workspace: "The workspace upload is incomplete. Try the transfer again.",
-        incomplete_attachment: "An attachment upload is incomplete. Send it again.",
-        incomplete_conversation:
-          "Conversation history has not finished uploading. Try the transfer again.",
-        task_limit: "Cloud task retention is full. Delete an old task before starting another.",
-        checkpoint_required: "The cloud workspace has no saved checkpoint yet.",
-      };
-      const detail =
-        failure && typeof failure === "object" ? (failure as Record<string, unknown>) : {};
-      // An HTTP/proxy failure alone cannot establish whether a mutation committed.
-      const rejected = detail.requestDisposition === "rejected";
-      throw new CloudRequestFailure(
-        typeof code === "string" && Object.hasOwn(messages, code)
-          ? messages[code]!
-          : `Cloud request failed (${response.status})`,
-        rejected ? "rejected" : "unknown",
-        typeof code === "string" ? code : undefined,
-        typeof detail.retryable === "boolean" ? detail.retryable : undefined,
-      );
+    };
+    const send = async () => {
+      const response = await request(new URL(`/v1/cloud${path}`, origin), options);
+      if (!response.ok) {
+        const failure: unknown = await response.json().catch(() => null);
+        const code =
+          failure && typeof failure === "object" && "code" in failure ? failure.code : undefined;
+        // Relay codes are stable; never display arbitrary proxy or provider bodies.
+        const messages: Record<string, string> = {
+          worker_busy: "The cloud environment is still stopping. Wait a moment, then send again.",
+          task_busy:
+            "The cloud task is still queued or running. Wait for it to finish before sending again.",
+          switch_pending:
+            "This conversation is still moving. Wait for the location switch to finish.",
+          stale_owner: "This conversation moved to another environment. Reopen it before sending.",
+          idempotency_conflict:
+            "This request changed during a retry. Send it again as a new request.",
+          revision_conflict: "Repository settings changed. Refresh and try again.",
+          incomplete_workspace: "The workspace upload is incomplete. Try the transfer again.",
+          incomplete_attachment: "An attachment upload is incomplete. Send it again.",
+          incomplete_conversation:
+            "Conversation history has not finished uploading. Try the transfer again.",
+          task_limit: "Cloud task retention is full. Delete an old task before starting another.",
+          checkpoint_required: "The cloud workspace has no saved checkpoint yet.",
+        };
+        const detail =
+          failure && typeof failure === "object" ? (failure as Record<string, unknown>) : {};
+        // An HTTP/proxy failure alone cannot establish whether a mutation committed.
+        const rejected = detail.requestDisposition === "rejected";
+        throw new CloudRequestFailure(
+          typeof code === "string" && Object.hasOwn(messages, code)
+            ? messages[code]!
+            : `Cloud request failed (${response.status})`,
+          rejected ? "rejected" : "unknown",
+          typeof code === "string" ? code : undefined,
+          typeof detail.retryable === "boolean"
+            ? detail.retryable
+            : response.status >= 500 || response.status === 429,
+        );
+      }
+      return response.json();
+    };
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await send();
+      } catch (error) {
+        const transient =
+          error instanceof CloudRequestFailure
+            ? error.retryable === true && error.requestDisposition !== "rejected"
+            : error instanceof TypeError || error instanceof SyntaxError;
+        if (!continuation || !transient || attempt >= 2 || options.signal?.aborted) throw error;
+        await NodeTimersPromises.setTimeout(250 * 2 ** attempt, undefined, {
+          signal: options.signal ?? undefined,
+        });
+      }
     }
-    return response.json();
   };
 }
 export async function captureCloudWorkspace(

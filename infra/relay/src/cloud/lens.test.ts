@@ -258,3 +258,15 @@ it("accepts fresh desktop inventory for manual reviews with scheduling off", () 
   expect(state.lens!.run?.prompt).toContain("Stale conversation");
   expect(state.lens!.run?.candidates.length).toBeGreaterThan(0);
 });
+
+it("keeps idle scheduler polls unchanged and refreshes inventory when a review is due", () => {
+  const state = fixture();
+  refreshLensInventory(state, now);
+  state.lens!.nextRunAt = new Date(now + 60_000).toISOString();
+  const before = structuredClone(state);
+  tickLens(state, now + 1_000, "idle", true);
+  expect(state).toEqual(before);
+  tickLens(state, now + 60_000, "due", true);
+  expect(state.lens!.inventories.cloud!.collectedAt).toBe(new Date(now + 60_000).toISOString());
+  expect(state.lens!.run?.id).toBe("due");
+});

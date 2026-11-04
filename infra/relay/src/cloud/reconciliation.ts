@@ -5,6 +5,24 @@ export const IDLE_RECONCILIATION_MS = 60 * 60 * 1000;
 export const reconciliationKey = (userId: string) =>
   `cloud-scheduler/${encodeURIComponent(userId)}.json`;
 
+/** Queue messages are wake hints; SQL holds every pending operation. One sweep
+ * per account handles the entire batch without competing copies of that sweep. */
+export function reconciliationUsers(bodies: ReadonlyArray<unknown>): string[] {
+  return [
+    ...new Set(
+      bodies.flatMap((body) =>
+        typeof body === "object" &&
+        body !== null &&
+        "userId" in body &&
+        typeof body.userId === "string" &&
+        body.userId.length > 0
+          ? [body.userId]
+          : [],
+      ),
+    ),
+  ];
+}
+
 export function needsFrequentReconciliation(state: CloudState): boolean {
   return (
     state.lens?.settings.enabled === true ||

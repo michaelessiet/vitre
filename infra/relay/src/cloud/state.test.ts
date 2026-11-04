@@ -931,6 +931,22 @@ describe("resident conversation provider leases", () => {
     state.tasks.task!.worker!.sandboxId = "machine-task-1";
     return state;
   };
+  it("keeps idle resident scheduler ticks unchanged while still detecting lost heartbeats", () => {
+    const state = resident();
+    const task = state.tasks.task!;
+    task.idle = true;
+    state.operations = {};
+    schedule(state, now, true, true);
+    const before = structuredClone(state);
+    for (let tick = 1; tick <= 10; tick++) schedule(state, now + tick * 1000, true, true);
+    expect(state).toEqual(before);
+    expect(state.usage).toEqual(before.usage);
+    schedule(state, now + CLOUD_POLICY.staleMs + 1, true, true);
+    expect(task.state).toBe("interrupted");
+    expect(Object.values(state.operations).some((operation) => operation.kind === "stop")).toBe(
+      true,
+    );
+  });
   it("yields an idle resident provider to a due Lens review without preempting a turn", () => {
     const state = resident();
     const task = state.tasks.task!;

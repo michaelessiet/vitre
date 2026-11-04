@@ -93,6 +93,8 @@ it.effect.each([
       if (url.pathname === "/v1/attempts") return Response.json([]);
       if (url.pathname.endsWith("/prepare")) return Response.json({ port: 20000 });
       if (init.method === "PUT") {
+        expect(doc.private.workerTokens[id]).toBeDefined();
+        expect(doc.private.endpoints[id]).toBeDefined();
         workersStarted++;
         return Response.json({ id: `machine-${id}-1` });
       }
@@ -147,6 +149,7 @@ it.effect.each([
       expect(doc.state.tasks[id]!.error).not.toContain("provider-secret");
       expect(workersStarted).toBe(0);
       expect(doc.private.endpoints[id]).toBeUndefined();
+      expect(doc.private.workerTokens[id]).toBeUndefined();
       failEndpoint = false;
       yield* scheduler.tick("user");
       expect(workersStarted).toBe(1);
