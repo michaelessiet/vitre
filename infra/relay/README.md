@@ -98,6 +98,20 @@ Hyperdrive receives only the runtime credential. Let deployment create the runti
 restricted SQL permissions; provider consoles may grant additional role memberships. Migration TLS
 verifies the server certificate and hostname using system trust by default.
 
+When deployment runners cannot reach PostgreSQL directly, set `RELAY_DATABASE_TUNNEL_HOSTNAME`
+and the deployment secrets `RELAY_DATABASE_TUNNEL_CLIENT_ID` / `RELAY_DATABASE_TUNNEL_CLIENT_SECRET`.
+The hostname must route through a Cloudflare Tunnel connector that can reach the database,
+with an Access **Service Auth** policy allowing only that service token. Require the application's
+Access JWT at the connector as well. Keep both database URLs pointed at the real database;
+deployment opens a temporary loopback TCP listener and retains the database hostname for TLS.
+Hyperdrive continues using the direct runtime URL. The tunnel closes after database setup,
+including on failure. CI verifies database access before building or publishing a runtime.
+
+The personal deployment uses `database-deploy.usevitre.app` on the existing AWS connector.
+Its service token expires on 2027-11-04; rotate it and update both GitHub secrets before expiry.
+To remove this path, clear the three tunnel settings, remove the Access application and service
+token, and remove only its DNS record and tunnel ingress rule. Preserve the machine API route.
+
 For a database with a private CA, set both `RELAY_DATABASE_CA_CERT` to its complete, quoted,
 multiline PEM certificate and `RELAY_DATABASE_CA_CERTIFICATE_ID` to the ID returned when uploading
 that same certificate to Cloudflare. Both settings are required together. Obtain the CA through

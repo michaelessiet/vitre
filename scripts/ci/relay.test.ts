@@ -155,6 +155,19 @@ describe("deployment eligibility", () => {
 });
 
 describe("deployment configuration", () => {
+  it("requires the complete database tunnel credential group without exposing secrets", () => {
+    const tunnel = {
+      RELAY_DATABASE_TUNNEL_HOSTNAME: "database.example.com",
+      RELAY_DATABASE_TUNNEL_CLIENT_ID: "private-id",
+      RELAY_DATABASE_TUNNEL_CLIENT_SECRET: "private-secret",
+    };
+    expect(validateRelayConfiguration({ ...configuration, ...tunnel })).toEqual([]);
+    for (const key of Object.keys(tunnel)) {
+      const errors = validateRelayConfiguration({ ...configuration, ...tunnel, [key]: "" });
+      expect(errors).toContain(`${key} is required`);
+      expect(errors.join("\n")).not.toContain("private-");
+    }
+  });
   it("accepts an explicit disabled-cloud deployment without APNs credentials", () => {
     expect(validateRelayConfiguration(configuration)).toEqual([]);
   });

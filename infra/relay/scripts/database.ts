@@ -1,8 +1,11 @@
 import * as PgClient from "@effect/sql-pg/PgClient";
+import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { listSqlFiles, type SqlFile } from "alchemy/Sql/SqlFile";
 import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
+import { databaseTunnelConfiguration, startDatabaseTunnel } from "./databaseTunnel.ts";
 import {
   DatabaseSetupError,
   databaseConfiguration,
@@ -80,44 +83,88 @@ export const configureRuntimeRole = (origin: {
     );
   }).pipe(Effect.withTracerEnabled(false));
 
-export const prepareRelayDatabase = Effect.gen(function* () {
-  const admin = yield* Config.redacted("RELAY_DATABASE_ADMIN_URL");
-  const runtime = yield* Config.redacted("RELAY_DATABASE_URL");
-  const caCertificate = yield* Config.string("RELAY_DATABASE_CA_CERT").pipe(Config.withDefault(""));
-  const caCertificateId = yield* Config.string("RELAY_DATABASE_CA_CERTIFICATE_ID").pipe(
-    Config.withDefault(""),
-  );
-  const { owner, origin } = yield* Effect.try({
-    try: () => databaseConfiguration(admin, runtime),
-    catch: () => new DatabaseSetupError({ message: "Invalid database configuration" }),
-  });
-  const tls = yield* Effect.try({
-    try: () => databaseTlsConfiguration(caCertificate, caCertificateId),
-    catch: () => new DatabaseSetupError({ message: "Invalid database TLS configuration" }),
-  });
-  const files = yield* listSqlFiles("./migrations/postgres");
-  yield* migrateDatabase(files).pipe(
-    Effect.andThen(configureRuntimeRole(origin)),
-    Effect.provide(
-      PgClient.layer({
-        host: owner.host,
-        port: owner.port,
-        database: owner.database,
-        username: owner.user,
-        password: owner.password,
-        ssl: tls.client,
-        maxConnections: 1,
-        connectTimeout: "30 seconds",
-      }),
+const databaseOperation = (verifyOnly: boolean) =>
+  Effect.gen(function* () {
+    const admin = yield* Config.redacted("RELAY_DATABASE_ADMIN_URL");
+    const runtime = yield* Config.redacted("RELAY_DATABASE_URL");
+    const caCertificate = yield* Config.string("RELAY_DATABASE_CA_CERT").pipe(
+      Config.withDefault(""),
+    );
+    const caCertificateId = yield* Config.string("RELAY_DATABASE_CA_CERTIFICATE_ID").pipe(
+      Config.withDefault(""),
+    );
+    const { owner, origin } = yield* Effect.try({
+      try: () => databaseConfiguration(admin, runtime),
+      catch: () => new DatabaseSetupError({ message: "Invalid database configuration" }),
+    });
+    const tls = yield* Effect.try({
+      try: () => databaseTlsConfiguration(caCertificate, caCertificateId),
+      catch: () => new DatabaseSetupError({ message: "Invalid database TLS configuration" }),
+    });
+    const tunnelHost = yield* Config.string("RELAY_DATABASE_TUNNEL_HOSTNAME").pipe(
+      Config.withDefault(""),
+    );
+    const tunnelId = yield* Config.redacted("RELAY_DATABASE_TUNNEL_CLIENT_ID").pipe(
+      Config.withDefault(Redacted.make("")),
+    );
+    const tunnelSecret = yield* Config.redacted("RELAY_DATABASE_TUNNEL_CLIENT_SECRET").pipe(
+      Config.withDefault(Redacted.make("")),
+    );
+    const tunnelConfig = yield* Effect.try({
+      try: () =>
+        databaseTunnelConfiguration(
+          tunnelHost,
+          Redacted.value(tunnelId),
+          Redacted.value(tunnelSecret),
+        ),
+      catch: () => new DatabaseSetupError({ message: "Invalid database tunnel configuration" }),
+    });
+    const tunnel = tunnelConfig
+      ? yield* Effect.acquireRelease(
+          Effect.tryPromise({
+            try: () => startDatabaseTunnel(tunnelConfig),
+            catch: () => new DatabaseSetupError({ message: "Database tunnel could not start" }),
+          }),
+          (connection) => Effect.promise(() => connection.close()),
+        )
+      : undefined;
+    const operation = verifyOnly
+      ? Effect.gen(function* () {
+          const sql = yield* PgClient.PgClient;
+          yield* sql`SELECT 1`;
+        })
+      : migrateDatabase(yield* listSqlFiles("./migrations/postgres")).pipe(
+          Effect.andThen(configureRuntimeRole(origin)),
+        );
+    yield* operation.pipe(
+      Effect.provide(
+        PgClient.layer({
+          host: tunnel ? "127.0.0.1" : owner.host,
+          port: tunnel?.port ?? owner.port,
+          database: owner.database,
+          username: owner.user,
+          password: owner.password,
+          ssl: { ...tls.client, servername: owner.host },
+          maxConnections: 1,
+          connectTimeout: "10 seconds",
+        }),
+      ),
+    );
+  }).pipe(
+    Effect.scoped,
+    // SQL errors may contain password-setting statements. Do not expose causes.
+    Effect.mapError(
+      () =>
+        new DatabaseSetupError({
+          message: verifyOnly
+            ? "PostgreSQL preflight failed. Check database network access, tunnel credentials, TLS trust and owner credentials."
+            : "PostgreSQL setup failed. Check database network access, tunnel credentials, owner permissions and migration compatibility.",
+        }),
     ),
   );
-}).pipe(
-  // SQL errors may contain password-setting statements. Do not expose causes.
-  Effect.mapError(
-    () =>
-      new DatabaseSetupError({
-        message:
-          "PostgreSQL setup failed. Check database availability, direct database URLs, owner permissions and migration compatibility.",
-      }),
-  ),
-);
+
+export const prepareRelayDatabase = databaseOperation(false);
+export const checkRelayDatabase = databaseOperation(true);
+
+if (import.meta.main)
+  NodeRuntime.runMain(checkRelayDatabase.pipe(Effect.provide(NodeServices.layer)));

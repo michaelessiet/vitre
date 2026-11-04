@@ -112,6 +112,11 @@ export function validateRelayConfiguration(env: Record<string, string | undefine
   // Require a complete group whenever configured, including while cloud starts are disabled.
   for (const group of [
     ["RELAY_DATABASE_CA_CERT", "RELAY_DATABASE_CA_CERTIFICATE_ID"],
+    [
+      "RELAY_DATABASE_TUNNEL_HOSTNAME",
+      "RELAY_DATABASE_TUNNEL_CLIENT_ID",
+      "RELAY_DATABASE_TUNNEL_CLIENT_SECRET",
+    ],
     ["VITRE_CLOUD_MACHINE_URL", "VITRE_CLOUD_MACHINE_TOKEN"],
     ["VITRE_GITHUB_APP_ID", "VITRE_GITHUB_PRIVATE_KEY", "VITRE_GITHUB_INSTALLATION_IDS"],
   ]) {
