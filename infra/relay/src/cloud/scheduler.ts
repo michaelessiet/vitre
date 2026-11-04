@@ -10,7 +10,7 @@ import { computeExecutor } from "./compute.ts";
 import { CLOUD_POLICY, CloudError, iso } from "./policy.ts";
 import { currentMillis, fromPromise } from "./service.ts";
 import { confirmStopped, schedule, type CloudOperation } from "./state.ts";
-import { CloudStore } from "./store.ts";
+import { CloudStore, controlStore } from "./store.ts";
 import { CloudAuxiliary } from "./auxiliary.ts";
 import { CloudArtifacts } from "./artifacts.ts";
 import { deliverCloudNotifications } from "./notifications.ts";
@@ -36,7 +36,8 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const config = yield* CloudConfiguration;
     const cryptoService = yield* Crypto.Crypto;
-    const store = yield* CloudStore;
+    const fullStore = yield* CloudStore;
+    const store = controlStore(fullStore, { lens: "omit" });
     const auxiliary = yield* CloudAuxiliary;
     const artifacts = yield* CloudArtifacts;
     const tunnels = yield* ManagedEndpointProvider;
@@ -61,14 +62,8 @@ export const layer = Layer.effect(
             (yield* cryptoService.randomUUIDv4.pipe(Effect.orDie));
           const sealed = yield* fromPromise(() => vault.seal(token, `${userId}:worker:${task.id}`));
           const hash = yield* fromPromise(() => sha256(token));
-          credential = yield* store.mutate(userId, (document) => {
-            document.private.workerTokens[task.id] ??= { hash, sealed };
-            return document.private.workerTokens[task.id]!;
-          });
+          credential = { hash, sealed };
         }
-        const token = yield* fromPromise(() =>
-          vault.open(credential.sealed, `${userId}:worker:${task.id}`),
-        );
         const backendPort = executor.prepare
           ? (yield* fromPromise(() => executor.prepare!(task.attempt!.id))).port
           : 3773;
@@ -83,6 +78,7 @@ export const layer = Layer.effect(
               ),
             ) as { backendPort?: number })
           : null;
+        let sealedEndpoint = current.private.endpoints[task.id];
         if (!retained || retained.backendPort !== backendPort) {
           const endpoint = yield* tunnels
             .provision({
@@ -105,17 +101,26 @@ export const layer = Layer.effect(
                     ),
               ),
             );
-          const sealed = yield* fromPromise(() =>
+          sealedEndpoint = yield* fromPromise(() =>
             vault.seal(
               JSON.stringify({ ...endpoint, backendPort }),
               `${userId}:endpoint:${task.id}`,
             ),
           );
-          yield* store.mutate(userId, (document) => {
-            document.private.endpoints[task.id] = sealed;
-          });
         }
-        if ((yield* store.read(userId)).state.tasks[task.id]?.state !== "preparing") return true;
+        // Persist both bootstrap prerequisites and revalidate the attempt in one
+        // CAS, before a process can use them. A concurrent cancellation wins.
+        const prepared = yield* store.mutate(userId, (document) => {
+          const latest = document.state.tasks[task.id];
+          if (latest?.attempt?.id !== task.attempt!.id || latest.state !== "preparing") return null;
+          document.private.workerTokens[task.id] ??= credential;
+          document.private.endpoints[task.id] = sealedEndpoint!;
+          return document.private.workerTokens[task.id]!;
+        });
+        if (!prepared) return true;
+        const token = yield* fromPromise(() =>
+          vault.open(prepared.sealed, `${userId}:worker:${task.id}`),
+        );
         const sandbox = yield* fromPromise(() =>
           executor.ensure(task.id, {
             controlUrl: config.controlUrl,
@@ -187,7 +192,7 @@ export const layer = Layer.effect(
             yield* fromPromise(() =>
               artifacts.deletePrefix!(`cloud/${encodeURIComponent(userId)}/${task.id}/`),
             );
-          yield* store.mutate(userId, (doc) => {
+          yield* fullStore.mutate(userId, (doc) => {
             delete doc.state.projections?.[task.id];
             delete doc.state.events?.[task.id];
             const t = doc.state.tasks[task.id];

@@ -253,13 +253,27 @@ Vitre without changing its sign-in identities or deleting conversations.
 
 ### Account write concurrency regression
 
-Cloud mutations lock the account row inside a PostgreSQL transaction. This keeps
-background reconciliation and user commands from exhausting optimistic retries.
-Reducers perform no external I/O; rejected reducers roll back the whole transaction.
-The lock wait is bounded to ten seconds.
+Cloud mutations commit with a revision-checked write, retrying only confirmed
+conflicts within a twenty-second deadline. Reducers can run more than once and
+must perform no external I/O. Ambiguous database failures are not replayed by the
+store; conversation continuations recover with their original idempotency key.
+
+Commands, scheduling, and worker polling omit retained event history and conversation
+excerpts in PostgreSQL. The conditional update preserves those fields atomically;
+callbacks and cleanup still use the full document. Idle resident billing and
+receipt replays leave the document unchanged, so they do not advance its revision.
+
+The cloud queue has one consumer, batches up to 100 wake hints, and reconciles
+each account once per batch. Failed batches wait five seconds before retrying.
+This limits background contention on the shared account row; it does not promise
+that arbitrary simultaneous foreground mutations will finish within the deadline.
 
 The focused `src/cloud/store.postgres.test.ts` integration test uses the real
 request-bound connection adapter and runs two batches of 32 concurrent mutations.
+It also checks history preservation during concurrent compact/full writes, and
+accepts a follow-up during 32 batched wakes with a 1.47 MB history and an injected
+400 ms delay per database operation. `src/cloud/store.test.ts` checks that a
+complete idle resident scheduler pass performs no write.
 It is opt-in: set `VITRE_STORE_TEST_DATABASE_URL` to a disposable PostgreSQL database
 named `vitre_store` on `127.0.0.1`, then run that test with `vp test run`. The test
 refuses other database targets and removes its account records afterwards.

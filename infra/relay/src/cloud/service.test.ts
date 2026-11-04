@@ -9,7 +9,7 @@ import { CloudStore, emptyDocument } from "./store.ts";
 import { CloudService, currentMillis, layer } from "./service.ts";
 import { CloudWorkerControl, layer as workerLayer } from "./workerControl.ts";
 import { CloudArtifacts } from "./artifacts.ts";
-import { CloudError } from "./policy.ts";
+import { CloudError, iso } from "./policy.ts";
 import { CredentialVault, sha256 } from "./crypto.ts";
 import { applyCommand, confirmStopped, schedule } from "./state.ts";
 import { backfillProjects, recordProjectSnapshot } from "./projects.ts";
@@ -19,13 +19,19 @@ afterEach(() => vi.unstubAllGlobals());
 
 function fixture() {
   let document = emptyDocument();
+  const calls = { reads: 0, mutations: 0 };
   const objects = new Map<string, Uint8Array<ArrayBuffer>>();
   const store = CloudStore.of({
-    read: () => Effect.sync(() => structuredClone(document)),
+    read: () =>
+      Effect.sync(() => {
+        calls.reads++;
+        return structuredClone(document);
+      }),
     users: Effect.succeed(["user"]),
     mutate: (_, reduce) =>
       Effect.try({
         try: () => {
+          calls.mutations++;
           const next = structuredClone(document);
           const value = reduce(next);
           document = next;
@@ -62,12 +68,148 @@ function fixture() {
   );
   const run = <A, E>(effect: Effect.Effect<A, E, CloudService | CloudWorkerControl>) =>
     effect.pipe(Effect.provide(services));
-  return { run, state: () => document, config, store, objects };
+  return { run, state: () => document, config, store, objects, calls };
 }
 const auth = JSON.stringify({
   auth_mode: "chatgpt",
   tokens: { refresh_token: "subscription-refresh" },
 });
+
+it.effect(
+  "polls and admits a pending turn in one mutation, preserving credential and attempt fences",
+  () =>
+    Effect.gen(function* () {
+      const f = fixture();
+      const now = yield* currentMillis;
+      f.config.machine = { url: "https://machine.example", token: "machine", ownerId: "user" };
+      yield* f.run(
+        CloudService.pipe(
+          Effect.flatMap((service) => service.saveCredential("user", "codex", auth, 0, "connect")),
+        ),
+      );
+      const token = "worker-token";
+      const hash = yield* Effect.promise(() => sha256(token));
+      const sealed = yield* Effect.promise(() =>
+        new CredentialVault(f.config.encryptionKey).seal(token, "user:worker:task"),
+      );
+      yield* f.store.mutate("user", (doc) => {
+        doc.state.repositories.repo = {
+          id: "repo",
+          installationId: "1",
+          owner: "owner",
+          name: "repo",
+          defaultBranch: "main",
+          setupCommand: "",
+          testCommand: "",
+          revision: 1,
+        };
+        applyCommand(
+          doc.state,
+          {
+            type: "task.create",
+            idempotencyKey: "create",
+            repositoryId: "repo",
+            baseBranch: "main",
+            provider: "codex",
+            kind: "ask",
+            prompt: "Explain",
+            issueNumber: null,
+          },
+          "task",
+          "create",
+          now,
+          true,
+        );
+        schedule(doc.state, now, true, true);
+        const task = doc.state.tasks.task!;
+        task.state = "running";
+        task.idle = false;
+        task.worker!.state = "ready";
+        task.worker!.sandboxId = "machine-task-1";
+        task.turnRequestId = "next";
+        doc.state.operations = {};
+        doc.private.workerTokens.task = { hash, sealed };
+      });
+      const poll = (last = "previous", credential = token, attempt = "task-1") =>
+        f.run(
+          CloudWorkerControl.pipe(
+            Effect.flatMap((control) => control.poll("task", credential, attempt, last)),
+          ),
+        );
+      const before = { ...f.calls };
+      expect(yield* poll()).toMatchObject({
+        stopRequested: false,
+        turnLease: { turnRequestId: "next", acquired: true, credential: auth, version: 1 },
+      });
+      expect(f.calls.reads - before.reads).toBe(0);
+      expect(f.calls.mutations - before.mutations).toBe(1);
+      // Lost responses may replay admission, but the worker's durable turn ID
+      // suppresses another dispatch; caught-up polls never return credentials.
+      expect(yield* poll()).toMatchObject({ turnLease: { acquired: true } });
+      expect(yield* poll("next")).not.toHaveProperty("turnLease");
+      expect(yield* poll("next")).not.toHaveProperty("credential");
+      const admitted = structuredClone(f.state());
+      expect((yield* Effect.flip(poll("previous", "wrong-token"))).code).toBe("unauthorized");
+      expect((yield* Effect.flip(poll("previous", token, "task-0"))).code).toBe("stale_worker");
+      expect(f.state()).toEqual(admitted);
+      // A retained lease must still yield to an older pending conversation.
+      yield* f.store.mutate("user", (doc) => {
+        doc.state.tasks.task!.turnRequestId = "later";
+        doc.state.tasks.older = {
+          ...structuredClone(doc.state.tasks.task!),
+          id: "older",
+          state: "queued",
+          updatedAt: iso(now - 1),
+        };
+      });
+      expect(yield* poll("next")).toMatchObject({
+        yieldIdle: true,
+        turnLease: { turnRequestId: "later", acquired: false },
+      });
+      yield* f.store.mutate("user", (doc) => {
+        delete doc.state.tasks.older;
+        doc.state.tasks.task!.turnRequestId = "later";
+        doc.state.accounts.codex.leasedBy = "other-attempt";
+      });
+      const waiting = yield* poll("next");
+      expect(waiting.turnLease).toEqual({ turnRequestId: "later", acquired: false });
+      expect(waiting).not.toHaveProperty("credential");
+      yield* f.store.mutate("user", (doc) => {
+        doc.state.accounts.codex.state = "disconnected";
+      });
+      expect((yield* Effect.flip(poll("next"))).code).toBe("needs_auth");
+      let wakes = 0;
+      f.config.wake = () =>
+        Effect.sync(() => {
+          wakes++;
+        });
+      const callback = (phase: "heartbeat" | "failed", sequence: number) =>
+        f.run(
+          CloudService.pipe(
+            Effect.flatMap((service) =>
+              service.callback(token, {
+                taskId: "task",
+                attemptId: "task-1",
+                generation: 1,
+                sequence,
+                phase,
+                detail: "",
+              }),
+            ),
+          ),
+        );
+      yield* callback("heartbeat", 1);
+      expect(wakes).toBe(0);
+      yield* callback("failed", 2);
+      expect(wakes).toBe(1);
+      yield* f.store.mutate("user", (doc) => {
+        doc.state.tasks.task!.state = "cancelled";
+      });
+      const cancelled = yield* poll("next");
+      expect(cancelled.stopRequested).toBe(true);
+      expect(cancelled).not.toHaveProperty("turnLease");
+    }),
+);
 
 describe("cloud account and credential boundaries", () => {
   it.effect("authorizes repository connection commands before contacting GitHub", () =>
@@ -681,6 +823,34 @@ describe("cloud account and credential boundaries", () => {
           turnRequestId: "warm",
         });
         expect(wakes).toBe(0);
+        const beforeReplay = { ...f.calls };
+        const beforeReplayState = structuredClone(f.state());
+        // A replay must not schedule an unrelated stale task or update billing.
+        f.state().state.tasks.task!.attempt!.heartbeatAt = iso(now - 10 * 60_000);
+        const replayState = structuredClone(f.state());
+        f.config.github.accountsForRequest = Effect.die("Follow-ups must not initialize GitHub");
+        expect((yield* send("warm")).entityId).toBe("task");
+        expect(f.calls.reads - beforeReplay.reads).toBe(0);
+        expect(f.calls.mutations - beforeReplay.mutations).toBe(1);
+        expect(f.state()).toEqual(replayState);
+        f.state().state.tasks.task!.attempt!.heartbeatAt =
+          beforeReplayState.state.tasks.task!.attempt!.heartbeatAt;
+        expect(
+          (yield* Effect.flip(
+            f.run(
+              CloudService.pipe(
+                Effect.flatMap((service) =>
+                  service.command("user", {
+                    type: "task.continue",
+                    taskId: "task",
+                    idempotencyKey: "warm",
+                    prompt: "Changed",
+                  }),
+                ),
+              ),
+            ),
+          )).code,
+        ).toBe("idempotency_conflict");
         yield* f.store.mutate("user", (document) => {
           document.state.tasks.task!.idle = true;
           document.state.operations["unrelated"] = {

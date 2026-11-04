@@ -154,6 +154,88 @@ describe("cloud conversation preparation", () => {
       continueCloudConversation(input, session, async () => Response.json({ sha256: "bad" })),
     ).rejects.toThrow("integrity");
   });
+
+  it.each(["lost response", "persistence timeout", "proxy failure"])(
+    "reconciles a follow-up after %s with the exact same receipt and payload",
+    async (failure) => {
+      const input = {
+        idempotencyKey: "durable-follow-up",
+        taskId: "task",
+        prompt: "Open a PR",
+        attachments: [],
+      };
+      const bodies: string[] = [];
+      const accepted = new Set<string>();
+      const result = await continueCloudConversation(
+        input,
+        { relayUrl: "https://cloud.test", accessToken: "test" },
+        async (_url, options) => {
+          const serialized = String(options.body);
+          bodies.push(serialized);
+          const command = JSON.parse(serialized);
+          // Model a commit followed by a lost acknowledgement. Receipt replay
+          // must succeed even if the caller's input changes while awaiting I/O.
+          accepted.add(command.idempotencyKey);
+          if (bodies.length === 1) {
+            input.prompt = "Changed after dispatch";
+            if (failure === "lost response") throw new TypeError("fetch failed");
+            if (failure === "proxy failure") return new Response("Bad gateway", { status: 502 });
+            return Response.json(
+              { code: "persistence_unavailable", requestDisposition: "unknown", retryable: true },
+              { status: 503 },
+            );
+          }
+          return Response.json({ entityId: "task", overview });
+        },
+      );
+      expect(result.entityId).toBe("task");
+      expect(bodies).toHaveLength(2);
+      expect(bodies[1]).toBe(bodies[0]);
+      expect(accepted.size).toBe(1);
+      expect(JSON.parse(bodies[1]!)).toMatchObject({ prompt: "Open a PR" });
+    },
+  );
+
+  it("bounds retries and retains an unknown delivery outcome when persistence stays unavailable", async () => {
+    const request = vi.fn(async () =>
+      Response.json(
+        { code: "persistence_unavailable", requestDisposition: "unknown", retryable: true },
+        { status: 503 },
+      ),
+    );
+    await expect(
+      continueCloudConversation(
+        { idempotencyKey: "retry", taskId: "task", prompt: "Hello", attachments: [] },
+        { relayUrl: "https://cloud.test", accessToken: "test" },
+        request,
+      ),
+    ).rejects.toMatchObject({ code: "persistence_unavailable", requestDisposition: "unknown" });
+    expect(request).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not retry authentication, ownership conflicts, or other command types", async () => {
+    for (const [status, code] of [
+      [401, "unauthorized"],
+      [409, "stale_owner"],
+      [409, "idempotency_conflict"],
+    ] as const) {
+      const request = vi.fn(async () => Response.json({ code }, { status }));
+      await expect(
+        continueCloudConversation(
+          { idempotencyKey: "retry", taskId: "task", prompt: "Hello", attachments: [] },
+          { relayUrl: "https://cloud.test", accessToken: "test" },
+          request,
+        ),
+      ).rejects.toMatchObject({ code });
+      expect(request).toHaveBeenCalledTimes(1);
+    }
+    const request = vi.fn(async () => new Response(null, { status: 503 }));
+    const api = cloudApi({ relayUrl: "https://cloud.test", accessToken: "test" }, request);
+    await expect(
+      api("/commands", { type: "task.create", idempotencyKey: "create" }),
+    ).rejects.toThrow();
+    expect(request).toHaveBeenCalledTimes(1);
+  });
   it("infers GitHub identities without accepting arbitrary hosts or URL credentials", () => {
     expect(githubIdentity("git@github.com:owner/repo.git")).toEqual({
       owner: "owner",

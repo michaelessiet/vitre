@@ -7,7 +7,7 @@ import * as Layer from "effect/Layer";
 import { proxyChain } from "alchemy/Util/proxy-chain";
 import { RelayDb } from "../db.ts";
 import { CloudStore, emptyDocument, layer, type CloudAccountDocument } from "./store.ts";
-import { publicOverview } from "./state.ts";
+import { applyCommand, publicOverview, schedule } from "./state.ts";
 import { CloudError } from "./policy.ts";
 
 /** Model an atomic revision-checked write, including a competing Worker. */
@@ -78,6 +78,58 @@ function fixture(initialRevision?: number, race = false, failWrite = false) {
 }
 
 describe("account overview revision", () => {
+  it.effect("does not persist an idle resident scheduler pass", () => {
+    const f = fixture(7);
+    const now = 1_793_750_400_000;
+    return f.run(
+      Effect.gen(function* () {
+        const store = yield* CloudStore;
+        yield* store.mutate("user", (doc) => {
+          doc.state.accounts.codex.state = "connected";
+          doc.state.repositories.repo = {
+            id: "repo",
+            installationId: "1",
+            owner: "example",
+            name: "repo",
+            defaultBranch: "main",
+            setupCommand: "",
+            testCommand: "",
+            revision: 1,
+          };
+          applyCommand(
+            doc.state,
+            {
+              type: "task.create",
+              idempotencyKey: "create",
+              repositoryId: "repo",
+              baseBranch: "main",
+              provider: "codex",
+              kind: "ask",
+              prompt: "Explain",
+              issueNumber: null,
+            },
+            "task",
+            "create",
+            now,
+            true,
+          );
+          schedule(doc.state, now, true, true);
+          const task = doc.state.tasks.task!;
+          task.worker!.sandboxId = "machine-task-1";
+          task.worker!.state = "ready";
+          task.state = "running";
+          task.idle = true;
+          doc.state.operations = {};
+        });
+        const before = yield* store.read("user");
+        const writes = f.attempted.length;
+        for (let tick = 1; tick <= 10; tick++)
+          yield* store.mutate("user", (doc) => schedule(doc.state, now + tick * 1000, true, true));
+        expect(yield* store.read("user")).toEqual(before);
+        expect(f.attempted).toHaveLength(writes);
+      }),
+    );
+  });
   it.effect("does not write or advance the revision for idle polls and idempotent replays", () => {
     const f = fixture(7);
     return f.run(

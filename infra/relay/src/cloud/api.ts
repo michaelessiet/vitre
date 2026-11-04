@@ -352,6 +352,13 @@ const callbackGroup = HttpApiGroup.make("cloudWorker").add(
     success: Schema.Unknown,
     error: cloudErrors,
   }),
+  HttpApiEndpoint.post("workerPoll", "/v1/cloud/worker/:taskId/poll", {
+    params: taskParams,
+    headers: workerHeaders,
+    payload: Schema.Struct({ attemptId: Id, lastTurnRequestId: Schema.optionalKey(Id) }),
+    success: Schema.Unknown,
+    error: cloudErrors,
+  }),
   HttpApiEndpoint.get("restore", "/v1/cloud/worker/:taskId/checkpoint", {
     params: taskParams,
     headers: workerHeaders,
@@ -660,6 +667,11 @@ export const cloudWorkerApiLayer = HttpApiBuilder.group(
       )
       .handle("bootstrap", ({ headers, params }) =>
         control.bootstrap(params.taskId, token(headers)).pipe(Effect.mapError(cloudError)),
+      )
+      .handle("workerPoll", ({ headers, params, payload }) =>
+        control
+          .poll(params.taskId, token(headers), payload.attemptId, payload.lastTurnRequestId)
+          .pipe(Effect.mapError(cloudError)),
       )
       .handle("restore", ({ headers, params }) =>
         control.restore(params.taskId, token(headers)).pipe(Effect.mapError(cloudError)),
