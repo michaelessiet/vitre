@@ -69,6 +69,7 @@ jobs:
       RELAY_DOMAIN: ${{ vars.RELAY_DOMAIN }}
       RELAY_API_ZONE_NAME: ${{ vars.RELAY_API_ZONE_NAME }}
       RELAY_TUNNEL_ZONE_NAME: ${{ vars.RELAY_TUNNEL_ZONE_NAME }}
+      RELAY_DATABASE_TUNNEL_HOSTNAME: ${{ vars.RELAY_DATABASE_TUNNEL_HOSTNAME }}
       CLERK_PUBLISHABLE_KEY: ${{ vars.CLERK_PUBLISHABLE_KEY }}
       CLERK_JWT_AUDIENCE: ${{ vars.CLERK_JWT_AUDIENCE }}
       APNS_ENVIRONMENT: ${{ vars.APNS_ENVIRONMENT }}
@@ -101,12 +102,32 @@ jobs:
           RELAY_DATABASE_URL: ${{ secrets.RELAY_DATABASE_URL }}
           RELAY_DATABASE_CA_CERT: ${{ secrets.RELAY_DATABASE_CA_CERT }}
           RELAY_DATABASE_CA_CERTIFICATE_ID: ${{ secrets.RELAY_DATABASE_CA_CERTIFICATE_ID }}
+          RELAY_DATABASE_TUNNEL_CLIENT_ID: ${{ secrets.RELAY_DATABASE_TUNNEL_CLIENT_ID }}
+          RELAY_DATABASE_TUNNEL_CLIENT_SECRET: ${{ secrets.RELAY_DATABASE_TUNNEL_CLIENT_SECRET }}
           AXIOM_TOKEN: ${{ secrets.AXIOM_TOKEN }}
           CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
           APNS_PRIVATE_KEY: ${{ secrets.APNS_PRIVATE_KEY }}
           VITRE_CLOUD_MACHINE_TOKEN: ${{ secrets.VITRE_CLOUD_MACHINE_TOKEN }}
           VITRE_CLOUD_ENCRYPTION_KEY: ${{ secrets.VITRE_CLOUD_ENCRYPTION_KEY }}
           VITRE_GITHUB_PRIVATE_KEY: ${{ secrets.VITRE_GITHUB_PRIVATE_KEY }}
+      - name: Install database tunnel client
+        if: env.RELAY_DATABASE_TUNNEL_HOSTNAME != ''
+        run: |
+          mkdir -p "$RUNNER_TEMP/vitre-tools"
+          curl --fail --silent --show-error --location https://github.com/cloudflare/cloudflared/releases/download/2026.5.2/cloudflared-linux-amd64 -o "$RUNNER_TEMP/vitre-tools/cloudflared"
+          printf '%s  %s\n' '5286698547f03df745adb2355f04c12dde52ef425491e81f433642d695521886' "$RUNNER_TEMP/vitre-tools/cloudflared" | sha256sum --check
+          chmod 755 "$RUNNER_TEMP/vitre-tools/cloudflared"
+          echo "$RUNNER_TEMP/vitre-tools" >> "$GITHUB_PATH"
+      - name: Verify database access before publishing a runtime
+        working-directory: infra/relay
+        run: node scripts/database.ts
+        env:
+          RELAY_DATABASE_ADMIN_URL: ${{ secrets.RELAY_DATABASE_ADMIN_URL }}
+          RELAY_DATABASE_URL: ${{ secrets.RELAY_DATABASE_URL }}
+          RELAY_DATABASE_CA_CERT: ${{ secrets.RELAY_DATABASE_CA_CERT }}
+          RELAY_DATABASE_CA_CERTIFICATE_ID: ${{ secrets.RELAY_DATABASE_CA_CERTIFICATE_ID }}
+          RELAY_DATABASE_TUNNEL_CLIENT_ID: ${{ secrets.RELAY_DATABASE_TUNNEL_CLIENT_ID }}
+          RELAY_DATABASE_TUNNEL_CLIENT_SECRET: ${{ secrets.RELAY_DATABASE_TUNNEL_CLIENT_SECRET }}
       - uses: docker/setup-buildx-action@v3
         if: env.DEPLOY_CLOUD_RUNTIME == 'true'
       - name: Build and smoke test cloud runtime
@@ -144,6 +165,8 @@ jobs:
           RELAY_DATABASE_URL: ${{ secrets.RELAY_DATABASE_URL }}
           RELAY_DATABASE_CA_CERT: ${{ secrets.RELAY_DATABASE_CA_CERT }}
           RELAY_DATABASE_CA_CERTIFICATE_ID: ${{ secrets.RELAY_DATABASE_CA_CERTIFICATE_ID }}
+          RELAY_DATABASE_TUNNEL_CLIENT_ID: ${{ secrets.RELAY_DATABASE_TUNNEL_CLIENT_ID }}
+          RELAY_DATABASE_TUNNEL_CLIENT_SECRET: ${{ secrets.RELAY_DATABASE_TUNNEL_CLIENT_SECRET }}
           AXIOM_TOKEN: ${{ secrets.AXIOM_TOKEN }}
           CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
           APNS_PRIVATE_KEY: ${{ secrets.APNS_PRIVATE_KEY }}
