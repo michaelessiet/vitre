@@ -30,6 +30,7 @@ import { HttpClient } from "effect/unstable/http";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { makeClaudeTextGeneration } from "../../textGeneration/ClaudeTextGeneration.ts";
+import { discoverClaudeSkills } from "./ClaudeSkills.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderDriverError } from "../Errors.ts";
@@ -248,6 +249,23 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
         snapshot,
         adapter,
         textGeneration,
+        getComposerCapabilities: (cwd) =>
+          Effect.all(
+            [
+              discoverClaudeSkills(effectiveConfig, cwd, processEnv),
+              probeClaudeCapabilities(effectiveConfig, processEnv, cwd),
+            ],
+            { concurrency: "unbounded" },
+          ).pipe(
+            Effect.map(([skills, capabilities]) => ({
+              skills,
+              ...(capabilities ? { slashCommands: capabilities.slashCommands } : {}),
+            })),
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+            Effect.provideService(FileSystem.FileSystem, fileSystem),
+            Effect.provideService(Path.Path, path),
+            Effect.orElseSucceed(() => undefined),
+          ),
       } satisfies ProviderInstance;
     }),
 };

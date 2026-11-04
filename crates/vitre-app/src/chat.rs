@@ -8,6 +8,8 @@
 mod branch_toolbar;
 pub(crate) mod cloud_thread;
 use cloud_thread::{CloudDraft, ThreadFeed, ThreadLocation, WorkLocation};
+#[cfg(debug_assertions)]
+mod capabilities_verification;
 mod changed_files;
 #[cfg(test)]
 mod cloud_thread_tests;
@@ -102,7 +104,9 @@ use gpui_tokio::Tokio;
 use tokio::sync::watch;
 use vitre_client::{EnvironmentClient, ShellState, SyncPhase, ThreadHandle, ThreadState};
 use vitre_contracts::UploadChatAttachment as TurnAttachment;
-use vitre_contracts::methods::{AssetsCreateUrl, ProjectsSearchEntries, SubscribeServerConfig};
+use vitre_contracts::methods::{
+    AssetsCreateUrl, ProjectsSearchEntries, ServerGetComposerCapabilities, SubscribeServerConfig,
+};
 use vitre_contracts::{
     ApprovalRequestId, AssetCreateUrlInput, AssetResource, ChatAttachment, ChatFileAttachment,
     ChatImageAttachment, ClientOrchestrationCommand, CommandId, ExecutionEnvironmentPlatformOs,
@@ -111,7 +115,7 @@ use vitre_contracts::{
     OrchestrationThreadActivityTone, OrchestrationThreadProposedPlans, OrchestrationThreadShell,
     ProjectEntry, ProjectEntryKind, ProjectId, ProjectSearchEntriesInput, ProviderApprovalDecision,
     ProviderInteractionMode, ProviderOptionDescriptor, RuntimeMode, ServerConfigStreamEvent,
-    ThreadId, TrimmedNonEmptyString,
+    ServerGetComposerCapabilitiesPayload, ThreadId, TrimmedNonEmptyString,
 };
 use vitre_rpc::TypedStreamEvent;
 use vitre_sidecar::SupervisorStatus;
@@ -256,6 +260,9 @@ pub struct ChatApp {
     /// Keeping those events here prevents every chat consumer from remaining
     /// stuck on the bootstrap list while Settings shows the live providers.
     provider_snapshots: Vec<vitre_contracts::ServerProvider>,
+    scoped_capabilities: HashMap<(String, String), (std::time::Instant, ComposerCapabilities)>,
+    scoped_capabilities_loading: HashSet<(String, String)>,
+    scoped_capabilities_generation: u64,
     shell: ShellState,
     thread: Option<OpenThread>,
     source_plan_thread: Option<SourcePlanThread>,
@@ -604,6 +611,18 @@ struct ComposerMenuState {
     items: Vec<ComposerMenuItem>,
 }
 
+#[derive(Clone)]
+struct ComposerCapability {
+    name: String,
+    description: String,
+}
+
+#[derive(Clone, Default)]
+struct ComposerCapabilities {
+    skills: Vec<ComposerCapability>,
+    commands: Vec<ComposerCapability>,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum ComposerTriggerKind {
     Path,
@@ -764,6 +783,124 @@ fn model_selection_identity(selection: &ModelSelection) -> Option<(String, Strin
         .and_then(serde_json::Value::as_str)?;
     let model = selection.model.as_str()?;
     Some((instance.to_string(), model.to_string()))
+}
+
+fn provider_for_model_selection<'a>(
+    providers: &'a [vitre_contracts::ServerProvider],
+    selection: &ModelSelection,
+) -> Option<&'a vitre_contracts::ServerProvider> {
+    if let Some(instance_id) = selection
+        .instance_id
+        .as_ref()
+        .and_then(|value| value.as_ref())
+        .and_then(serde_json::Value::as_str)
+    {
+        return providers
+            .iter()
+            .find(|provider| provider.instance_id.0 == instance_id);
+    }
+
+    if let Some(provider_id) = selection
+        .provider
+        .as_ref()
+        .and_then(|value| value.as_ref())
+        .and_then(serde_json::Value::as_str)
+    {
+        return providers
+            .iter()
+            .find(|provider| provider.instance_id.0 == provider_id);
+    }
+
+    // Older selections may carry only a model. Choosing an unrelated ready
+    // provider would expose its commands and skills in the wrong conversation.
+    let model = selection.model.as_str()?;
+    providers.iter().find(|provider| {
+        provider
+            .models
+            .iter()
+            .any(|candidate| candidate.slug.0 == model)
+    })
+}
+
+fn snapshot_composer_capabilities(
+    provider: &vitre_contracts::ServerProvider,
+    cwd: Option<&str>,
+) -> ComposerCapabilities {
+    let skills = provider
+        .skills
+        .as_ref()
+        .and_then(|skills| skills.as_ref())
+        .into_iter()
+        .flatten()
+        .filter(|skill| {
+            if !skill.enabled {
+                return false;
+            }
+            match (skill.scope.as_ref().and_then(|scope| scope.as_deref()), cwd) {
+                (Some("repo" | "project"), Some(cwd)) => Path::new(&skill.path).starts_with(cwd),
+                _ => true,
+            }
+        })
+        .map(|skill| ComposerCapability {
+            name: skill.name.clone(),
+            description: skill
+                .short_description
+                .clone()
+                .flatten()
+                .or_else(|| skill.description.clone().flatten())
+                .unwrap_or_else(|| "Run provider skill".into()),
+        })
+        .collect();
+    let commands = provider
+        .slash_commands
+        .as_ref()
+        .and_then(|commands| commands.as_ref())
+        .into_iter()
+        .flatten()
+        .map(|command| ComposerCapability {
+            name: command.name.clone(),
+            description: command
+                .description
+                .clone()
+                .flatten()
+                .or_else(|| command.input.clone().flatten().map(|input| input.hint))
+                .unwrap_or_else(|| "Run provider command".into()),
+        })
+        .collect();
+    ComposerCapabilities { skills, commands }
+}
+
+fn scoped_composer_capabilities(
+    response: vitre_contracts::ServerGetComposerCapabilitiesSuccess,
+) -> ComposerCapabilities {
+    let skills = response
+        .skills
+        .into_iter()
+        .filter(|skill| skill.enabled)
+        .map(|skill| ComposerCapability {
+            name: skill.name.0,
+            description: skill
+                .short_description
+                .flatten()
+                .or_else(|| skill.description.flatten())
+                .map(|value| value.0)
+                .unwrap_or_else(|| "Run provider skill".into()),
+        })
+        .collect();
+    let commands = response
+        .slash_commands
+        .into_iter()
+        .map(|command| ComposerCapability {
+            name: command.name.0,
+            description: command
+                .description
+                .flatten()
+                .or_else(|| command.input.flatten().map(|input| input.hint))
+                .map(|value| value.0)
+                .unwrap_or_else(|| "Run provider command".into()),
+        })
+        .collect();
+    ComposerCapabilities { skills, commands }
 }
 
 impl ModelPickerDialog {
@@ -2362,6 +2499,9 @@ impl ChatApp {
             runtime_notice: None,
             provider_notices_seen: Default::default(),
             provider_snapshots: Vec::new(),
+            scoped_capabilities: HashMap::new(),
+            scoped_capabilities_loading: HashSet::new(),
+            scoped_capabilities_generation: 0,
             shell: ShellState::default(),
             thread: None,
             source_plan_thread: None,
@@ -2539,8 +2679,32 @@ impl ChatApp {
         providers: Vec<vitre_contracts::ServerProvider>,
         cx: &mut Context<Self>,
     ) {
+        let capabilities_changed = self.provider_snapshots.len() != providers.len()
+            || self.provider_snapshots.iter().any(|previous| {
+                providers
+                    .iter()
+                    .find(|provider| provider.instance_id == previous.instance_id)
+                    .is_none_or(|provider| {
+                        provider.driver != previous.driver
+                            || provider.skills != previous.skills
+                            || provider.slash_commands != previous.slash_commands
+                    })
+            });
         self.announce_provider_updates(&providers, cx);
         self.provider_snapshots = providers;
+        if capabilities_changed {
+            // Keep the last scoped result visible while the changed provider
+            // snapshot triggers a fresh lookup. Clearing it here can make a
+            // skill row vanish between typing and pressing Enter.
+            for (fetched, _) in self.scoped_capabilities.values_mut() {
+                *fetched = std::time::Instant::now() - Duration::from_secs(31);
+            }
+            self.scoped_capabilities_loading.clear();
+            self.scoped_capabilities_generation += 1;
+        }
+        if self.composer_menu.is_some() {
+            self.sync_composer_menu(cx);
+        }
 
         // A picker may be open while a CLI probe or Settings mutation lands.
         // Reconcile it in place so provider rows do not require closing and
@@ -4279,6 +4443,9 @@ impl ChatApp {
         }
         if self.thread.is_none() {
             self.draft_model = Some(selection);
+            if self.composer_menu.is_some() {
+                self.sync_composer_menu(cx);
+            }
             self.schedule_draft_save(cx);
             cx.notify();
             return;
@@ -4774,6 +4941,13 @@ impl ChatApp {
             return;
         }
 
+        if matches!(
+            kind,
+            ComposerTriggerKind::Slash | ComposerTriggerKind::Skill
+        ) {
+            self.ensure_scoped_composer_capabilities(kind, cx);
+        }
+
         let query_lower = query.trim().to_ascii_lowercase();
         let mut items = Vec::new();
         match kind {
@@ -4795,52 +4969,30 @@ impl ChatApp {
                     query_lower.is_empty() || label.contains(&query_lower)
                 }));
 
-                if let Some(provider) = self.selected_provider() {
-                    for command in provider
-                        .slash_commands
-                        .clone()
-                        .flatten()
-                        .unwrap_or_default()
+                for command in self.composer_capabilities(cx).commands {
+                    let description = command.description;
+                    if query_lower.is_empty()
+                        || command.name.to_ascii_lowercase().contains(&query_lower)
+                        || description.to_ascii_lowercase().contains(&query_lower)
                     {
-                        let description = command
-                            .description
-                            .clone()
-                            .flatten()
-                            .or_else(|| command.input.clone().flatten().map(|input| input.hint))
-                            .unwrap_or_else(|| "Run provider command".into());
-                        if query_lower.is_empty()
-                            || command.name.to_ascii_lowercase().contains(&query_lower)
-                            || description.to_ascii_lowercase().contains(&query_lower)
-                        {
-                            items.push(ComposerMenuItem::ProviderCommand {
-                                name: command.name,
-                                description,
-                            });
-                        }
+                        items.push(ComposerMenuItem::ProviderCommand {
+                            name: command.name,
+                            description,
+                        });
                     }
                 }
             }
             ComposerTriggerKind::Skill => {
-                if let Some(provider) = self.selected_provider() {
-                    for skill in provider.skills.clone().flatten().unwrap_or_default() {
-                        if !skill.enabled {
-                            continue;
-                        }
-                        let description = skill
-                            .short_description
-                            .clone()
-                            .flatten()
-                            .or_else(|| skill.description.clone().flatten())
-                            .unwrap_or_else(|| "Run provider skill".into());
-                        if query_lower.is_empty()
-                            || skill.name.to_ascii_lowercase().contains(&query_lower)
-                            || description.to_ascii_lowercase().contains(&query_lower)
-                        {
-                            items.push(ComposerMenuItem::Skill {
-                                name: skill.name,
-                                description,
-                            });
-                        }
+                for skill in self.composer_capabilities(cx).skills {
+                    let description = skill.description;
+                    if query_lower.is_empty()
+                        || skill.name.to_ascii_lowercase().contains(&query_lower)
+                        || description.to_ascii_lowercase().contains(&query_lower)
+                    {
+                        items.push(ComposerMenuItem::Skill {
+                            name: skill.name,
+                            description,
+                        });
                     }
                 }
             }
@@ -4905,35 +5057,97 @@ impl ChatApp {
         cx.notify();
     }
 
-    fn selected_provider(&self) -> Option<vitre_contracts::ServerProvider> {
-        let open = self.thread.as_ref()?;
+    fn selected_provider(&self, cx: &gpui::App) -> Option<vitre_contracts::ServerProvider> {
         let selection = self
-            .shell_thread(&open.id)
-            .map(|thread| thread.model_selection.clone())
-            .or_else(|| {
-                open.state
-                    .view
-                    .as_ref()
-                    .map(|view| view.model_selection.clone())
-            })?;
-        let instance = selection
-            .instance_id
-            .flatten()
-            .and_then(|value| value.as_str().map(str::to_string));
-        let providers = &self.provider_snapshots;
-        instance
+            .thread
             .as_ref()
-            .and_then(|instance| {
-                providers
-                    .iter()
-                    .find(|provider| &provider.instance_id.0 == instance)
+            .and_then(|open| {
+                self.shell_thread(&open.id)
+                    .map(|thread| thread.model_selection.clone())
+                    .or_else(|| {
+                        open.state
+                            .view
+                            .as_ref()
+                            .map(|view| view.model_selection.clone())
+                    })
             })
-            .or_else(|| {
-                providers
-                    .iter()
-                    .find(|provider| provider_picker_ready(provider))
-            })
-            .cloned()
+            .or_else(|| self.draft_model_selection(cx))?;
+        provider_for_model_selection(&self.provider_snapshots, &selection).cloned()
+    }
+
+    fn composer_scope(&self, cx: &gpui::App) -> Option<(vitre_contracts::ServerProvider, String)> {
+        let provider = self.selected_provider(cx)?;
+        let cwd = if self.thread.is_some() {
+            self.open_project_root()
+        } else {
+            self.draft_project
+                .as_ref()
+                .and_then(|project_id| self.project_root(project_id))
+        }?;
+        Some((provider, cwd))
+    }
+
+    fn composer_capabilities(&self, cx: &gpui::App) -> ComposerCapabilities {
+        if let Some((provider, cwd)) = self.composer_scope(cx) {
+            let key = (provider.instance_id.0.clone(), cwd.clone());
+            return self
+                .scoped_capabilities
+                .get(&key)
+                .map(|(_, capabilities)| capabilities.clone())
+                .unwrap_or_else(|| snapshot_composer_capabilities(&provider, Some(&cwd)));
+        }
+        self.selected_provider(cx)
+            .map(|provider| snapshot_composer_capabilities(&provider, None))
+            .unwrap_or_default()
+    }
+
+    fn ensure_scoped_composer_capabilities(
+        &mut self,
+        kind: ComposerTriggerKind,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((provider, cwd)) = self.composer_scope(cx) else {
+            return;
+        };
+        // Codex has no provider slash-command inventory. Keep its built-in
+        // command menu immediate and defer the app-server skill probe to `$`.
+        if kind == ComposerTriggerKind::Slash && provider.driver.0 == "codex" {
+            return;
+        }
+        let key = (provider.instance_id.0.clone(), cwd.clone());
+        if self.scoped_capabilities_loading.contains(&key)
+            || self
+                .scoped_capabilities
+                .get(&key)
+                .is_some_and(|(fetched, _)| fetched.elapsed() < Duration::from_secs(30))
+        {
+            return;
+        }
+        let Some(client) = self.workspace_client() else {
+            return;
+        };
+        self.scoped_capabilities_loading.insert(key.clone());
+        let generation = self.scoped_capabilities_generation;
+        let fallback = snapshot_composer_capabilities(&provider, Some(&cwd));
+        cx.spawn(async move |this, cx| {
+            let result = client
+                .call::<ServerGetComposerCapabilities>(&ServerGetComposerCapabilitiesPayload {
+                    instance_id: provider.instance_id,
+                    cwd,
+                })
+                .await;
+            let _ = this.update(cx, |app, cx| {
+                if app.scoped_capabilities_generation != generation {
+                    return;
+                }
+                app.scoped_capabilities_loading.remove(&key);
+                let capabilities = result.map(scoped_composer_capabilities).unwrap_or(fallback);
+                app.scoped_capabilities
+                    .insert(key, (std::time::Instant::now(), capabilities));
+                app.sync_composer_menu(cx);
+            });
+        })
+        .detach();
     }
 
     fn replace_composer_token(
@@ -6366,7 +6580,8 @@ impl ChatApp {
     }
 
     fn enabled_skill_names(&self) -> HashSet<String> {
-        self.provider_snapshots
+        let mut names: HashSet<String> = self
+            .provider_snapshots
             .iter()
             .flat_map(|provider| {
                 provider
@@ -6378,7 +6593,14 @@ impl ChatApp {
             })
             .filter(|skill| skill.enabled)
             .map(|skill| skill.name.clone())
-            .collect()
+            .collect();
+        names.extend(
+            self.scoped_capabilities
+                .values()
+                .flat_map(|(_, capabilities)| capabilities.skills.iter())
+                .map(|skill| skill.name.clone()),
+        );
+        names
     }
 
     fn render_user_inline_text(&self, text: &str, cx: &mut Context<Self>) -> AnyElement {
@@ -8584,8 +8806,9 @@ mod tests {
     use super::{
         ComposerTriggerKind, UserInlineSegment, active_composer_token, active_mention_token,
         collapsed_plan_markdown, format_mention, parse_user_inline_segments, plan_filename,
-        proposed_plan_is_implemented, proposed_plan_title, provider_picker_ready,
-        provider_picker_visible, render_user_plain_text, should_collapse_user_message,
+        proposed_plan_is_implemented, proposed_plan_title, provider_for_model_selection,
+        provider_picker_ready, provider_picker_visible, render_user_plain_text,
+        scoped_composer_capabilities, should_collapse_user_message, snapshot_composer_capabilities,
         table_to_csv,
     };
     use gpui::{Context, TestAppContext, Window, div, prelude::*, px, relative};
@@ -8593,6 +8816,110 @@ mod tests {
     use gpui_component::{h_flex, v_flex};
     use std::collections::HashSet;
     use vitre_contracts::ThreadId;
+
+    #[test]
+    fn composer_provider_inventory_follows_the_selected_instance_or_legacy_model() {
+        let providers: Vec<vitre_contracts::ServerProvider> = [
+            ("codex", "shared", "review"),
+            ("claude", "shared", "deploy"),
+        ]
+        .into_iter()
+        .map(|(instance, model, skill)| {
+            serde_json::from_value(serde_json::json!({
+                "instanceId": instance,
+                "driver": instance,
+                "enabled": true,
+                "installed": true,
+                "version": "1.0.0",
+                "status": "ready",
+                "auth": { "status": "authenticated" },
+                "checkedAt": "2026-01-01T00:00:00.000Z",
+                "models": [{ "slug": model, "name": model, "isCustom": false, "capabilities": null }],
+                "skills": [{ "name": skill, "path": format!("/tmp/{skill}/SKILL.md"), "enabled": true }],
+                "slashCommands": [{ "name": skill }]
+            }))
+            .unwrap()
+        })
+        .collect();
+        let selected = vitre_contracts::ModelSelection {
+            instance_id: Some(Some(serde_json::json!("claude"))),
+            model: serde_json::json!("shared"),
+            options: None,
+            provider: None,
+        };
+        assert_eq!(
+            provider_for_model_selection(&providers, &selected)
+                .map(|provider| provider.instance_id.0.as_str()),
+            Some("claude")
+        );
+        let missing = vitre_contracts::ModelSelection {
+            instance_id: Some(Some(serde_json::json!("removed"))),
+            ..selected.clone()
+        };
+        assert!(provider_for_model_selection(&providers, &missing).is_none());
+        let legacy = vitre_contracts::ModelSelection {
+            instance_id: None,
+            model: serde_json::json!("shared"),
+            provider: Some(Some(serde_json::json!("claude"))),
+            ..selected.clone()
+        };
+        assert_eq!(
+            provider_for_model_selection(&providers, &legacy)
+                .map(|provider| provider.instance_id.0.as_str()),
+            Some("claude")
+        );
+        let model_only = vitre_contracts::ModelSelection {
+            provider: None,
+            ..legacy
+        };
+        assert_eq!(
+            provider_for_model_selection(&providers, &model_only)
+                .map(|provider| provider.instance_id.0.as_str()),
+            Some("codex")
+        );
+    }
+
+    #[test]
+    fn scoped_composer_inventory_replaces_server_cwd_skills_and_filters_disabled_entries() {
+        let provider: vitre_contracts::ServerProvider = serde_json::from_value(serde_json::json!({
+            "instanceId": "codex",
+            "driver": "codex",
+            "enabled": true,
+            "installed": true,
+            "version": "1.0.0",
+            "status": "ready",
+            "auth": { "status": "authenticated" },
+            "checkedAt": "2026-01-01T00:00:00.000Z",
+            "models": [],
+            "skills": [
+                { "name": "global", "path": "/home/user/.codex/skills/global/SKILL.md", "enabled": true, "scope": "user" },
+                { "name": "wrong-project", "path": "/srv/server/.agents/skills/wrong-project/SKILL.md", "enabled": true, "scope": "repo" }
+            ],
+            "slashCommands": []
+        })).unwrap();
+        let fallback = snapshot_composer_capabilities(&provider, Some("/srv/workspace"));
+        assert_eq!(
+            fallback
+                .skills
+                .iter()
+                .map(|skill| skill.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["global"]
+        );
+
+        let scoped: vitre_contracts::ServerGetComposerCapabilitiesSuccess = serde_json::from_value(serde_json::json!({
+            "skills": [
+                { "name": "workspace", "path": "/srv/workspace/.agents/skills/workspace/SKILL.md", "enabled": true, "shortDescription": "Project task" },
+                { "name": "disabled", "path": "/srv/workspace/.agents/skills/disabled/SKILL.md", "enabled": false }
+            ],
+            "slashCommands": [{ "name": "deploy", "description": "Deploy this project" }]
+        })).unwrap();
+        let capabilities = scoped_composer_capabilities(scoped);
+        assert_eq!(capabilities.skills.len(), 1);
+        assert_eq!(capabilities.skills[0].name, "workspace");
+        assert_eq!(capabilities.skills[0].description, "Project task");
+        assert_eq!(capabilities.commands[0].name, "deploy");
+    }
 
     #[test]
     fn interaction_mode_round_trip_does_not_reuse_stale_detail_state() {

@@ -19737,6 +19737,38 @@
         }
       ]
     },
+    "ServerGetComposerCapabilitiesPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "cwd": {
+          "type": "string"
+        },
+        "instanceId": {
+          "$ref": "#/$defs/ProviderInstanceId"
+        }
+      },
+      "required": ["instanceId", "cwd"],
+      "type": "object"
+    },
+    "ServerGetComposerCapabilitiesSuccess": {
+      "additionalProperties": false,
+      "properties": {
+        "skills": {
+          "items": {
+            "$ref": "#/$defs/ServerProviderSkill"
+          },
+          "type": "array"
+        },
+        "slashCommands": {
+          "items": {
+            "$ref": "#/$defs/ServerProviderSlashCommand"
+          },
+          "type": "array"
+        }
+      },
+      "required": ["skills", "slashCommands"],
+      "type": "object"
+    },
     "ServerGetConfigPayload": {
       "anyOf": [
         {
@@ -20949,6 +20981,102 @@
         }
       },
       "required": ["slug", "name", "isCustom", "capabilities"],
+      "type": "object"
+    },
+    "ServerProviderSkill": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "displayName": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "name": {
+          "$ref": "#/$defs/TrimmedNonEmptyString"
+        },
+        "path": {
+          "$ref": "#/$defs/TrimmedNonEmptyString"
+        },
+        "scope": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "shortDescription": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": ["name", "path", "enabled"],
+      "type": "object"
+    },
+    "ServerProviderSlashCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "input": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ServerProviderSlashCommandInput"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "$ref": "#/$defs/TrimmedNonEmptyString"
+        }
+      },
+      "required": ["name"],
+      "type": "object"
+    },
+    "ServerProviderSlashCommandInput": {
+      "additionalProperties": false,
+      "properties": {
+        "hint": {
+          "$ref": "#/$defs/TrimmedNonEmptyString"
+        }
+      },
+      "required": ["hint"],
       "type": "object"
     },
     "ServerProviderState": {
@@ -27621,6 +27749,13 @@
       "stream": false,
       "success": "#/$defs/SourceControlDiscoveryResult",
       "tag": "server.discoverSourceControl"
+    },
+    {
+      "errors": ["#/$defs/EnvironmentAuthorizationError"],
+      "payload": "#/$defs/ServerGetComposerCapabilitiesPayload",
+      "stream": false,
+      "success": "#/$defs/ServerGetComposerCapabilitiesSuccess",
+      "tag": "server.getComposerCapabilities"
     },
     {
       "errors": [

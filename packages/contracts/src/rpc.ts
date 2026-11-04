@@ -154,6 +154,8 @@ import {
   ServerRemoveKeybindingInput,
   ServerRemoveKeybindingResult,
   ServerProviderUpdatedPayload,
+  ServerProviderSkill,
+  ServerProviderSlashCommand,
   ServerSelfUpdateError,
   ServerSelfUpdateInput,
   ServerSelfUpdateResult,
@@ -316,6 +318,7 @@ export const WS_METHODS = {
   serverProbe: "server.probe",
   serverGetConfig: "server.getConfig",
   serverRefreshProviders: "server.refreshProviders",
+  serverGetComposerCapabilities: "server.getComposerCapabilities",
   serverUpdateProvider: "server.updateProvider",
   serverUpdateServer: "server.updateServer",
   serverUpsertKeybinding: "server.upsertKeybinding",
@@ -410,6 +413,21 @@ export const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProv
   success: ServerProviderUpdatedPayload,
   error: EnvironmentAuthorizationError,
 });
+
+export const WsServerGetComposerCapabilitiesRpc = Rpc.make(
+  WS_METHODS.serverGetComposerCapabilities,
+  {
+    payload: Schema.Struct({
+      instanceId: ProviderInstanceId,
+      cwd: Schema.String,
+    }),
+    success: Schema.Struct({
+      skills: Schema.Array(ServerProviderSkill),
+      slashCommands: Schema.Array(ServerProviderSlashCommand),
+    }),
+    error: EnvironmentAuthorizationError,
+  },
+);
 
 export const WsServerUpdateProviderRpc = Rpc.make(WS_METHODS.serverUpdateProvider, {
   payload: ServerProviderUpdateInput,
@@ -1136,6 +1154,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
+  WsServerGetComposerCapabilitiesRpc,
   WsServerUpdateProviderRpc,
   WsServerUpdateServerRpc,
   WsServerUpsertKeybindingRpc,

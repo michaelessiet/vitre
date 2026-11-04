@@ -710,6 +710,19 @@ export const ProviderRegistryLive = Layer.effect(
         refresh(provider).pipe(Effect.catchCause(recoverRefreshFailure)),
       refreshInstance: (instanceId: ProviderInstanceId) =>
         refreshInstance(instanceId).pipe(Effect.catchCause(recoverRefreshFailure)),
+      getComposerCapabilities: (instanceId: ProviderInstanceId, cwd: string) =>
+        Effect.gen(function* () {
+          const instance = yield* instanceRegistry.getInstance(instanceId);
+          const scoped = instance?.getComposerCapabilities
+            ? yield* instance.getComposerCapabilities(cwd)
+            : undefined;
+          const providers = yield* Ref.get(providersRef);
+          const provider = providers.find((candidate) => candidate.instanceId === instanceId);
+          return {
+            skills: scoped?.skills ?? provider?.skills ?? [],
+            slashCommands: scoped?.slashCommands ?? provider?.slashCommands ?? [],
+          };
+        }),
       getProviderMaintenanceCapabilitiesForInstance,
       setProviderMaintenanceActionState,
       get streamChanges() {

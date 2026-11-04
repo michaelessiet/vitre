@@ -25,6 +25,8 @@ import type {
   ProviderDriverKind,
   ProviderInstanceEnvironment,
   ProviderInstanceId,
+  ServerProviderSkill,
+  ServerProviderSlashCommand,
 } from "@t3tools/contracts";
 import type * as Effect from "effect/Effect";
 import type * as Schema from "effect/Schema";
@@ -71,6 +73,14 @@ export interface ProviderInstance {
   readonly snapshot: ServerProviderShape;
   readonly adapter: ProviderAdapterShape<ProviderAdapterError>;
   readonly textGeneration: TextGeneration.TextGeneration["Service"];
+  /** Resolve composer actions for the thread's cwd, including project-scoped skills and commands. */
+  readonly getComposerCapabilities?: (cwd: string) => Effect.Effect<
+    | {
+        readonly skills: ReadonlyArray<ServerProviderSkill>;
+        readonly slashCommands?: ReadonlyArray<ServerProviderSlashCommand>;
+      }
+    | undefined
+  >;
 }
 
 export interface ProviderContinuationIdentity {
