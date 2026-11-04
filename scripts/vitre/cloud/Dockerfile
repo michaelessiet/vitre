@@ -5,8 +5,10 @@ RUN corepack enable && corepack prepare pnpm@11.10.0 --activate
 COPY . .
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store pnpm --filter t3... --filter @t3tools/monorepo install --frozen-lockfile
 RUN pnpm --dir apps/server run build:bundle
+# The server-only deployment excludes relay dependencies and their patches.
+# Keep unused-patch validation enabled for the full workspace install above.
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store rm -rf infra/relay \
-    && pnpm --filter t3 deploy --prod --legacy /tmp/vitre-cloud.worker/server \
+    && pnpm --filter t3 deploy --prod --legacy --config.allow-unused-patches=true /tmp/vitre-cloud.worker/server \
     && node scripts/vitre/prune-packaged-node-modules.mjs /tmp/vitre-cloud.worker/server/node_modules \
     && mkdir -p /opt/vitre && mv /tmp/vitre-cloud.worker/server /opt/vitre/server
 RUN node --input-type=module -e 'import { DEFAULT_MODEL_BY_PROVIDER } from "./packages/contracts/src/model.ts"; import { writeFileSync } from "node:fs"; writeFileSync("/opt/vitre/models.json", JSON.stringify(DEFAULT_MODEL_BY_PROVIDER));'
