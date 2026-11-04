@@ -1,7 +1,10 @@
-import { eq, sql } from "drizzle-orm";
+// @effect-diagnostics preferSchemaOverJson:off - Compare the persisted JSON aggregate for no-op writes without introducing a second schema for private state.
+import { and, eq } from "drizzle-orm";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Random from "effect/Random";
+import * as Option from "effect/Option";
 import { RelayDb } from "../db.ts";
 import { relayCloudAccounts } from "../persistence/schema.ts";
 import { CloudError } from "./policy.ts";
@@ -35,6 +38,8 @@ export class CloudStore extends Context.Service<
     readonly read: (userId: string) => Effect.Effect<CloudAccountDocument, CloudError>;
     readonly mutate: <A>(
       userId: string,
+      // Reducers may be replayed after a revision conflict. Keep all side effects
+      // (including IDs, timestamps and external I/O) outside the reducer.
       reduce: (document: CloudAccountDocument) => A,
     ) => Effect.Effect<A, CloudError>;
     readonly users: Effect.Effect<ReadonlyArray<string>, CloudError>;
@@ -73,51 +78,73 @@ export const layer = Layer.effect(
       }),
       mutate: <A>(userId: string, reduce: (document: CloudAccountDocument) => A) =>
         Effect.gen(function* () {
-          // Serialize this account in PostgreSQL, including across Worker isolates.
-          // Reducers remain synchronous and must never perform external I/O.
-          const committed = yield* db
-            .transaction((tx) =>
-              Effect.gen(function* () {
-                yield* tx.execute(sql`SET LOCAL lock_timeout = '10s'`);
-                const locked = () =>
-                  tx
-                    .select()
-                    .from(relayCloudAccounts)
-                    .where(eq(relayCloudAccounts.userId, userId))
-                    .limit(1)
-                    .for("update");
-                let existing = (yield* locked())[0];
-                if (!existing) {
-                  // Another first request may insert while we wait; lock and reload
-                  // its committed document instead of overwriting it with an empty one.
-                  yield* tx
-                    .insert(relayCloudAccounts)
-                    .values({ userId, revision: 0, document: emptyDocument() })
-                    .onConflictDoNothing();
-                  existing = (yield* locked())[0];
-                }
-                if (!existing) return yield* Effect.fail(persistenceError());
-                const document = structuredClone(existing.document);
-                const revision = existing.revision + 1;
-                document.state.revision = revision;
-                const result = yield* Effect.try({
-                  try: () => reduce(document),
-                  catch: (error) => (error instanceof CloudError ? error : persistenceError()),
-                });
-                yield* tx
+          // Never hold a row lock while transferring/cloning the account document
+          // or running a reducer. A single conditional write commits the document,
+          // receipts, leases and outbox together across all Worker isolates.
+          for (let attempt = 0; attempt < 32; attempt++) {
+            const existing = (yield* load(userId))[0];
+            const revision = (existing?.revision ?? 0) + 1;
+            const original = existing?.document ?? emptyDocument();
+            const document = structuredClone(original);
+            document.state.revision = revision;
+            const serialized = (value: CloudAccountDocument) =>
+              Effect.try({
+                try: () => JSON.stringify(value),
+                catch: persistenceError,
+              });
+            const before = yield* serialized(document);
+            const result = yield* Effect.try({
+              try: () => reduce(document),
+              catch: (error) => (error instanceof CloudError ? error : persistenceError()),
+            });
+            if ((yield* serialized(document)) === before) {
+              // Idle scheduler polls and idempotent replays need no write. Return
+              // a result based on the actual revision, not an uncommitted increment.
+              const unchanged = structuredClone(original);
+              unchanged.state.revision = existing?.revision ?? 0;
+              const unchangedBefore = yield* serialized(unchanged);
+              const unchangedResult = yield* Effect.try({
+                try: () => reduce(unchanged),
+                catch: (error) => (error instanceof CloudError ? error : persistenceError()),
+              }).pipe(Effect.option);
+              // A reducer may inspect the proposed revision. Only skip its write
+              // if replaying at the persisted revision is also a no-op.
+              if (
+                Option.isSome(unchangedResult) &&
+                (yield* serialized(unchanged)) === unchangedBefore
+              )
+                return unchangedResult.value;
+            }
+            const committed = existing
+              ? yield* db
                   .update(relayCloudAccounts)
                   .set({ revision, document })
-                  .where(eq(relayCloudAccounts.userId, userId));
-                return result;
-              }),
-            )
-            .pipe(
-              Effect.mapError((error) =>
-                error instanceof CloudError ? error : persistenceError(),
-              ),
-            );
-          return committed;
-        }),
+                  .where(
+                    and(
+                      eq(relayCloudAccounts.userId, userId),
+                      eq(relayCloudAccounts.revision, existing.revision),
+                    ),
+                  )
+                  .returning({ revision: relayCloudAccounts.revision })
+              : yield* db
+                  .insert(relayCloudAccounts)
+                  .values({ userId, revision, document })
+                  .onConflictDoNothing()
+                  .returning({ revision: relayCloudAccounts.revision });
+            if (committed.length > 0) return result;
+            // Only a known revision conflict is retryable. Connection/commit
+            // failures are ambiguous and must retain command idempotency handling.
+            const delay = yield* Random.nextIntBetween(1, Math.min(250, 10 * 2 ** attempt));
+            yield* Effect.sleep(delay);
+          }
+          return yield* Effect.fail(persistenceError());
+        }).pipe(
+          Effect.mapError((error) => (error instanceof CloudError ? error : persistenceError())),
+          Effect.timeoutOrElse({
+            duration: "20 seconds",
+            orElse: () => Effect.fail(persistenceError()),
+          }),
+        ),
     });
   }),
 );

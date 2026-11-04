@@ -48,6 +48,17 @@ class UpgradeTests(unittest.TestCase):
         self.assertEqual(changed.read_bytes(), b"old agent")
         self.assertEqual((self.new / "opt/vitre/cloud/machine-agent.mjs").read_bytes(), b"new agent")
 
+    def test_runtime_root_is_traversable_under_service_umask(self):
+        self.archive_files()
+        old_mode = self.old.stat().st_mode
+        mask = os.umask(0o077)
+        try:
+            upgrade.extract_runtime(self.archive, self.new, self.old)
+        finally:
+            os.umask(mask)
+        self.assertEqual(self.new.stat().st_mode & 0o777, 0o755)
+        self.assertEqual(self.old.stat().st_mode, old_mode)
+
     def test_rejects_traversal_before_extracting(self):
         self.archive_files({"../escaped": b"bad"})
         with self.assertRaisesRegex(RuntimeError, "Unsafe"):

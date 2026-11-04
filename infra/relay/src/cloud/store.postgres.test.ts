@@ -13,8 +13,8 @@ import { CloudError } from "./policy.ts";
 
 const url = process.env.VITRE_STORE_TEST_DATABASE_URL;
 
-it.effect.skipIf(!url)(
-  "serializes concurrent account creation and updates without losing writes; rolls back rejected reducers",
+it.live.skipIf(!url)(
+  "commits concurrent account creation and updates without losing writes; rolls back rejected reducers",
   () => {
     const target = new URL(url!);
     if (target.hostname !== "127.0.0.1" || target.pathname !== "/vitre_store")

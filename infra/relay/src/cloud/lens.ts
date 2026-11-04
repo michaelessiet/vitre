@@ -125,7 +125,6 @@ function queueRun(state: CloudState, id: string, message: string | null, now: nu
 
 export function tickLens(state: CloudState, now: number, id: string, enabled: boolean): void {
   if (!state.lens) return;
-  refreshLensInventory(state, now);
   const run = state.lens.run;
   if (run && state.jobs?.[run.id]?.state === "failed") {
     finishLensRun(
@@ -145,6 +144,9 @@ export function tickLens(state: CloudState, now: number, id: string, enabled: bo
     Date.parse(state.lens.nextRunAt) > now
   )
     return;
+  // Inventory timestamps must not turn every idle scheduler poll into a full
+  // account write. Commands/overviews refresh on demand; scheduled runs do so here.
+  refreshLensInventory(state, now);
   try {
     queueRun(state, id, null, now);
   } catch (error) {

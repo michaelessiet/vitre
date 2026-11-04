@@ -17,7 +17,7 @@ import {
 } from "drizzle-orm/pg-core";
 
 // The personal cloud aggregate atomically commits task receipts, budget reservations,
-// provider leases and its durable operation outbox in one account-locked transaction.
+// provider leases and its durable operation outbox in one revision-checked write.
 export const relayCloudAccounts = pgTable("relay_cloud_accounts", {
   userId: varchar("user_id", { length: 255 }).primaryKey(),
   revision: integer("revision").notNull(),

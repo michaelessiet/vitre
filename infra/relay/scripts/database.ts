@@ -63,6 +63,11 @@ export const configureRuntimeRole = (origin: {
           statement: string;
         }>`SELECT format('ALTER ROLE vitre_relay LOGIN PASSWORD %L', ${Redacted.value(origin.password)}::text) AS statement`;
         yield* sql.unsafe(formatted[0]!.statement);
+        // Apply limits on the origin role: transaction poolers may not forward
+        // client startup options, and HTTP cancellation must not be the only guard.
+        yield* sql`ALTER ROLE vitre_relay SET statement_timeout = '8s'`;
+        yield* sql`ALTER ROLE vitre_relay SET lock_timeout = '2s'`;
+        yield* sql`ALTER ROLE vitre_relay SET idle_in_transaction_session_timeout = '5s'`;
         yield* sql`GRANT CONNECT ON DATABASE ${sql(origin.database)} TO vitre_relay`;
         yield* sql`GRANT USAGE ON SCHEMA public TO vitre_relay`;
         const tables = yield* sql<{

@@ -81,6 +81,10 @@ def extract_runtime(archive, destination, previous):
         if any(pathlib.PurePosixPath(name) not in names for name in required):
             raise RuntimeError("Incomplete runtime archive")
         destination.mkdir(mode=0o755)
+        # The pull service uses UMask=0077. mkdir's mode is filtered by that mask,
+        # but this directory becomes / inside the sandbox and must be traversable
+        # by the unprivileged worker and setup users. Archive root entries are skipped.
+        destination.chmod(0o755)
         for name, member in names.items():
             target = destination / name
             target.parent.mkdir(parents=True, exist_ok=True)
