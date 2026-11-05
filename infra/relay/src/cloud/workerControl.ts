@@ -15,8 +15,11 @@ import {
   workspaceChunkStatus,
   uploadedGitHead,
 } from "./workspaces.ts";
-import type { CloudWorkspaceManifest } from "@t3tools/contracts/cloud";
-import type { CloudWorkerCallback } from "@t3tools/contracts/cloud";
+import type {
+  CloudPublicationRequest,
+  CloudWorkerCallback,
+  CloudWorkspaceManifest,
+} from "@t3tools/contracts/cloud";
 import type {
   RelayManagedEndpoint,
   RelayManagedEndpointRuntimeConfig,
@@ -34,6 +37,7 @@ import {
   acceptCallback,
   acceptCheckpoint,
   changeProviderLease,
+  requestWorkerPublication,
   taskFor,
   isResidentWorker,
 } from "./state.ts";
@@ -451,6 +455,28 @@ export const make = Effect.gen(function* () {
         leaseOwned,
         leaseTurnRequestId,
       };
+    }),
+    /**
+     * The agent asked for a pull request or issue comment from inside its
+     * turn. Records the request on the turn's publication preparation so the
+     * relay publishes once the worker's completed snapshot lands.
+     */
+    requestPublication: Effect.fn("cloud.worker_request_publication")(function* (
+      taskId: string,
+      token: string,
+      attemptId: string,
+      turnRequestId: string | null,
+      request: CloudPublicationRequest,
+    ) {
+      if (!config.allowedUserId || !token)
+        return yield* Effect.fail(new CloudError("unauthorized", "Invalid worker credential", 401));
+      const hash = yield* fromPromise(() => sha256(token));
+      const now = yield* currentMillis;
+      yield* control.mutate(config.allowedUserId, (document) => {
+        authenticateDocument(document, taskId, hash);
+        requestWorkerPublication(document.state, taskId, attemptId, turnRequestId, request, now);
+        return null;
+      });
     }),
     lease: Effect.fn("cloud.worker_lease")(function* (
       taskId: string,

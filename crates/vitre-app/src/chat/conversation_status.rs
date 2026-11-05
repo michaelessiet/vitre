@@ -134,6 +134,16 @@ pub(super) struct Facts {
     pub ownership_fenced: bool,
     pub stop_error: bool,
     pub editable_after_error: bool,
+    /// The cloud workspace stopped after losing contact; its saved checkpoint
+    /// resumes on the next message, so nothing needs a manual retry.
+    pub cloud_paused: bool,
+    /// The cloud workspace lost contact and is still being stopped; a resume
+    /// follows automatically once it settles.
+    pub cloud_resuming: bool,
+    /// The relay accepts a follow-up for this cloud task right now even though
+    /// no live conversation socket is attached (idle worker, waking checkpoint,
+    /// or paused workspace).
+    pub cloud_accepts_message: bool,
 }
 #[derive(Clone, Debug, Default)]
 pub(super) struct ConversationStatus {
@@ -221,6 +231,20 @@ impl ConversationStatus {
                     Turn::Stopping => ("Stopping…".into(), Art::Connecting, Action::None),
                     Turn::Approval => ("Approval required".into(), Art::Approval, Action::None),
                     Turn::Input => ("Waiting for your answer".into(), Art::Input, Action::None),
+                    _ if facts.cloud_resuming => (
+                        "Reconnecting cloud workspace…".into(),
+                        Art::Connecting,
+                        Action::None,
+                    ),
+                    Turn::Idle | Turn::Finished
+                        if facts.cloud_paused && facts.delivery == Delivery::None =>
+                    {
+                        (
+                            "Workspace paused · send a message to resume".into(),
+                            Art::Warning,
+                            Action::None,
+                        )
+                    }
                     Turn::Preparing => (
                         facts
                             .preparation
@@ -327,18 +351,25 @@ impl ConversationStatus {
                 Action::None
             };
         }
+        let settled_turn = matches!(facts.turn, Turn::Idle | Turn::Finished);
         let can_send = facts.transfer == Transfer::None
             && !facts.ownership_fenced
+            && !facts.cloud_resuming
             && (facts.attention == Attention::None
                 || (facts.editable_after_error && facts.attention == Attention::Error))
             && matches!(facts.delivery, Delivery::None | Delivery::Rejected)
-            && (matches!(facts.turn, Turn::Idle | Turn::Finished)
+            && ((settled_turn
+                && (facts.execution_available
+                    || facts.connection == Connection::Dormant
+                    || facts.cloud_accepts_message))
+                // A waking checkpoint already accepts the next request; the
+                // worker submits it as soon as the provider is up.
+                || (facts.turn == Turn::Preparing && facts.cloud_accepts_message)
                 || (facts.turn == Turn::Working
                     && facts.supports_steering
                     && facts.execution_available
                     && !facts.execution_stale
-                    && !facts.execution_invalidated))
-            && (facts.execution_available || facts.connection == Connection::Dormant);
+                    && !facts.execution_invalidated));
         let execution_interrupted = facts.execution_invalidated
             || matches!(
                 facts.attention,
@@ -478,6 +509,55 @@ fn task_execution_invalidated(state: &CloudTaskState) -> bool {
             | CloudTaskState::NeedsAuth
             | CloudTaskState::UsageLimited
     )
+}
+
+/// How a cloud task recovers without a live conversation socket. The relay
+/// accepts `task.continue` for an idle resident worker, a waking checkpoint,
+/// and any settled task whose worker has stopped; the desktop mirrors those
+/// rules so the composer stays usable while the socket reconnects.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct CloudRecovery {
+    pub paused: bool,
+    pub resuming: bool,
+    pub accepts_message: bool,
+    pub editable_after_failure: bool,
+}
+
+pub(super) fn cloud_worker_stopped(task: &vitre_contracts::CloudTask) -> bool {
+    use vitre_contracts::CloudWorkerState as W;
+    task.worker
+        .as_ref()
+        .is_none_or(|worker| matches!(worker.state, W::Stopped | W::Deleted))
+}
+
+pub(super) fn cloud_recovery(task: &vitre_contracts::CloudTask) -> CloudRecovery {
+    use vitre_contracts::CloudWorkerState as W;
+    let worker_stopped = cloud_worker_stopped(task);
+    let worker_ready = task
+        .worker
+        .as_ref()
+        .is_some_and(|worker| worker.state == W::Ready);
+    let interrupted = task.state == CloudTaskState::Interrupted;
+    let settled = matches!(
+        task.state,
+        CloudTaskState::Completed
+            | CloudTaskState::Cancelled
+            | CloudTaskState::Interrupted
+            | CloudTaskState::Failed
+    );
+    let live_idle =
+        task.state == CloudTaskState::Running && task.idle == Some(true) && worker_ready;
+    let waking = task.wake_only == Some(true)
+        && matches!(
+            task.state,
+            CloudTaskState::Queued | CloudTaskState::Preparing
+        );
+    CloudRecovery {
+        paused: interrupted && worker_stopped,
+        resuming: interrupted && !worker_stopped,
+        accepts_message: live_idle || waking || (settled && worker_stopped),
+        editable_after_failure: task.state == CloudTaskState::Failed && worker_stopped,
+    }
 }
 
 fn task_preparation_label(task: &vitre_contracts::CloudTask) -> Option<&'static str> {
@@ -817,6 +897,7 @@ impl ChatApp {
             .as_ref()
             .zip(view)
             .is_some_and(|(task, view)| !cloud_execution_is_current(task, view));
+        let recovery = task.as_ref().map(cloud_recovery).unwrap_or_default();
         let connection = match &open.feed {
             ThreadFeed::Local { .. } => phase_connection(open.state.phase),
             ThreadFeed::Cloud(feed) => cloud_connection(
@@ -829,13 +910,15 @@ impl ChatApp {
                             CloudTaskState::Queued | CloudTaskState::Preparing
                         )
                     }),
-                task.as_ref().is_some_and(|task| {
-                    task.idle == Some(true)
-                        || matches!(
-                            task.state,
-                            CloudTaskState::Completed | CloudTaskState::Cancelled
-                        )
-                }),
+                recovery.paused
+                    || recovery.resuming
+                    || task.as_ref().is_some_and(|task| {
+                        task.idle == Some(true)
+                            || matches!(
+                                task.state,
+                                CloudTaskState::Completed | CloudTaskState::Cancelled
+                            )
+                    }),
             ),
         };
         let mut facts = Facts {
@@ -874,21 +957,30 @@ impl ChatApp {
                 )
             }),
             turn: task.as_ref().map(task_turn).unwrap_or_default(),
-            attention: task
-                .as_ref()
-                .map(|t| task_attention(&t.state))
-                .unwrap_or_default(),
+            attention: if recovery.paused || recovery.resuming {
+                // A lost heartbeat is recovered by resuming the checkpoint, not
+                // by replaying the last request.
+                Attention::None
+            } else {
+                task.as_ref()
+                    .map(|t| task_attention(&t.state))
+                    .unwrap_or_default()
+            },
             detail: self
                 .last_error
                 .as_ref()
                 .map(ToString::to_string)
                 .or_else(|| {
                     task.as_ref()
+                        .filter(|_| !(recovery.paused || recovery.resuming))
                         .and_then(|t| t.error.as_ref())
                         .map(|e| e.0.clone())
                 }),
             ownership_fenced: self.location_switch_blocks_turn(),
-            editable_after_error: task.is_none(),
+            editable_after_error: task.is_none() || recovery.editable_after_failure,
+            cloud_paused: recovery.paused,
+            cloud_resuming: recovery.resuming,
+            cloud_accepts_message: recovery.accepts_message,
             ..Facts::default()
         };
         let cleanup_pending = task.as_ref().is_some_and(|task| {
@@ -2118,6 +2210,119 @@ mod tests {
         assert_eq!(status.action.label(true), Some("Retry request"));
         assert_eq!(Action::RetryConnection.label(true), Some("Reconnect"));
         assert_eq!(Action::CheckDelivery.label(true), Some("Check delivery"));
+    }
+
+    #[test]
+    fn paused_cloud_workspace_accepts_a_message_instead_of_a_retry() {
+        let status = ConversationStatus::derive(Facts {
+            connection: Connection::Dormant,
+            transcript: Transcript::Cached,
+            turn: Turn::Idle,
+            execution_invalidated: true,
+            cloud_paused: true,
+            cloud_accepts_message: true,
+            ..Facts::default()
+        });
+        assert_eq!(status.label, "Workspace paused · send a message to resume");
+        assert_eq!(status.art, Art::Warning);
+        assert_eq!(status.action, Action::None);
+        assert!(status.can_send);
+        assert!(!status.can_stop);
+        assert!(!status.can_respond);
+        // A submitted message replaces the paused hint with delivery progress.
+        let sending = ConversationStatus::derive(Facts {
+            delivery: Delivery::Submitting,
+            connection: Connection::Dormant,
+            turn: Turn::Idle,
+            cloud_paused: true,
+            cloud_accepts_message: true,
+            ..Facts::default()
+        });
+        assert_eq!(sending.label, "Sending message…");
+    }
+
+    #[test]
+    fn resuming_cloud_workspace_waits_for_the_stale_worker_to_stop() {
+        let status = ConversationStatus::derive(Facts {
+            connection: Connection::Dormant,
+            transcript: Transcript::Cached,
+            turn: Turn::Idle,
+            execution_invalidated: true,
+            cloud_resuming: true,
+            ..Facts::default()
+        });
+        assert_eq!(status.label, "Reconnecting cloud workspace…");
+        assert_eq!(status.art, Art::Connecting);
+        assert_eq!(status.action, Action::None);
+        assert!(!status.can_send);
+    }
+
+    #[test]
+    fn waking_checkpoint_and_idle_worker_accept_messages_without_a_socket() {
+        let waking = ConversationStatus::derive(Facts {
+            connection: Connection::Connecting,
+            turn: Turn::Preparing,
+            preparation: Some("Waiting for a cloud computer…".into()),
+            cancellable_preparation: true,
+            cloud_accepts_message: true,
+            ..Facts::default()
+        });
+        assert_eq!(waking.label, "Waiting for a cloud computer…");
+        assert!(waking.can_send);
+        let idle_disconnected = ConversationStatus::derive(Facts {
+            connection: Connection::Disconnected,
+            transcript: Transcript::Cached,
+            turn: Turn::Finished,
+            cloud_accepts_message: true,
+            ..Facts::default()
+        });
+        assert!(idle_disconnected.can_send);
+        assert_eq!(idle_disconnected.action, Action::RetryConnection);
+        let preparing_fresh = ConversationStatus::derive(Facts {
+            connection: Connection::Connecting,
+            turn: Turn::Preparing,
+            ..Facts::default()
+        });
+        assert!(!preparing_fresh.can_send);
+    }
+
+    #[test]
+    fn cloud_recovery_follows_the_worker_state() {
+        use crate::cloud::tests::fixtures::task;
+        fn worker(state: &str) -> vitre_contracts::CloudWorker {
+            serde_json::from_value(serde_json::json!({
+                "cpu": 2, "diskGiB": 10, "memoryGiB": 4,
+                "environmentId": "environment", "id": "worker", "sandboxId": null,
+                "state": state, "stoppedAt": null
+            }))
+            .unwrap()
+        }
+        let mut interrupted = task("t", CloudTaskState::Interrupted, false);
+        let paused = cloud_recovery(&interrupted);
+        assert!(paused.paused && paused.accepts_message && !paused.resuming);
+        interrupted.worker = Some(worker("stopped"));
+        assert!(cloud_recovery(&interrupted).paused);
+        interrupted.worker = Some(worker("ready"));
+        let resuming = cloud_recovery(&interrupted);
+        assert!(resuming.resuming && !resuming.paused && !resuming.accepts_message);
+
+        let mut idle = task("t", CloudTaskState::Running, false);
+        idle.idle = Some(true);
+        idle.worker = Some(worker("ready"));
+        assert!(cloud_recovery(&idle).accepts_message);
+        idle.idle = Some(false);
+        assert!(!cloud_recovery(&idle).accepts_message);
+
+        let mut waking = task("t", CloudTaskState::Queued, false);
+        waking.wake_only = Some(true);
+        assert!(cloud_recovery(&waking).accepts_message);
+        waking.wake_only = None;
+        assert!(!cloud_recovery(&waking).accepts_message);
+
+        let mut failed = task("t", CloudTaskState::Failed, false);
+        assert!(cloud_recovery(&failed).editable_after_failure);
+        failed.worker = Some(worker("ready"));
+        assert!(!cloud_recovery(&failed).editable_after_failure);
     }
 
     #[test]

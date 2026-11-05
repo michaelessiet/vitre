@@ -381,9 +381,22 @@ export const CloudDependencySetup = Schema.Struct({
   detail: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(65536))),
 });
 export type CloudDependencySetup = typeof CloudDependencySetup.Type;
+export const CloudPublicationRequest = Schema.Struct({
+  kind: Schema.Literals(["pull_request", "issue_comment"]),
+  title: Text,
+  body: Text,
+});
+export type CloudPublicationRequest = typeof CloudPublicationRequest.Type;
 export const CloudTask = Schema.Struct({
   publicationPreparation: Schema.optionalKey(
-    Schema.Struct({ id: Id, turnRequestId: Schema.NullOr(Id), requestedAt: Timestamp }),
+    Schema.Struct({
+      id: Id,
+      turnRequestId: Schema.NullOr(Id),
+      requestedAt: Timestamp,
+      // Set when the agent asked for the publication from inside the turn; the
+      // relay publishes as soon as the worker's snapshot completes.
+      request: Schema.optionalKey(CloudPublicationRequest),
+    }),
   ),
   turnSettings: Schema.optionalKey(
     Schema.Struct({

@@ -98,6 +98,29 @@ fn cloud_error_detail(status: u16, body: &[u8]) -> String {
             "The provider account is still stopping its previous worker. Refresh and retry shortly.".into(),
         (409, Some("workers_busy")) => "Both cloud workers are busy. Retry when one stops.".into(),
         (409, Some("concurrent_update")) => "Cloud state changed during the request. Refresh and retry.".into(),
+        (_, Some("result_changed")) =>
+            "The saved result changed before publishing. Review the latest result and try Create PR again.".into(),
+        (_, Some("task_busy")) =>
+            "Wait for the current work to finish before creating a pull request.".into(),
+        (_, Some("github_connection_required")) =>
+            "Connect this repository to your personal GitHub account in Vitre before creating a pull request.".into(),
+        (_, Some("no_repository")) => "This workspace is not connected to GitHub.".into(),
+        (_, Some("publication_conflict")) =>
+            "This result already has a different approved publication.".into(),
+        (_, Some("turn_replaced")) =>
+            "The conversation changed. Review the latest turn before creating a pull request.".into(),
+        (_, Some("publication_preparing")) =>
+            "The workspace is still saving its changes for review. Try again in a moment.".into(),
+        (_, Some("worker_busy")) =>
+            "The previous cloud worker is still stopping. Retry in a moment.".into(),
+        (_, Some("stale_owner")) =>
+            "This environment no longer owns the conversation. Open it where it currently runs.".into(),
+        (_, Some("switch_pending")) =>
+            "Wait for the conversation to finish moving before continuing.".into(),
+        (_, Some("not_ready")) => "The cloud workspace is still starting. Retry in a moment.".into(),
+        (_, Some("checkpoint_required")) =>
+            "This workspace has no saved checkpoint to resume. Send a message to start a new attempt.".into(),
+        (_, Some("issue_required")) => "This task is not linked to a GitHub issue.".into(),
         (503, Some("disabled")) => "Cloud execution is disabled on this deployment.".into(),
         (503, Some("queue_unavailable")) =>
             "The task was saved, but cloud scheduling is temporarily unavailable. Refresh to check its status.".into(),
@@ -358,6 +381,9 @@ mod tests {
             cloud_error_detail(503, br#"{"code":"queue_unavailable"}"#).contains("task was saved")
         );
         assert!(cloud_error_detail(409, br#"{"code":"provider_busy"}"#).contains("still stopping"));
+        assert!(cloud_error_detail(409, br#"{"code":"result_changed"}"#).contains("Create PR"));
+        assert!(cloud_error_detail(409, br#"{"code":"task_busy"}"#).contains("current work"));
+        assert!(cloud_error_detail(409, br#"{"code":"publication_preparing"}"#).contains("saving"));
         assert!(
             !cloud_error_detail(503, br#"{"code":"unknown","message":"secret-token"}"#)
                 .contains("secret-token")

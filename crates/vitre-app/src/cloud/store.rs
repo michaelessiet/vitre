@@ -117,6 +117,16 @@ pub enum Op {
     Respond(String),
 }
 
+/// A reviewed pull request or comment whose snapshot the worker is still saving.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingPublication {
+    pub kind: CloudCommandPublicationCreateKind,
+    pub title: String,
+    pub body: String,
+    /// The turn the snapshot must belong to; any other turn drops the request.
+    pub turn_request_id: Option<String>,
+}
+
 pub enum CloudEvent {
     /// Something changed; views that cache derived state should rebuild.
     Changed,
@@ -176,6 +186,9 @@ pub struct CloudStore {
     /// action replaces or clears it.
     pub error: Option<String>,
     pub operation_errors: HashMap<Op, String>,
+    /// Publications waiting for the worker to save a reviewable snapshot. The
+    /// create command is sent once the task completes with a fresh result.
+    pub pending_publications: HashMap<String, PendingPublication>,
     pub delivery_outcomes: HashMap<String, DeliveryOutcome>,
     delivery_requests: HashSet<String>,
     pub stop_outcomes: HashMap<String, DeliveryOutcome>,
@@ -281,6 +294,7 @@ impl CloudStore {
             pending: HashSet::new(),
             error: None,
             operation_errors: HashMap::new(),
+            pending_publications: HashMap::new(),
             delivery_outcomes: HashMap::new(),
             delivery_requests: HashSet::new(),
             stop_outcomes: HashMap::new(),
@@ -624,6 +638,7 @@ impl CloudStore {
             current
         });
         self.overview = Some(overview);
+        self.settle_pending_publications(cx);
         if needs_available {
             self.load_available(cx);
         }
@@ -973,6 +988,35 @@ impl CloudStore {
         }
     }
 
+    /// Restore a paused workspace from its checkpoint without replaying any
+    /// request. Failures are logged only: the composer already offers the
+    /// explicit path (sending a message starts a fresh attempt).
+    pub fn wake_task(&mut self, task_id: String, cx: &mut Context<Self>) -> bool {
+        let Some(client) = self.client.clone() else {
+            return false;
+        };
+        let op = Op::Task(task_id.clone(), "wake");
+        if self.is_pending(&op) {
+            return true;
+        }
+        let command = CloudCommand::TaskWake {
+            idempotency_key: key(),
+            task_id: task_id.clone(),
+        };
+        self.run(
+            op,
+            async move { Ok(client.command(&command).await?) },
+            move |store, response, cx| match response {
+                Ok(result) => store.apply_overview(result.overview, cx),
+                Err(error) => {
+                    eprintln!("[vitre-cloud] automatic wake of task {task_id} failed: {error}")
+                }
+            },
+            cx,
+        );
+        true
+    }
+
     pub fn cancel_task_request(
         &mut self,
         id: String,
@@ -1254,6 +1298,124 @@ impl CloudStore {
         );
     }
 
+    /// Publish the task's reviewed work. A completed task with a saved result
+    /// publishes immediately; an idle workspace first asks the worker to save a
+    /// snapshot, and the create command follows once that snapshot lands.
+    pub fn publish_task(
+        &mut self,
+        task_id: String,
+        kind: CloudCommandPublicationCreateKind,
+        title: String,
+        body: String,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(task) = self.task(&task_id).cloned() else {
+            self.error = Some("This task is no longer available".into());
+            cx.notify();
+            return;
+        };
+        if task.state == CloudTaskState::Completed
+            && task.publication_preparation.is_none()
+            && let Some(result) = task.result.as_ref()
+        {
+            let (result_id, sha256) = (result.id.clone(), result.sha256.clone());
+            self.publish(task_id, result_id, sha256, kind, title, body, cx);
+            return;
+        }
+        let Some(client) = self.client.clone() else {
+            self.error = Some("Waiting for the local account service.".into());
+            cx.notify();
+            return;
+        };
+        let op = Op::Publish(task_id.clone());
+        if self.is_pending(&op) {
+            return;
+        }
+        self.error = None;
+        self.pending_publications.insert(
+            task_id.clone(),
+            PendingPublication {
+                kind,
+                title,
+                body,
+                turn_request_id: task.turn_request_id.clone(),
+            },
+        );
+        let command = CloudCommand::PublicationPrepare {
+            expected_turn_request_id: task.turn_request_id.clone(),
+            idempotency_key: key(),
+            task_id: task_id.clone(),
+        };
+        self.run(
+            op,
+            async move { Ok(client.command(&command).await?) },
+            move |store, response, cx| match response {
+                Ok(result) => store.apply_overview(result.overview, cx),
+                Err(error) => {
+                    store.pending_publications.remove(&task_id);
+                    store.error = Some(error.to_string());
+                }
+            },
+            cx,
+        );
+    }
+
+    /// A publication is in flight from the user's point of view while the
+    /// request, the worker snapshot, or the publish job is still running.
+    pub fn is_publishing(&self, task_id: &str) -> bool {
+        self.is_pending(&Op::Publish(task_id.to_owned()))
+            || self.pending_publications.contains_key(task_id)
+            || self
+                .task(task_id)
+                .is_some_and(|task| task.publication_preparation.is_some())
+    }
+
+    fn settle_pending_publications(&mut self, cx: &mut Context<Self>) {
+        let ids: Vec<String> = self.pending_publications.keys().cloned().collect();
+        for id in ids {
+            let Some(task) = self.task(&id).cloned() else {
+                self.pending_publications.remove(&id);
+                continue;
+            };
+            let Some(pending) = self.pending_publications.get(&id).cloned() else {
+                continue;
+            };
+            if task.publication_preparation.is_some() || self.is_pending(&Op::Publish(id.clone())) {
+                continue;
+            }
+            let same_turn = task.turn_request_id == pending.turn_request_id;
+            match (&task.state, task.result.as_ref()) {
+                (CloudTaskState::Completed, Some(result)) if same_turn => {
+                    self.pending_publications.remove(&id);
+                    let (result_id, sha256) = (result.id.clone(), result.sha256.clone());
+                    self.publish(
+                        id,
+                        result_id,
+                        sha256,
+                        pending.kind,
+                        pending.title,
+                        pending.body,
+                        cx,
+                    );
+                }
+                (
+                    CloudTaskState::Running
+                    | CloudTaskState::Queued
+                    | CloudTaskState::Preparing
+                    | CloudTaskState::WaitingForInput,
+                    _,
+                ) if same_turn => {}
+                _ => {
+                    self.pending_publications.remove(&id);
+                    self.operation_errors.insert(
+                        Op::Publish(id),
+                        "The workspace changed before its pull request snapshot was saved. Try Create PR again.".into(),
+                    );
+                }
+            }
+        }
+    }
+
     pub fn retry_publication(&mut self, task_id: String, id: String, cx: &mut Context<Self>) {
         self.command(
             Op::Publish(task_id),
@@ -1465,7 +1627,10 @@ impl CloudStore {
             Err(error) => {
                 // Sends and Stops have request-scoped outcomes. A late transport
                 // error must not resurrect an error after its receipt settled.
-                if !matches!(&op, Op::CreateTask | Op::Task(_, "continue" | "cancel")) {
+                if !matches!(
+                    &op,
+                    Op::CreateTask | Op::Task(_, "continue" | "cancel" | "wake")
+                ) {
                     self.operation_errors.insert(op.clone(), error.to_string());
                 }
             }
@@ -1898,5 +2063,111 @@ mod signin_tests {
             detail.conversation.as_ref().unwrap().messages[0].text.0,
             "latest message"
         );
+    }
+}
+
+#[cfg(test)]
+mod publication_tests {
+    use super::*;
+    use crate::cloud::tests::fixtures::{overview, repository, task};
+    use gpui::TestAppContext;
+
+    fn pending() -> PendingPublication {
+        PendingPublication {
+            kind: CloudCommandPublicationCreateKind::PullRequest,
+            title: "Fix login".into(),
+            body: "Guard the redirect".into(),
+            turn_request_id: Some("turn-1".into()),
+        }
+    }
+
+    #[gpui::test]
+    fn pending_publication_waits_for_the_snapshot_then_publishes(cx: &mut TestAppContext) {
+        let store = cx.update(CloudStore::global);
+        let mut idle = task("task-1", CloudTaskState::Running, false);
+        idle.idle = Some(true);
+        idle.turn_request_id = Some("turn-1".into());
+        store.update(cx, |s, cx| {
+            s.apply_overview(overview(vec![repository()], vec![idle.clone()]), cx);
+            s.pending_publications.insert("task-1".into(), pending());
+            assert!(s.is_publishing("task-1"));
+        });
+        // The worker is still saving: nothing changes while the task is idle.
+        let mut preparing = idle.clone();
+        preparing.publication_preparation = Some(
+            serde_json::from_value(serde_json::json!({
+                "id": "prep-1", "requestedAt": "2026-10-09T10:40:00Z", "turnRequestId": "turn-1"
+            }))
+            .unwrap(),
+        );
+        store.update(cx, |s, cx| {
+            s.apply_overview(overview(vec![repository()], vec![preparing]), cx);
+            assert!(s.pending_publications.contains_key("task-1"));
+            assert!(s.error.is_none());
+        });
+        // The snapshot completed: the create command is issued with its result.
+        let mut completed = task("task-1", CloudTaskState::Completed, true);
+        completed.turn_request_id = Some("turn-1".into());
+        store.update(cx, |s, cx| {
+            s.apply_overview(overview(vec![repository()], vec![completed]), cx);
+            assert!(!s.pending_publications.contains_key("task-1"));
+            // No local account service in tests: the publish attempt reports it.
+            assert_eq!(
+                s.error.as_deref(),
+                Some("Waiting for the local account service.")
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn pending_publication_is_dropped_when_the_turn_changes_or_fails(cx: &mut TestAppContext) {
+        let store = cx.update(CloudStore::global);
+        let mut replaced = task("task-1", CloudTaskState::Completed, true);
+        replaced.turn_request_id = Some("turn-2".into());
+        store.update(cx, |s, cx| {
+            s.pending_publications.insert("task-1".into(), pending());
+            s.apply_overview(overview(vec![repository()], vec![replaced]), cx);
+            assert!(!s.pending_publications.contains_key("task-1"));
+            assert!(
+                s.task_error("task-1")
+                    .unwrap()
+                    .contains("Try Create PR again")
+            );
+            s.operation_errors.clear();
+        });
+        let mut interrupted = task("task-1", CloudTaskState::Interrupted, false);
+        interrupted.turn_request_id = Some("turn-1".into());
+        store.update(cx, |s, cx| {
+            s.pending_publications.insert("task-1".into(), pending());
+            s.apply_overview(overview(vec![repository()], vec![interrupted]), cx);
+            assert!(!s.pending_publications.contains_key("task-1"));
+            assert!(s.task_error("task-1").is_some());
+        });
+    }
+
+    #[gpui::test]
+    fn publish_task_sends_completed_results_directly(cx: &mut TestAppContext) {
+        let store = cx.update(CloudStore::global);
+        store.update(cx, |s, cx| {
+            s.apply_overview(
+                overview(
+                    vec![repository()],
+                    vec![task("task-1", CloudTaskState::Completed, true)],
+                ),
+                cx,
+            );
+            s.publish_task(
+                "task-1".into(),
+                CloudCommandPublicationCreateKind::PullRequest,
+                "Fix login".into(),
+                String::new(),
+                cx,
+            );
+            assert!(s.pending_publications.is_empty());
+            assert_eq!(
+                s.error.as_deref(),
+                Some("Waiting for the local account service.")
+            );
+        });
     }
 }

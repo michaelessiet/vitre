@@ -25,6 +25,8 @@ if (!Number.isInteger(BACKEND_PORT) || BACKEND_PORT < 1024 || BACKEND_PORT > 655
 const ROOT = "/var/lib/vitre-worker";
 const WORKSPACE = "/workspace/repository";
 const APP_HOME = "/home/vitre/.t3";
+/** Where the backend's cloud_create_pull_request tool drops the agent's request. */
+const PUBLICATION_REQUEST_PATH = NodePath.join(APP_HOME, "cloud-publication-request.json");
 const CODEX_HOME = "/home/vitre/.codex";
 const providerHomes = { codex: CODEX_HOME, claude: "/home/vitre/.claude" };
 const UID = 10001;
@@ -272,7 +274,34 @@ export async function settleResidentTurn({
 }
 
 export function cloudTurnContext(kind) {
-  return `This is a cloud ${kind} task. Pull requests are supported through Vitre's Create PR action, which saves the workspace for review and publishes a draft PR with the connected GitHub account. When asked to open a PR, finish the changes and validation, suggest a title and description, and direct the user to Create PR. Do not push branches or publish PRs/comments from shell tools; execution credentials are read-only. When the user requests screenshots or visual verification of frontend UI, start the app locally and use cloud_screenshot with its port and path. Inspect and return the captured image; report failures honestly. Report changes and validation accurately.`;
+  return `This is a cloud ${kind} task. Pull requests are supported: when asked to open a PR, finish the changes and validation, then call the cloud_create_pull_request tool with a title and description. Vitre saves the workspace for review once this turn ends, pushes the branch, and publishes a draft PR with the connected GitHub account; the user can also trigger the same flow with Vitre's Create PR action. Do not push branches or publish PRs/comments from shell tools; execution credentials are read-only. When the user requests screenshots or visual verification of frontend UI, start the app locally and use cloud_screenshot with its port and path. Inspect and return the captured image; report failures honestly. Report changes and validation accurately.`;
+}
+
+/**
+ * Read and clear the publication request the agent left for this turn.
+ * Returns null when nothing was requested or the file is unusable.
+ */
+export async function consumePublicationRequest(path = PUBLICATION_REQUEST_PATH) {
+  let raw;
+  try {
+    raw = await NodeFSP.readFile(path, "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+  await NodeFSP.rm(path, { force: true });
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object") return null;
+  const kind = parsed.kind === "issue_comment" ? "issue_comment" : "pull_request";
+  const title = typeof parsed.title === "string" ? parsed.title.trim().slice(0, 65536) : "";
+  const body = typeof parsed.body === "string" ? parsed.body.trim().slice(0, 65536) : "";
+  if (!title) return null;
+  return { kind, title, body: body || title };
 }
 
 /** Claim the reviewed turn before stopping any process or reading its files. */
@@ -1408,6 +1437,7 @@ export async function runWorker() {
     const env = {
       ...providerEnvironment(task.provider, auth.credential),
       VITRE_CLOUD_SCREENSHOTS: "true",
+      VITRE_CLOUD_PUBLICATION_REQUEST_PATH: PUBLICATION_REQUEST_PATH,
       PLAYWRIGHT_BROWSERS_PATH: "/opt/vitre/browsers",
       ...(resident ? { VITRE_CLOUD_RESIDENT_PROVIDER: task.provider } : {}),
     };
@@ -1557,6 +1587,8 @@ export async function runWorker() {
     const submitTurn = async (turnTask) => {
       if (resident && !(await lease.acquire(turnTask.turnRequestId, { revalidate: true })))
         return false;
+      // A stale request from an earlier turn must not publish this one.
+      await NodeFSP.rm(PUBLICATION_REQUEST_PATH, { force: true });
       // Write intent before dispatch. On an ambiguous restart, never replay work.
       journal.submitted = true;
       journal.requestedAt = new Date().toISOString();
@@ -1696,6 +1728,28 @@ export async function runWorker() {
       if (Date.now() - lastCredentialCheck >= 30_000) await persistCredential();
       if (turnObservation === "settled") {
         idleSince ??= Date.now();
+        if (!status.task.publicationPreparation && !status.stopRequested) {
+          // The agent asked for a PR during the turn: hand the request to the
+          // relay, which starts the same snapshot flow as Create PR. The next
+          // poll sees the preparation and saves the workspace.
+          const request = await consumePublicationRequest();
+          if (request) {
+            try {
+              await control.request(`worker/${taskId}/publication`, {
+                attemptId: attempt.id,
+                turnRequestId: journal.turnRequestId ?? null,
+                ...request,
+              });
+              await callback("heartbeat", "Saving changes for the agent's pull request");
+              continue;
+            } catch (error) {
+              await callback(
+                "heartbeat",
+                `Could not start the agent's pull request: ${error?.message ?? "request failed"}. Use Create PR to publish.`,
+              );
+            }
+          }
+        }
         if (
           await preparePublicationSnapshot(
             status.task,

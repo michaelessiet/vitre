@@ -6,6 +6,7 @@ import type {
   CloudProvider,
   CloudProviderAccount,
   CloudPublication,
+  CloudPublicationRequest,
   CloudRepository,
   CloudTask,
   CloudWorkerCallback,
@@ -629,10 +630,22 @@ export function applyCommand(
       entityId = task.id;
       const liveIdle =
         task.state === "running" && task.idle === true && task.worker?.state === "ready";
-      if (!liveIdle && task.worker && !["stopped", "deleted"].includes(task.worker.state))
+      // A checkpoint restore with no request of its own accepts the follow-up
+      // directly: the worker submits the new turn once its provider is ready.
+      const waking =
+        !liveIdle &&
+        task.wakeOnly === true &&
+        ["queued", "preparing", "running"].includes(task.state);
+      if (
+        !liveIdle &&
+        !waking &&
+        task.worker &&
+        !["stopped", "deleted"].includes(task.worker.state)
+      )
         throw new CloudError("worker_busy", "Wait for the previous worker to stop");
       if (
         !liveIdle &&
+        !waking &&
         ![
           "completed",
           "failed",
@@ -665,7 +678,7 @@ export function applyCommand(
             chunks: [...attachment.chunks],
           }))
         : [];
-      task.state = liveIdle ? "running" : "queued";
+      task.state = liveIdle ? "running" : waking ? task.state : "queued";
       task.wakeOnly = false;
       task.idle = false;
       task.turnRequestId = command.idempotencyKey;
@@ -721,13 +734,7 @@ export function applyCommand(
     case "publication.prepare": {
       const task = taskFor(state, command.taskId);
       entityId = task.id;
-      if (task.source?.kind === "local" || task.repository.installationId === "local")
-        throw new CloudError("no_repository", "This workspace is not connected to GitHub");
-      if (task.repository.installationId === "public")
-        throw new CloudError(
-          "github_connection_required",
-          "Connect this repository to your personal GitHub account in Vitre before creating a pull request",
-        );
+      requirePublishableRepository(task);
       if ((task.turnRequestId ?? null) !== command.expectedTurnRequestId)
         throw new CloudError(
           "turn_replaced",
@@ -764,9 +771,9 @@ export function applyCommand(
       break;
     }
     case "publication.create": {
-      if (taskFor(state, command.taskId).source?.kind === "local")
-        throw new CloudError("no_repository", "This workspace is not connected to GitHub");
       const task = taskFor(state, command.taskId);
+      if (task.source?.kind === "local")
+        throw new CloudError("no_repository", "This workspace is not connected to GitHub");
       if (
         task.state !== "completed" ||
         !task.result ||
@@ -777,33 +784,13 @@ export function applyCommand(
           "result_changed",
           "Review the latest completed result before publishing",
         );
-      if (command.kind === "issue_comment" && task.issueNumber === null)
-        throw new CloudError("issue_required", "Task has no issue", 400);
-      const existing = Object.values(state.publications).find(
-        (p) => p.taskId === task.id && p.resultId === command.resultId && p.kind === command.kind,
-      );
-      if (existing) {
-        if (existing.title !== command.title || existing.body !== command.body)
-          throw new CloudError(
-            "publication_conflict",
-            "This result already has a different approved publication",
-          );
-        entityId = existing.id;
-        break;
-      }
-      state.publications[id] = {
+      entityId = createPublication(
+        state,
+        task,
         id,
-        taskId: task.id,
-        resultId: command.resultId,
-        resultSha256: command.resultSha256,
-        kind: command.kind,
-        title: command.title,
-        body: command.body,
-        state: "queued",
-        url: null,
-      };
-      (state.publicationInputs ??= {})[id] = structuredClone(task);
-      enqueue(state, task, "publish", now, id);
+        { kind: command.kind, title: command.title, body: command.body },
+        now,
+      );
       break;
     }
     case "limits.update":
@@ -1043,6 +1030,96 @@ export function schedule(
   }
 }
 
+/** Queue a publication for the task's current completed result. */
+function createPublication(
+  state: CloudState,
+  task: MutableCloudTask,
+  id: string,
+  request: CloudPublicationRequest,
+  now: number,
+): string {
+  const result = task.result;
+  if (task.state !== "completed" || !result)
+    throw new CloudError("result_changed", "Review the latest completed result before publishing");
+  if (request.kind === "issue_comment" && task.issueNumber === null)
+    throw new CloudError("issue_required", "Task has no issue", 400);
+  const existing = Object.values(state.publications).find(
+    (p) => p.taskId === task.id && p.resultId === result.id && p.kind === request.kind,
+  );
+  if (existing) {
+    if (existing.title !== request.title || existing.body !== request.body)
+      throw new CloudError(
+        "publication_conflict",
+        "This result already has a different approved publication",
+      );
+    return existing.id;
+  }
+  state.publications[id] = {
+    id,
+    taskId: task.id,
+    resultId: result.id,
+    resultSha256: result.sha256,
+    kind: request.kind,
+    title: request.title,
+    body: request.body,
+    state: "queued",
+    url: null,
+  };
+  (state.publicationInputs ??= {})[id] = structuredClone(task);
+  enqueue(state, task, "publish", now, id);
+  return id;
+}
+
+function requirePublishableRepository(task: CloudTask): void {
+  if (task.source?.kind === "local" || task.repository.installationId === "local")
+    throw new CloudError("no_repository", "This workspace is not connected to GitHub");
+  if (task.repository.installationId === "public")
+    throw new CloudError(
+      "github_connection_required",
+      "Connect this repository to your personal GitHub account in Vitre before creating a pull request",
+    );
+}
+
+/**
+ * The agent asked for a publication from inside its turn. The worker saves a
+ * snapshot for this turn exactly as a user-initiated prepare would, and the
+ * relay creates the publication from that snapshot's result on completion.
+ */
+export function requestWorkerPublication(
+  state: CloudState,
+  taskId: string,
+  attemptId: string,
+  turnRequestId: string | null,
+  request: CloudPublicationRequest,
+  now: number,
+): void {
+  const task = taskFor(state, taskId);
+  if (task.attempt?.id !== attemptId)
+    throw new CloudError("stale_worker", "Worker attempt was replaced", 409);
+  requirePublishableRepository(task);
+  if ((task.turnRequestId ?? null) !== turnRequestId)
+    throw new CloudError("turn_replaced", "A newer turn replaced this request");
+  if (request.kind === "issue_comment" && task.issueNumber === null)
+    throw new CloudError("issue_required", "Task has no issue", 400);
+  const preparation = task.publicationPreparation;
+  if (preparation) {
+    if (preparation.turnRequestId !== turnRequestId)
+      throw new CloudError("publication_preparing", "Another turn is already being saved");
+    preparation.request ??= { ...request };
+    return;
+  }
+  if (!["running", "waiting_for_input"].includes(task.state))
+    throw new CloudError("task_busy", "Task cannot publish in this state");
+  task.publicationPreparation = {
+    id: `agent-${turnRequestId ?? attemptId}-${now.toString(36)}`,
+    turnRequestId,
+    requestedAt: iso(now),
+    request: { ...request },
+  };
+  task.result = null;
+  task.updatedAt = iso(now);
+}
+
 export function acceptCallback(
   state: CloudState,
   callback: CloudWorkerCallback,
@@ -1123,6 +1200,9 @@ export function acceptCallback(
     task.updatedAt = iso(now);
     if (task.worker) task.worker.state = "ready";
     if (callback.phase === "completed") task.result = callback.result ?? null;
+    const requested = task.publicationPreparation?.request;
+    if (callback.phase === "completed" && requested && task.result)
+      createPublication(state, task, task.publicationPreparation!.id, requested, now);
     if (["completed", "failed", "needs_auth", "usage_limited"].includes(callback.phase))
       delete task.publicationPreparation;
     if (callback.phase === "running" || callback.phase === "waiting_for_input") task.error = null;

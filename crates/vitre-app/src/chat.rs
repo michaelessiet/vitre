@@ -495,6 +495,8 @@ pub struct ChatApp {
     cloud_pending_send: Option<cloud_thread::CloudPendingSend>,
     cloud_pending_sends: HashMap<String, cloud_thread::CloudPendingSend>,
     cloud_stops: HashMap<String, cloud_thread::CloudStopState>,
+    /// `task:attempt` keys already woken automatically after a lost heartbeat.
+    cloud_wake_attempts: HashSet<String>,
     cloud_transfer_generation: u64,
     cloud_creating_project: Option<ProjectId>,
     cloud_pending_starts: HashMap<String, cloud_thread::CloudPendingStart>,
@@ -2609,6 +2611,7 @@ impl ChatApp {
             cloud_pending_send: None,
             cloud_pending_sends: HashMap::new(),
             cloud_stops: HashMap::new(),
+            cloud_wake_attempts: HashSet::new(),
             cloud_transfer_generation: 0,
             cloud_creating_project: None,
             cloud_pending_starts: HashMap::new(),
