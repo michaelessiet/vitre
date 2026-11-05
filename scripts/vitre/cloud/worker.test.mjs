@@ -9,6 +9,8 @@ import { ClientOrchestrationCommand, DesktopBackendBootstrap } from "@t3tools/co
 import {
   childEnvironment,
   workerProgressUpdate,
+  createPreparationReporter,
+  createWorkerPoll,
   initialThreadRuntimeMode,
   retainIdleWorkspace,
   classifyWorkerTurn,
@@ -44,6 +46,177 @@ import { captureWorkspace, restoreWorkspace, digest } from "./workspace.mjs";
 const decodeCommand = Schema.decodeUnknownSync(ClientOrchestrationCommand);
 const decodeBackendBootstrap = Schema.decodeUnknownSync(DesktopBackendBootstrap);
 const exec = NodeUtil.promisify(NodeChildProcess.execFile);
+
+it("coalesces slow preparation reports while work continues and flushes the final warning", async () => {
+  const calls = [];
+  let release;
+  const blocked = new Promise((resolve) => {
+    release = resolve;
+  });
+  const reporter = createPreparationReporter(async (progress) => {
+    calls.push(progress);
+    if (calls.length === 1) await blocked;
+  });
+  reporter.report({ phase: "restoring" });
+  reporter.report({ phase: "dependencies", outcome: "running" });
+  reporter.report({ outcome: "failed", detail: "Installer failed" });
+  reporter.report({ phase: "backend" });
+  reporter.report({ phase: "ready" });
+  expect(calls).toEqual([{ phase: "restoring" }]);
+  let flushed = false;
+  const flush = reporter.flush().then(() => {
+    flushed = true;
+  });
+  await Promise.resolve();
+  expect(flushed).toBe(false);
+  release();
+  await flush;
+  expect(calls).toEqual([
+    { phase: "restoring" },
+    { phase: "ready", outcome: "failed", detail: "Installer failed" },
+  ]);
+});
+
+it("drains failed progress requests without unhandled rejections or hiding the last failure", async () => {
+  let fail = true;
+  const reporter = createPreparationReporter(async () => {
+    if (fail) throw new Error("offline");
+  });
+  reporter.report({ phase: "restoring" });
+  await expect(reporter.flush()).rejects.toThrow("offline");
+  fail = false;
+  reporter.report({ phase: "ready" });
+  await reporter.flush();
+});
+
+it("uses atomic polls and falls back once only when the relay lacks that endpoint", async () => {
+  const paths = [];
+  const poll = createWorkerPoll(
+    {
+      request: async (path, body) => {
+        paths.push([path, body]);
+        if (path.endsWith("/poll")) throw Object.assign(new Error("old relay"), { status: 404 });
+        return { task: {} };
+      },
+    },
+    "task",
+    "attempt",
+  );
+  await poll("first");
+  await poll("second");
+  expect(paths).toEqual([
+    ["worker/task/poll", { attemptId: "attempt", lastTurnRequestId: "first" }],
+    ["worker/task/bootstrap", undefined],
+    ["worker/task/bootstrap", undefined],
+  ]);
+  for (const status of [401, 409, 503, undefined]) {
+    let calls = 0;
+    const failing = createWorkerPoll(
+      {
+        request: async () => {
+          calls++;
+          throw Object.assign(new Error("rejected"), { status });
+        },
+      },
+      "task",
+      "attempt",
+    );
+    await expect(failing()).rejects.toThrow("rejected");
+    expect(calls).toBe(1);
+  }
+});
+
+it("uses a poll grant for the exact turn without reacquiring or overwriting a retained credential", async () => {
+  const calls = [];
+  const lease = createProviderLease({
+    owned: true,
+    turnRequestId: "previous",
+    acquire: async () => {
+      throw new Error("redundant round trip");
+    },
+    install: async () => {
+      throw new Error("must retain rotated credential");
+    },
+    suspend: async () => calls.push("stop"),
+    persist: async () => calls.push("persist"),
+    release: async (turn) => calls.push(turn),
+  });
+  await expect(
+    lease.acquire("next", { revalidate: true, grant: { acquired: true, turnRequestId: "stale" } }),
+  ).rejects.toThrow("another turn");
+  expect(
+    await lease.acquire("next", {
+      revalidate: true,
+      grant: { acquired: true, turnRequestId: "next" },
+    }),
+  ).toBe(true);
+  expect(calls).toEqual([]);
+  expect(
+    await lease.acquire("later", {
+      revalidate: true,
+      grant: { acquired: false, turnRequestId: "later" },
+    }),
+  ).toBe(false);
+  expect(calls).toEqual(["stop", "persist", "next"]);
+});
+
+it("retries a lost poll response on the same endpoint and installs its grant without another request", async () => {
+  const requests = [];
+  const grant = { turnRequestId: "next", acquired: true, credential: "fresh", version: 2 };
+  const client = new WorkerControlClient(
+    "https://relay.example",
+    "worker-token",
+    async (url, init) => {
+      requests.push({ url, method: init.method, body: JSON.parse(init.body) });
+      // The relay may have committed the lease before this response was lost.
+      if (requests.length === 1) throw new Error("response lost");
+      return Response.json({ task: { turnRequestId: "next" }, turnLease: grant });
+    },
+  );
+  const poll = createWorkerPoll(client, "task", "attempt");
+  const status = await retryControlRequest(
+    () => poll("previous"),
+    async () => {},
+  );
+  const installed = [];
+  const lease = createProviderLease({
+    owned: false,
+    acquire: async () => {
+      throw new Error("unnecessary lease request");
+    },
+    install: async (value) => installed.push(value),
+  });
+  expect(await lease.acquire(status.task.turnRequestId, { grant: status.turnLease })).toBe(true);
+  expect(installed).toEqual([grant]);
+  expect(requests).toHaveLength(2);
+  expect(requests[0]).toEqual({
+    url: "https://relay.example/v1/cloud/worker/task/poll",
+    method: "POST",
+    body: { attemptId: "attempt", lastTurnRequestId: "previous" },
+  });
+  expect(requests[1]).toEqual(requests[0]);
+});
+
+it("uses the legacy request sequence when the HTTP client receives a real 404", async () => {
+  const requests = [];
+  const client = new WorkerControlClient(
+    "https://relay.example",
+    "worker-token",
+    async (url, init) => {
+      requests.push([url.split("/v1/cloud/")[1], init.method]);
+      if (url.endsWith("/poll")) return new Response("Not found", { status: 404 });
+      return Response.json({ task: { turnRequestId: "next" } });
+    },
+  );
+  const poll = createWorkerPoll(client, "task", "attempt");
+  await poll("previous");
+  await poll("next");
+  expect(requests).toEqual([
+    ["worker/task/poll", "POST"],
+    ["worker/task/bootstrap", "GET"],
+    ["worker/task/bootstrap", "GET"],
+  ]);
+});
 
 describe("publication snapshot preparation", () => {
   const task = {

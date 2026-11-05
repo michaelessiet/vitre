@@ -73,6 +73,63 @@ export function workerProgressUpdate(journal, attemptId, sequence, now, update =
   return progress;
 }
 
+/** At most one progress request in flight and one merged update waiting. Work
+ * continues while telemetry is sent; flush before readiness/failure/checkpoint. */
+export function createPreparationReporter(publish) {
+  let pending, active, failure;
+  const drain = () => {
+    active = (async () => {
+      while (pending) {
+        const update = pending;
+        pending = undefined;
+        try {
+          await publish(update);
+          failure = undefined;
+        } catch (error) {
+          failure = error;
+        }
+      }
+    })().finally(() => {
+      active = undefined;
+      if (pending) drain();
+    });
+  };
+  return {
+    report(update) {
+      pending = { ...pending, ...update };
+      if (!active) drain();
+    },
+    async flush() {
+      for (;;) {
+        const current = active;
+        if (!current) break;
+        await current;
+      }
+      if (failure) throw failure;
+    },
+  };
+}
+
+/** Old relays remain usable during a rolling runtime deployment. Never fall
+ * back on timeouts/auth failures: a poll may already have granted the lease. */
+export function createWorkerPoll(control, taskId, attemptId) {
+  let legacy = false;
+  return async (lastTurnRequestId) => {
+    if (!legacy) {
+      try {
+        return await control.request(`worker/${taskId}/poll`, {
+          attemptId,
+          ...(lastTurnRequestId ? { lastTurnRequestId } : {}),
+        });
+      } catch (error) {
+        if (error.status !== 404) throw error;
+        legacy = true;
+      }
+    }
+    return control.request(`worker/${taskId}/bootstrap`);
+  };
+}
+
 /** Existing/restored thread settings are never overwritten by task creation defaults. */
 export function initialThreadRuntimeMode(task, existingThread) {
   return existingThread?.runtimeMode ?? task.runtimeMode ?? "full-access";
@@ -233,11 +290,13 @@ export function createProviderLease({
     owned = false;
   };
   return {
-    async acquire(turnRequestId, { revalidate = false } = {}) {
+    async acquire(turnRequestId, { revalidate = false, grant } = {}) {
       if (owned && !revalidate && turnRequestId === ownedTurnRequestId) return true;
       // Each new turn must validate current ownership/auth and join the relay's
       // FIFO queue, even when this process retained the previous turn's lease.
-      const result = await acquire(turnRequestId);
+      if (grant && grant.turnRequestId !== turnRequestId)
+        throw new WorkerFailure("Provider lease belongs to another turn");
+      const result = grant ?? (await acquire(turnRequestId));
       if (!result.acquired) {
         await relinquish();
         return false;
@@ -670,6 +729,7 @@ export class WorkerControlClient {
     });
     if (!response.ok) {
       const error = new Error(`Control request failed (${response.status})`);
+      error.status = response.status;
       // Only the documented code is used; never log upstream bodies or tokens.
       const data = await response.json().catch(() => ({}));
       error.code = data.code;
@@ -871,10 +931,12 @@ export async function runWorker() {
     tail = next;
     return next;
   };
-  const reportPreparation = (phase) =>
-    callback("heartbeat", "", undefined, undefined, false, { phase });
+  const preparation = createPreparationReporter((progress) =>
+    callback("heartbeat", progress.detail ?? "", undefined, undefined, false, progress),
+  );
+  const reportPreparation = (phase) => preparation.report({ phase });
   const reportSetup = (outcome, detail, phase) =>
-    callback("heartbeat", detail ?? "", undefined, undefined, false, { outcome, detail, phase });
+    preparation.report({ outcome, detail, ...(phase ? { phase } : {}) });
   const checkDisk = async () => {
     const disk = await NodeFSP.statfs("/workspace");
     if (disk.bavail * disk.bsize < 512 * 1024 * 1024)
@@ -1118,7 +1180,9 @@ export async function runWorker() {
         task.source || task.checkpoint || task.projectSnapshot ? "restoring" : "cloning",
       );
       if (task.projectSnapshot?.checkpoint && !task.source) {
-        await callback("heartbeat", "Preparing saved project workspace from an older checkpoint");
+        preparation.report({
+          detail: "Preparing saved project workspace from an older checkpoint",
+        });
         const { manifest: seedManifest } = await control.request(`worker/${taskId}/seed`);
         const archive = NodePath.join(ROOT, "project-seed.tar.gz");
         const file = await NodeFSP.open(archive, "w", 0o600);
@@ -1267,7 +1331,7 @@ export async function runWorker() {
         }
       });
       if (manifest) {
-        await callback("heartbeat", "Restoring the uploaded workspace");
+        preparation.report({ detail: "Restoring the uploaded workspace" });
         primaryIsNonGit = !manifest.roots[0].git;
         primaryRootId = manifest.roots[0].id;
         await atomicJson(NodePath.join(ROOT, "workspace-info.json"), {
@@ -1584,8 +1648,8 @@ export async function runWorker() {
       await atomicJson(journalPath, journal);
     }
     await reportPreparation("ready");
-    const submitTurn = async (turnTask) => {
-      if (resident && !(await lease.acquire(turnTask.turnRequestId, { revalidate: true })))
+    const submitTurn = async (turnTask, grant) => {
+      if (resident && !(await lease.acquire(turnTask.turnRequestId, { revalidate: true, grant })))
         return false;
       // A stale request from an earlier turn must not publish this one.
       await NodeFSP.rm(PUBLICATION_REQUEST_PATH, { force: true });
@@ -1630,12 +1694,14 @@ export async function runWorker() {
     }
     idle = (!!task.handoff || !!task.wakeOnly) && !journal.submitted;
     if (resident && idle) await lease.release();
+    await preparation.flush();
     await callback("running");
     let mirroredHash = "";
     let idleSince = null;
+    const poll = createWorkerPoll(control, taskId, attempt.id);
     for (;;) {
       await NodeTimersPromises.setTimeout(resident ? 200 : 500);
-      const status = await retryControlRequest(() => control.request(`worker/${taskId}/bootstrap`));
+      const status = await retryControlRequest(() => poll(journal.turnRequestId));
       if (task.handoff && !journal.activated && !status.stopRequested) {
         const binding = status.binding;
         if (
@@ -1670,7 +1736,7 @@ export async function runWorker() {
       ) {
         idle = false;
         idleSince = null;
-        if (!(await submitTurn(status.task))) continue;
+        if (!(await submitTurn(status.task, status.turnLease))) continue;
         await callback("running");
       }
       const { thread } = await backendRequest(`/api/orchestration/threads/${threadId}`);
@@ -1847,6 +1913,7 @@ export async function runWorker() {
       }
     }
   } catch (error) {
+    await preparation.flush().catch(() => {});
     // Cancellation can race any callback after the last bootstrap read. Save the
     // current attempt before exiting, but never checkpoint a replacement's run.
     const saved = await checkpointSettledRun(
@@ -1881,6 +1948,7 @@ export async function runWorker() {
     throw new WorkerFailure("Worker run failed; sandbox disk retained");
   } finally {
     clearInterval(heartbeatTimer);
+    await preparation.flush().catch(() => {});
     await stop(setup);
     await stop(backend);
     await stop(tunnel);
