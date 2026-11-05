@@ -291,3 +291,19 @@ complete idle resident scheduler pass performs no write.
 It is opt-in: set `VITRE_STORE_TEST_DATABASE_URL` to a disposable PostgreSQL database
 named `vitre_store` on `127.0.0.1`, then run that test with `vp test run`. The test
 refuses other database targets and removes its account records afterwards.
+
+## Release startup validation
+
+Run `node scripts/check-startup.mjs` from `infra/relay` after a frozen dependency
+install. This uses the same Alchemy builder and compatibility settings as the
+deployment, enforces a 2 MB JavaScript budget, rejects unrelated Zero Trust
+schemas, and starts the resulting bundle in the locked workerd runtime. It needs
+no production credentials. PR CI and the release preflight both run this check.
+Local startup timing is not a substitute for Cloudflare's deployment validation.
+
+The Alchemy patch adds an opt-in initializer annotation for the generated
+Cloudflare SDK. It removes unused nested schema constructors while preserving
+bare error-matcher registrations. `scripts/workerBuild.test.ts` verifies both
+tree shaking and bundled SDK success/error decoding. The `/docs` page loads the
+same Scalar 1.43.5 browser UI from jsDelivr instead of embedding it in the Worker;
+the JSON specifications remain served by the relay.

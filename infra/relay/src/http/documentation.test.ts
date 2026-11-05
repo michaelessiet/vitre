@@ -23,6 +23,8 @@ it.effect("serves static documentation across independently scoped requests", ()
         const html = yield* Effect.promise(() => web.text());
         expect(html).toContain("api-reference");
         expect(html).toContain("Vitre");
+        expect(html).toContain("https://cdn.jsdelivr.net/npm/@scalar/api-reference@1.43.5/");
+        expect(html.length).toBeLessThan(100_000);
       } else {
         const spec = yield* Effect.promise(() => web.json());
         expect(spec).toHaveProperty("openapi");
