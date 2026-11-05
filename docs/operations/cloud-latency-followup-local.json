@@ -1,0 +1,500 @@
+{
+  "baseCommit": "882f9e3af4da7f9fa4e41c6bef2725b4165deeb6",
+  "comparison": "Current relay in every variant; legacy worker requests versus worker follow-up",
+  "samples": 10,
+  "databaseRttMs": 0,
+  "bytesPerMs": 0,
+  "fixtureBytes": 1332862,
+  "lensConversations": 100,
+  "scope": "Local PostgreSQL control-path benchmark with mocked infrastructure and optional modeled transport; excludes model/first-token and real workspace/backend startup",
+  "results": [
+    {
+      "variant": "main_worker",
+      "samples": 10,
+      "startupAcceptedMs": {
+        "median": 29.64398799999981,
+        "p95": 216.34750600000007
+      },
+      "startupControlMs": {
+        "median": 1250.8744640000004,
+        "p95": 1801.3320350000013
+      },
+      "warmAckMs": {
+        "median": 30.143114000002242,
+        "p95": 237.99631500000032
+      },
+      "warmAdmissionMs": {
+        "median": 192.2152960000003,
+        "p95": 568.0445989999971
+      },
+      "runs": [
+        {
+          "accepted": 50.652791000000434,
+          "ready": 774.4236080000001,
+          "acknowledged": 57.74535500000002,
+          "admitted": 201.78099099999963,
+          "startupQueries": 32,
+          "startupBytes": 22713632,
+          "warmQueries": 5,
+          "warmBytes": 1311320
+        },
+        {
+          "accepted": 29.59275400000024,
+          "ready": 1393.242749,
+          "acknowledged": 42.46777900000052,
+          "admitted": 184.19857200000115,
+          "startupQueries": 32,
+          "startupBytes": 22713632,
+          "warmQueries": 5,
+          "warmBytes": 1311320
+        },
+        {
+          "accepted": 29.47587399999975,
+          "ready": 1214.2877580000004,
+          "acknowledged": 28.10296600000038,
+          "admitted": 192.2152960000003,
+          "startupQueries": 32,
+          "startupBytes": 22713632,
+          "warmQueries": 5,
+          "warmBytes": 1311320
+        },
+        {
+          "accepted": 216.34750600000007,
+          "ready": 1801.3320350000013,
+          "acknowledged": 28.513530000000173,
+          "admitted": 207.62299000000166,
+          "startupQueries": 32,
+          "startupBytes": 22713632,
+          "warmQueries": 5,
+          "warmBytes": 1311320
+        },
+        {
+          "accepted": 46.97813200000019,
+          "ready": 1190.2319270000007,
+          "acknowledged": 28.926516000001357,
+          "admitted": 196.64727400000083,
+          "startupQueries": 32,
+          "startupBytes": 22713632,
+          "warmQueries": 5,
+          "warmBytes": 1311320
+        },
+        {
+          "accepted": 29.64398799999981,
+          "ready": 1214.9556200000006,
+          "acknowledged": 27.400977999999668,
+          "admitted": 169.33804299999974,
+          "startupQueries": 32,
+          "startupBytes": 22713632,
+          "warmQueries": 5,
+          "warmBytes": 1311320
+        },
+        {
+          "accepted": 43.839037000001554,
+          "ready": 1241.3182820000002,
+          "acknowledged": 27.8622749999995,
+          "admitted": 168.48932500000046,
+          "startupQueries": 32,
+          "startupBytes": 22713632,
+          "warmQueries": 5,
+          "warmBytes": 1311320
+        },
+        {
+          "accepted": 28.640062999998918,
+          "ready": 1250.8744640000004,
+          "acknowledged": 30.143114000002242,
+          "admitted": 170.46330900000248,
+          "startupQueries": 32,
+          "startupBytes": 22713632,
+          "warmQueries": 5,
+          "warmBytes": 1311320
+        },
+        {
+          "accepted": 29.484066000000894,
+          "ready": 1277.8845870000005,
+          "acknowledged": 33.868562999999995,
+          "admitted": 176.45089000000007,
+          "startupQueries": 32,
+          "startupBytes": 22713632,
+          "warmQueries": 5,
+          "warmBytes": 1311320
+        },
+        {
+          "accepted": 29.377645999997185,
+          "ready": 1295.546875,
+          "acknowledged": 237.99631500000032,
+          "admitted": 568.0445989999971,
+          "startupQueries": 32,
+          "startupBytes": 22713632,
+          "warmQueries": 5,
+          "warmBytes": 1311320
+        }
+      ]
+    },
+    {
+      "variant": "progress_only",
+      "samples": 10,
+      "startupAcceptedMs": {
+        "median": 29.654256000001624,
+        "p95": 57.03958799999964
+      },
+      "startupControlMs": {
+        "median": 930.760371999997,
+        "p95": 1129.6030910000009
+      },
+      "warmAckMs": {
+        "median": 40.3216539999994,
+        "p95": 214.2417770000029
+      },
+      "warmAdmissionMs": {
+        "median": 182.4229520000008,
+        "p95": 634.0722419999984
+      },
+      "runs": [
+        {
+          "accepted": 57.03958799999964,
+          "ready": 439.2265249999982,
+          "acknowledged": 44.314808999999514,
+          "admitted": 184.95760599999994,
+          "startupQueries": 26,
+          "startupBytes": 14694032,
+          "warmQueries": 5,
+          "warmBytes": 1311320
+        },
+        {
+          "accepted": 29.50099599999885,
+          "ready": 983.9245530000007,
+          "acknowledged": 27.938749999997526,
+          "admitted": 170.43394099999932,
+          "startupQueries": 22,
+          "startupBytes": 9348924,
+          "warmQueries": 5,
+          "warmBytes": 1311320
+        },
+        {
+          "accepted": 29.51386199999979,
+          "ready": 1021.2068730000028,
+          "acknowledged": 29.88976900000125,
+          "admitted": 172.22102499999892,
+          "startupQueries": 26,
+          "startupBytes": 14694032,
+          "warmQueries": 5,
+          "warmBytes": 1311320
+        },
+        {
+          "accepted": 44.85791699999754,
+          "ready": 947.9609509999973,
+          "acknowledged": 91.70211100000233,
+          "admitted": 247.46860500000184,
+          "startupQueries": 26,
+          "startupBytes": 14694032,
+          "warmQueries": 5,
+          "warmBytes": 1311320
+        },
+        {
+          "accepted": 29.654256000001624,
+          "ready": 410.3104650000023,
+          "acknowledged": 28.1543210000018,
+          "admitted": 169.39916799999992,
+          "startupQueries": 24,
+          "startupBytes": 12021430,
+          "warmQueries": 5,
+          "warmBytes": 1311320
+        },
+        {
+          "accepted": 29.582954000001337,
+          "ready": 1129.6030910000009,
+          "acknowledged": 32.92552699999942,
+          "admitted": 176.15101700000014,
+          "startupQueries": 22,
+          "startupBytes": 9349117,
+          "warmQueries": 5,
+          "warmBytes": 1311320
+        },
+        {
+          "accepted": 35.60483999999997,
+          "ready": 487.6096170000019,
+          "acknowledged": 213.86055399999896,
+          "admitted": 634.0722419999984,
+          "startupQueries": 26,
+          "startupBytes": 14694032,
+          "warmQueries": 5,
+          "warmBytes": 1311320
+        },
+        {
+          "accepted": 29.607238999997207,
+          "ready": 455.0221280000005,
+          "acknowledged": 37.941193999999086,
+          "admitted": 179.213115999999,
+          "startupQueries": 26,
+          "startupBytes": 14694032,
+          "warmQueries": 5,
+          "warmBytes": 1311320
+        },
+        {
+          "accepted": 29.304081999998743,
+          "ready": 930.760371999997,
+          "acknowledged": 40.3216539999994,
+          "admitted": 182.4229520000008,
+          "startupQueries": 22,
+          "startupBytes": 9349117,
+          "warmQueries": 5,
+          "warmBytes": 1311320
+        },
+        {
+          "accepted": 29.696423000001232,
+          "ready": 559.0281859999996,
+          "acknowledged": 214.2417770000029,
+          "admitted": 554.1130730000004,
+          "startupQueries": 24,
+          "startupBytes": 12021419,
+          "warmQueries": 5,
+          "warmBytes": 1311320
+        }
+      ]
+    },
+    {
+      "variant": "combined_poll_only",
+      "samples": 10,
+      "startupAcceptedMs": {
+        "median": 30.588816000003135,
+        "p95": 45.36334699999861
+      },
+      "startupControlMs": {
+        "median": 1238.8900209999993,
+        "p95": 1378.9577260000005
+      },
+      "warmAckMs": {
+        "median": 33.77231000000029,
+        "p95": 191.3007859999998
+      },
+      "warmAdmissionMs": {
+        "median": 183.68919399999868,
+        "p95": 584.9562799999985
+      },
+      "runs": [
+        {
+          "accepted": 42.92957899999965,
+          "ready": 1378.9577260000005,
+          "acknowledged": 53.766476999997394,
+          "admitted": 192.91742299999896,
+          "startupQueries": 32,
+          "startupBytes": 22713632,
+          "warmQueries": 4,
+          "warmBytes": 877264
+        },
+        {
+          "accepted": 29.67975299999671,
+          "ready": 1163.509143999996,
+          "acknowledged": 28.1430859999964,
+          "admitted": 165.1022129999983,
+          "startupQueries": 32,
+          "startupBytes": 22713632,
+          "warmQueries": 4,
+          "warmBytes": 877264
+        },
+        {
+          "accepted": 29.30858299999818,
+          "ready": 1145.6165589999946,
+          "acknowledged": 27.735961999998835,
+          "admitted": 170.28166200000123,
+          "startupQueries": 32,
+          "startupBytes": 22713632,
+          "warmQueries": 4,
+          "warmBytes": 877264
+        },
+        {
+          "accepted": 45.36334699999861,
+          "ready": 1265.4999229999958,
+          "acknowledged": 35.828125,
+          "admitted": 172.92536600000312,
+          "startupQueries": 32,
+          "startupBytes": 22713632,
+          "warmQueries": 4,
+          "warmBytes": 877264
+        },
+        {
+          "accepted": 29.31883600000583,
+          "ready": 1243.571806,
+          "acknowledged": 47.30226199999743,
+          "admitted": 183.68919399999868,
+          "startupQueries": 32,
+          "startupBytes": 22713632,
+          "warmQueries": 4,
+          "warmBytes": 877264
+        },
+        {
+          "accepted": 30.910523999998986,
+          "ready": 1226.9739580000023,
+          "acknowledged": 191.3007859999998,
+          "admitted": 584.9562799999985,
+          "startupQueries": 32,
+          "startupBytes": 22713632,
+          "warmQueries": 4,
+          "warmBytes": 877264
+        },
+        {
+          "accepted": 30.588816000003135,
+          "ready": 1238.8900209999993,
+          "acknowledged": 27.81729600000108,
+          "admitted": 187.2640790000005,
+          "startupQueries": 32,
+          "startupBytes": 22713632,
+          "warmQueries": 4,
+          "warmBytes": 877264
+        },
+        {
+          "accepted": 42.07739399999991,
+          "ready": 1237.0281660000037,
+          "acknowledged": 27.71166699999594,
+          "admitted": 184.06931800000166,
+          "startupQueries": 32,
+          "startupBytes": 22713632,
+          "warmQueries": 4,
+          "warmBytes": 877264
+        },
+        {
+          "accepted": 29.65318799999659,
+          "ready": 1226.154180999998,
+          "acknowledged": 28.54785200000333,
+          "admitted": 177.6636190000063,
+          "startupQueries": 32,
+          "startupBytes": 22713632,
+          "warmQueries": 4,
+          "warmBytes": 877264
+        },
+        {
+          "accepted": 30.401545000000624,
+          "ready": 1250.0690099999993,
+          "acknowledged": 33.77231000000029,
+          "admitted": 172.89719100000366,
+          "startupQueries": 32,
+          "startupBytes": 22713632,
+          "warmQueries": 4,
+          "warmBytes": 877264
+        }
+      ]
+    },
+    {
+      "variant": "both_worker_changes",
+      "samples": 10,
+      "startupAcceptedMs": {
+        "median": 33.3877399999983,
+        "p95": 45.464953000002424
+      },
+      "startupControlMs": {
+        "median": 785.832868999998,
+        "p95": 1038.423898000001
+      },
+      "warmAckMs": {
+        "median": 29.62986799999635,
+        "p95": 212.6091860000015
+      },
+      "warmAdmissionMs": {
+        "median": 172.09318899999926,
+        "p95": 584.181531000002
+      },
+      "runs": [
+        {
+          "accepted": 37.45768599999428,
+          "ready": 1015.2659500000009,
+          "acknowledged": 32.386474999999336,
+          "admitted": 172.09318899999926,
+          "startupQueries": 24,
+          "startupBytes": 12021418,
+          "warmQueries": 4,
+          "warmBytes": 877264
+        },
+        {
+          "accepted": 33.3877399999983,
+          "ready": 785.832868999998,
+          "acknowledged": 212.48343400000158,
+          "admitted": 353.4930749999985,
+          "startupQueries": 26,
+          "startupBytes": 14694032,
+          "warmQueries": 4,
+          "warmBytes": 877264
+        },
+        {
+          "accepted": 30.734614000000875,
+          "ready": 514.5843719999975,
+          "acknowledged": 29.423234000001685,
+          "admitted": 167.9735370000053,
+          "startupQueries": 22,
+          "startupBytes": 9349117,
+          "warmQueries": 4,
+          "warmBytes": 877264
+        },
+        {
+          "accepted": 39.98920999999973,
+          "ready": 1038.423898000001,
+          "acknowledged": 28.758640000000014,
+          "admitted": 167.30091299999913,
+          "startupQueries": 26,
+          "startupBytes": 14694032,
+          "warmQueries": 4,
+          "warmBytes": 877264
+        },
+        {
+          "accepted": 30.215869999999995,
+          "ready": 554.4380160000001,
+          "acknowledged": 212.6091860000015,
+          "admitted": 575.8702419999972,
+          "startupQueries": 26,
+          "startupBytes": 14694032,
+          "warmQueries": 4,
+          "warmBytes": 877264
+        },
+        {
+          "accepted": 30.1311910000004,
+          "ready": 395.6029060000001,
+          "acknowledged": 28.919690000002447,
+          "admitted": 190.26938000000519,
+          "startupQueries": 24,
+          "startupBytes": 12021418,
+          "warmQueries": 4,
+          "warmBytes": 877264
+        },
+        {
+          "accepted": 45.464953000002424,
+          "ready": 947.0207979999977,
+          "acknowledged": 28.792062000000442,
+          "admitted": 170.4865609999979,
+          "startupQueries": 24,
+          "startupBytes": 12021430,
+          "warmQueries": 4,
+          "warmBytes": 877264
+        },
+        {
+          "accepted": 31.42785699999513,
+          "ready": 477.34248800000205,
+          "acknowledged": 122.22259000000486,
+          "admitted": 584.181531000002,
+          "startupQueries": 24,
+          "startupBytes": 12021430,
+          "warmQueries": 4,
+          "warmBytes": 877264
+        },
+        {
+          "accepted": 30.071310999999696,
+          "ready": 399.4495190000016,
+          "acknowledged": 27.478135999997903,
+          "admitted": 164.93744299999526,
+          "startupQueries": 24,
+          "startupBytes": 12021419,
+          "warmQueries": 4,
+          "warmBytes": 877264
+        },
+        {
+          "accepted": 45.250460999995994,
+          "ready": 996.7054349999962,
+          "acknowledged": 29.62986799999635,
+          "admitted": 169.9236030000029,
+          "startupQueries": 24,
+          "startupBytes": 12021427,
+          "warmQueries": 4,
+          "warmBytes": 877264
+        }
+      ]
+    }
+  ]
+}
