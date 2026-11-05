@@ -747,7 +747,7 @@ function waitForAbortSignal(signal: AbortSignal): Promise<void> {
  * This is used as a fallback when `claude auth status` does not include
  * subscription type information.
  */
-const probeClaudeCapabilities = (
+export const probeClaudeCapabilities = (
   claudeSettings: ClaudeSettings,
   environment?: NodeJS.ProcessEnv,
   cwd?: string,
@@ -1045,5 +1045,3 @@ export const makePendingClaudeProvider = (
       },
     });
   });
-
-export { probeClaudeCapabilities };

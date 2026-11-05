@@ -189,6 +189,13 @@ function makeRegistry(
       getProviders: Ref.get(providersRef),
       refresh: () => Ref.get(providersRef),
       refreshInstance: () => Ref.get(providersRef),
+      getComposerCapabilities: (instanceId) =>
+        Ref.get(providersRef).pipe(
+          Effect.map((providers) => {
+            const provider = providers.find((candidate) => candidate.instanceId === instanceId);
+            return { skills: provider?.skills ?? [], slashCommands: provider?.slashCommands ?? [] };
+          }),
+        ),
       getProviderMaintenanceCapabilitiesForInstance: (_instanceId, provider) =>
         Effect.succeed(lifecycleFor(provider)),
       setProviderMaintenanceActionState,

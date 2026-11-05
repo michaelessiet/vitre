@@ -69,6 +69,7 @@ impl ChatApp {
                     let project = fresh_id("vitre-project");
                     let cwd = home.join("workspace").join(&project).to_string_lossy().into_owned();
                     let thread = ThreadId(fresh_id("icon-thread"));
+                    let capability_fixture = mode == "capabilities" && selected.is_none();
                     // Create a unique fixture directory before publishing the project;
                     // the favicon cache must see the finished fixture on its first read.
                     let seed_root = cwd.clone();
@@ -91,6 +92,14 @@ impl ChatApp {
                                     std::fs::write(Path::new(&seed_root).join(path), text)?;
                                 }
                             }
+                            if capability_fixture {
+                                let skill = Path::new(&seed_root).join(".agents/skills/vitre-project-check");
+                                std::fs::create_dir_all(&skill)?;
+                                std::fs::write(skill.join("SKILL.md"), "---\nname: vitre-project-check\ndescription: Native project skill verification.\n---\n")?;
+                                let long_skill = Path::new(&seed_root).join(".agents/skills/vitre-project-skill-with-a-very-long-name-for-truncation");
+                                std::fs::create_dir_all(&long_skill)?;
+                                std::fs::write(long_skill.join("SKILL.md"), "---\nname: vitre-project-skill-with-a-very-long-name-for-truncation\ndescription: A long description that verifies the compact native composer menu remains readable while project capabilities are loaded from the selected workspace.\n---\n")?;
+                            }
                             let mut preview = image::RgbaImage::new(640,360);
                             for (x,y,pixel) in preview.enumerate_pixels_mut() {*pixel=image::Rgba([(x*120/640+50) as u8,(y*100/360+60) as u8,190,255]);}
                             preview.save(Path::new(&seed_root).join("preview.png"))?;
@@ -100,7 +109,7 @@ impl ChatApp {
                     seed.await.map_err(|e|e.to_string())?;
                     for payload in [
                         serde_json::json!({"type":"project.create","commandId":fresh_id("cmd"),"projectId":project,"title":title,"workspaceRoot":cwd,"createdAt":now_iso()}),
-                        serde_json::json!({"type":"thread.create","commandId":fresh_id("cmd"),"projectId":project,"threadId":thread,"title":if selected.is_none(){"Refine the workspace"}else{"Start a new conversation"},"modelSelection":{"provider":"codex","model":"gpt-5"},"runtimeMode":"full-access","interactionMode":"default","branch":null,"worktreePath":null,"createdAt":now_iso()})
+                        serde_json::json!({"type":"thread.create","commandId":fresh_id("cmd"),"projectId":project,"threadId":thread,"title":if selected.is_none(){"Refine the workspace"}else{"Start a new conversation"},"modelSelection":if mode == "capabilities" {serde_json::json!({"instanceId":"codex","model":"gpt-5"})} else {serde_json::json!({"provider":"codex","model":"gpt-5"})},"runtimeMode":"full-access","interactionMode":"default","branch":null,"worktreePath":null,"createdAt":now_iso()})
                     ] {
                         let command = serde_json::from_value(payload).map_err(|e| e.to_string())?;
                         client.dispatch(&command).await.map_err(|e|e.user_message())?;
@@ -115,6 +124,9 @@ impl ChatApp {
                     if mode == "narrow" { w.resize(gpui::size(px(1100.),px(800.))); }
                 }).map_err(|e|e.to_string())?;
                 loop {executor.timer(Duration::from_millis(80)).await; if this.update(cx,|a,_|a.thread.as_ref().is_some_and(|t|t.state.view.is_some()) && a.project_icons.entries.get(&cwd).is_some_and(|e|e.image.is_some())).map_err(|e|e.to_string())? {break;} }
+                if mode == "capabilities" {
+                    return super::capabilities_verification::verify(&this, &cwd, cx).await;
+                }
                 for path in ["README.md", "package.json", "Cargo.toml", "src/components/Workspace.tsx"] {
                     this.update_in(cx, |a,w,cx|a.dock_open_file(path.into(),Some(1),w,cx)).map_err(|e|e.to_string())?;
                     loop { executor.timer(Duration::from_millis(80)).await; if this.update(cx,|a,cx|a.files.as_ref().and_then(|f|f.read(cx).active_file_status()).is_some_and(|(p,_)|p==path)).map_err(|e|e.to_string())? {break;} }

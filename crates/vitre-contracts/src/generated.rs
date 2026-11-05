@@ -10541,6 +10541,20 @@ pub enum ServerConfigStreamSnapshotEventType {
 /// Void payload — send `{}` on the wire.
 pub type ServerDiscoverSourceControlPayload = serde_json::Value;
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ServerGetComposerCapabilitiesPayload {
+    pub cwd: String,
+    #[serde(rename = "instanceId")]
+    pub instance_id: ProviderInstanceId,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ServerGetComposerCapabilitiesSuccess {
+    pub skills: Vec<ServerProviderSkill>,
+    #[serde(rename = "slashCommands")]
+    pub slash_commands: Vec<ServerProviderSlashCommand>,
+}
+
 /// Void payload — send `{}` on the wire.
 pub type ServerGetConfigPayload = serde_json::Value;
 
@@ -11061,6 +11075,61 @@ pub struct ServerProviderModel {
     )]
     #[serde(rename = "subProvider")]
     pub sub_provider: Option<Option<TrimmedNonEmptyString>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ServerProviderSkill {
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::support::double_option"
+    )]
+    pub description: Option<Option<TrimmedNonEmptyString>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::support::double_option"
+    )]
+    #[serde(rename = "displayName")]
+    pub display_name: Option<Option<TrimmedNonEmptyString>>,
+    pub enabled: bool,
+    pub name: TrimmedNonEmptyString,
+    pub path: TrimmedNonEmptyString,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::support::double_option"
+    )]
+    pub scope: Option<Option<TrimmedNonEmptyString>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::support::double_option"
+    )]
+    #[serde(rename = "shortDescription")]
+    pub short_description: Option<Option<TrimmedNonEmptyString>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ServerProviderSlashCommand {
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::support::double_option"
+    )]
+    pub description: Option<Option<TrimmedNonEmptyString>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::support::double_option"
+    )]
+    pub input: Option<Option<ServerProviderSlashCommandInput>>,
+    pub name: TrimmedNonEmptyString,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ServerProviderSlashCommandInput {
+    pub hint: TrimmedNonEmptyString,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -15633,6 +15702,23 @@ pub mod methods {
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
     #[serde(untagged)]
     pub enum ServerDiscoverSourceControlError {
+        EnvironmentAuthorizationError(super::EnvironmentAuthorizationError),
+        Unknown(serde_json::Value),
+    }
+
+    pub struct ServerGetComposerCapabilities;
+
+    impl RpcMethod for ServerGetComposerCapabilities {
+        const TAG: &'static str = "server.getComposerCapabilities";
+        const STREAM: bool = false;
+        type Payload = super::ServerGetComposerCapabilitiesPayload;
+        type Success = super::ServerGetComposerCapabilitiesSuccess;
+        type Error = ServerGetComposerCapabilitiesError;
+    }
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    #[serde(untagged)]
+    pub enum ServerGetComposerCapabilitiesError {
         EnvironmentAuthorizationError(super::EnvironmentAuthorizationError),
         Unknown(serde_json::Value),
     }

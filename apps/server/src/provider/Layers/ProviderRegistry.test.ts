@@ -801,6 +801,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             skills: [],
           } as const satisfies ServerProvider;
           const refreshCalls = yield* Ref.make(0);
+          const requestedCwds = yield* Ref.make<ReadonlyArray<string>>([]);
           const instance = {
             instanceId: codexInstanceId,
             driverKind: codexDriver,
@@ -823,6 +824,13 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             },
             adapter: {} as ProviderInstance["adapter"],
             textGeneration: {} as ProviderInstance["textGeneration"],
+            getComposerCapabilities: (cwd: string) =>
+              Ref.update(requestedCwds, (cwds) => [...cwds, cwd]).pipe(
+                Effect.as({
+                  skills: [{ name: "workspace-skill", path: `${cwd}/SKILL.md`, enabled: true }],
+                  slashCommands: [{ name: "workspace-command" }],
+                }),
+              ),
           } satisfies ProviderInstance;
           const instanceRegistryLayer = Layer.succeed(
             ProviderInstanceRegistry.ProviderInstanceRegistry,
@@ -851,6 +859,20 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           yield* Effect.gen(function* () {
             const registry = yield* ProviderRegistry.ProviderRegistry;
             assert.deepStrictEqual(yield* registry.getProviders, [initialProvider]);
+            assert.deepStrictEqual(
+              yield* registry.getComposerCapabilities(codexInstanceId, "/tmp/other-project"),
+              {
+                skills: [
+                  {
+                    name: "workspace-skill",
+                    path: "/tmp/other-project/SKILL.md",
+                    enabled: true,
+                  },
+                ],
+                slashCommands: [{ name: "workspace-command" }],
+              },
+            );
+            assert.deepStrictEqual(yield* Ref.get(requestedCwds), ["/tmp/other-project"]);
             assert.strictEqual(yield* Ref.get(refreshCalls), 0);
           }).pipe(Effect.provide(runtimeServices));
         }),

@@ -264,7 +264,7 @@ impl ChatApp {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let supports_plan = self
-            .selected_provider()
+            .selected_provider(cx)
             .and_then(|provider| provider.show_interaction_mode_toggle.flatten())
             .unwrap_or(true);
         let offset = gpui_base::motion::spring(

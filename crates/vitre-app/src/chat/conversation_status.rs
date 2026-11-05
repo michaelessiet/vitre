@@ -1045,7 +1045,7 @@ impl ChatApp {
             facts.transfer = Transfer::Moving("the selected location".into());
         }
         if task.is_none()
-            && let Some(provider) = self.selected_provider()
+            && let Some(provider) = self.selected_provider(cx)
             && provider.auth.status == vitre_contracts::ServerProviderAuthStatus::Unauthenticated
         {
             facts.attention = Attention::Auth;

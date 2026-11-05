@@ -525,7 +525,7 @@ impl ChatApp {
         cx.notify();
     }
 
-    pub(super) fn draft_model_selection(&self, cx: &Context<Self>) -> Option<ModelSelection> {
+    pub(super) fn draft_model_selection(&self, cx: &gpui::App) -> Option<ModelSelection> {
         self.draft_model
             .clone()
             .or_else(|| {
