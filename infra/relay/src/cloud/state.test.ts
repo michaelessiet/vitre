@@ -722,7 +722,7 @@ describe("cloud task lifecycle", () => {
         now,
         true,
       ),
-    ).toThrow("worker");
+    ).toThrow("cannot be continued");
   });
   it("a lost continuation response can be retried with the same key without restarting work", () => {
     const state = running();
@@ -1448,4 +1448,109 @@ it("clears recovered preparation errors on readiness while retaining dependency 
     now + 2,
   );
   expect(state.tasks.task!.error).toBe("Preparation failed");
+});
+
+describe("follow-ups behind a stopping worker", () => {
+  // The fixture's initial provision operation has already been processed.
+  const live = () => {
+    const state = running();
+    state.operations = {};
+    return state;
+  };
+  const failed = (sequence: number): CloudWorkerCallback => ({
+    ...heartbeat(sequence),
+    phase: "failed",
+    detail: "Worker could not complete this run. Its disk is retained for recovery.",
+  });
+  const follow = (key: string): Extract<CloudCommand, { type: "task.continue" }> => ({
+    type: "task.continue",
+    taskId: "task",
+    idempotencyKey: key,
+    prompt: "Try again",
+  });
+
+  it("stops a worker as soon as it reports a terminal failure", () => {
+    const state = live();
+    const task = state.tasks.task!;
+    expect(acceptCallback(state, failed(1), now + 1000)).toBe(true);
+    expect(task.state).toBe("failed");
+    expect(task.error).toContain("could not complete");
+    expect(Object.values(state.operations)).toEqual([
+      expect.objectContaining({ taskId: "task", attemptId: "task-1", kind: "stop" }),
+    ]);
+    // The settled grace period no longer gates the stop.
+    schedule(state, now + 2000, true);
+    expect(Object.values(state.operations).filter((op) => op.kind === "stop")).toHaveLength(1);
+  });
+
+  it("queues a follow-up for a failed task whose worker has not stopped yet", () => {
+    const state = live();
+    const task = state.tasks.task!;
+    acceptCallback(state, failed(1), now + 1000);
+    expect(task.worker?.state).toBe("ready");
+    applyCommand(state, follow("retry"), "retry", "retry", now + 2000, true);
+    expect(task.state).toBe("queued");
+    expect(task.turnRequestId).toBe("retry");
+    expect(task.error).toBeNull();
+    expect(task.idle).toBe(false);
+    // Provisioning waits for the previous worker; the stop stays queued.
+    schedule(state, now + 3000, true);
+    expect(task.state).toBe("queued");
+    expect(task.attempt?.id).toBe("task-1");
+    expect(task.worker?.state).toBe("ready");
+    expect(Object.values(state.operations).map((op) => op.kind)).toEqual(["stop"]);
+    // Once the scheduler completes the stop, the follow-up starts a fresh attempt.
+    state.operations = {};
+    confirmStopped(state, "task", "task-1", now + 4000);
+    expect(state.accounts.codex.leasedBy).toBeNull();
+    schedule(state, now + 5000, true);
+    expect(task.state).toBe("preparing");
+    expect(task.attempt?.id).toBe("task-2");
+    expect(task.worker?.state).toBe("provisioning");
+    expect(task.turnRequestId).toBe("retry");
+    expect(Object.values(state.operations).map((op) => op.kind)).toEqual(["provision"]);
+  });
+
+  it("queues a follow-up while a lost worker is still being stopped", () => {
+    const state = live();
+    const task = state.tasks.task!;
+    task.turnRequestId = "turn-one";
+    const stale = now + CLOUD_POLICY.staleMs + 1000;
+    schedule(state, stale, true);
+    expect(task.state).toBe("interrupted");
+    expect(task.worker?.state).toBe("ready");
+    applyCommand(state, follow("again"), "again", "again", stale + 1, true);
+    expect(task.state).toBe("queued");
+    schedule(state, stale + 2, true);
+    expect(task.attempt?.id).toBe("task-1");
+    expect(Object.values(state.operations).map((op) => op.kind)).toEqual(["stop"]);
+    // The stopping worker's shutdown checkpoint is kept for the next attempt.
+    const checkpoint = {
+      id: "shutdown",
+      taskId: "task",
+      attemptId: "task-1",
+      sequence: 2,
+      objectKey: "shutdown-manifest",
+      sha256: "c".repeat(64),
+      createdAt: iso(stale + 3),
+      sizeBytes: 10,
+    };
+    expect(acceptCheckpoint(state, { ...heartbeat(2), checkpoint }, stale + 3)).toBe(true);
+    expect(task.checkpoint?.id).toBe("shutdown");
+    expect(task.state).toBe("queued");
+    confirmStopped(state, "task", "task-1", stale + 4);
+    schedule(state, stale + 5, true);
+    expect(task.state).toBe("preparing");
+    expect(task.attempt?.id).toBe("task-2");
+    expect(task.checkpoint?.id).toBe("shutdown");
+  });
+
+  it("still rejects a follow-up while a turn is running", () => {
+    const state = live();
+    const task = state.tasks.task!;
+    task.idle = false;
+    expect(() => applyCommand(state, follow("busy"), "busy", "busy", now, true)).toThrow(
+      "cannot be continued",
+    );
+  });
 });

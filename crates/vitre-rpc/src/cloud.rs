@@ -130,6 +130,23 @@ fn cloud_error_detail(status: u16, body: &[u8]) -> String {
     }
 }
 
+/// Relay failures carry a machine-readable code plus whether the request was
+/// provably rejected; the UI uses those to decide between "fix and resend"
+/// and "check whether it was received" instead of showing a bare HTTP status.
+fn cloud_request_error(status: u16, body: &[u8]) -> RpcError {
+    let fields = serde_json::from_slice::<serde_json::Value>(body).ok();
+    let field = |name: &str| fields.as_ref().and_then(|value| value.get(name).cloned());
+    RpcError::CloudRequest {
+        message: cloud_error_detail(status, body),
+        code: field("code").and_then(|v| v.as_str().map(str::to_owned)),
+        rejected: field("requestDisposition").and_then(|v| v.as_str().map(str::to_owned))
+            == Some("rejected".to_owned()),
+        retryable: field("retryable")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(status >= 500),
+    }
+}
+
 impl CloudHttp {
     pub async fn lens(&self, bearer: &str) -> Result<vitre_contracts::LensOverview, RpcError> {
         self.request(bearer, Method::GET, "/lens", None::<&()>)
@@ -238,10 +255,7 @@ impl CloudHttp {
         if !response.status().is_success() {
             let status = response.status().as_u16();
             let body = response.bytes().await.unwrap_or_default();
-            return Err(RpcError::HttpStatus {
-                status,
-                body: cloud_error_detail(status, &body),
-            });
+            return Err(cloud_request_error(status, &body));
         }
         Ok(response.json().await?)
     }
@@ -373,6 +387,48 @@ mod tests {
             task_path("cloud-task_1", "connection").unwrap(),
             "/tasks/cloud-task_1/connection"
         );
+    }
+
+    #[test]
+    fn cloud_request_errors_keep_the_relay_code_and_certainty() {
+        let RpcError::CloudRequest {
+            message,
+            code,
+            rejected,
+            retryable,
+        } = cloud_request_error(
+            409,
+            br#"{"code":"worker_busy","message":"raw","requestDisposition":"unknown","retryable":true}"#,
+        )
+        else {
+            panic!("expected a cloud request error");
+        };
+        assert_eq!(code.as_deref(), Some("worker_busy"));
+        assert!(!rejected && retryable);
+        assert!(message.contains("still stopping") && !message.contains("raw"));
+        let RpcError::CloudRequest {
+            rejected,
+            retryable,
+            ..
+        } = cloud_request_error(
+            409,
+            br#"{"code":"idempotency_conflict","requestDisposition":"rejected","retryable":false}"#,
+        )
+        else {
+            panic!("expected a cloud request error");
+        };
+        assert!(rejected && !retryable);
+        let RpcError::CloudRequest {
+            code,
+            rejected,
+            retryable,
+            message,
+        } = cloud_request_error(502, b"<html>bad gateway secret-token</html>")
+        else {
+            panic!("expected a cloud request error");
+        };
+        assert!(code.is_none() && !rejected && retryable);
+        assert!(!message.contains("secret-token") && !message.contains("http status"));
     }
 
     #[test]

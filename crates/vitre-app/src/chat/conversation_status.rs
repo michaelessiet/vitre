@@ -354,7 +354,6 @@ impl ConversationStatus {
         let settled_turn = matches!(facts.turn, Turn::Idle | Turn::Finished);
         let can_send = facts.transfer == Transfer::None
             && !facts.ownership_fenced
-            && !facts.cloud_resuming
             && (facts.attention == Attention::None
                 || (facts.editable_after_error && facts.attention == Attention::Error))
             && matches!(facts.delivery, Delivery::None | Delivery::Rejected)
@@ -552,11 +551,14 @@ pub(super) fn cloud_recovery(task: &vitre_contracts::CloudTask) -> CloudRecovery
             task.state,
             CloudTaskState::Queued | CloudTaskState::Preparing
         );
+    // The relay queues a follow-up for any settled task and stops a lingering
+    // worker itself before starting the next attempt, so the composer never
+    // waits on the previous worker's shutdown.
     CloudRecovery {
         paused: interrupted && worker_stopped,
         resuming: interrupted && !worker_stopped,
-        accepts_message: live_idle || waking || (settled && worker_stopped),
-        editable_after_failure: task.state == CloudTaskState::Failed && worker_stopped,
+        accepts_message: live_idle || waking || settled,
+        editable_after_failure: task.state == CloudTaskState::Failed,
     }
 }
 
@@ -2242,19 +2244,37 @@ mod tests {
     }
 
     #[test]
-    fn resuming_cloud_workspace_waits_for_the_stale_worker_to_stop() {
+    fn resuming_cloud_workspace_still_accepts_a_message() {
+        // The relay queues the message and replaces the stale worker itself.
         let status = ConversationStatus::derive(Facts {
             connection: Connection::Dormant,
             transcript: Transcript::Cached,
             turn: Turn::Idle,
             execution_invalidated: true,
             cloud_resuming: true,
+            cloud_accepts_message: true,
             ..Facts::default()
         });
         assert_eq!(status.label, "Reconnecting cloud workspace…");
         assert_eq!(status.art, Art::Connecting);
         assert_eq!(status.action, Action::None);
-        assert!(!status.can_send);
+        assert!(status.can_send);
+    }
+
+    #[test]
+    fn failed_cloud_task_with_a_lingering_worker_is_editable_and_sendable() {
+        let status = ConversationStatus::derive(Facts {
+            connection: Connection::Dormant,
+            transcript: Transcript::Cached,
+            turn: Turn::Finished,
+            attention: Attention::Error,
+            detail: Some("Worker could not complete this run.".into()),
+            editable_after_error: true,
+            cloud_accepts_message: true,
+            ..Facts::default()
+        });
+        assert_eq!(status.action, Action::Retry);
+        assert!(status.can_send);
     }
 
     #[test]
@@ -2304,7 +2324,7 @@ mod tests {
         assert!(cloud_recovery(&interrupted).paused);
         interrupted.worker = Some(worker("ready"));
         let resuming = cloud_recovery(&interrupted);
-        assert!(resuming.resuming && !resuming.paused && !resuming.accepts_message);
+        assert!(resuming.resuming && !resuming.paused && resuming.accepts_message);
 
         let mut idle = task("t", CloudTaskState::Running, false);
         idle.idle = Some(true);
@@ -2321,8 +2341,10 @@ mod tests {
 
         let mut failed = task("t", CloudTaskState::Failed, false);
         assert!(cloud_recovery(&failed).editable_after_failure);
+        // The relay stops a worker that reported failure; the user need not wait.
         failed.worker = Some(worker("ready"));
-        assert!(!cloud_recovery(&failed).editable_after_failure);
+        let lingering = cloud_recovery(&failed);
+        assert!(lingering.editable_after_failure && lingering.accepts_message);
     }
 
     #[test]

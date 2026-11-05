@@ -727,7 +727,9 @@ fn interrupted_cloud_task_pauses_and_accepts_a_message(cx: &mut TestAppContext) 
     });
 }
 #[gpui::test]
-fn interrupted_cloud_task_with_a_live_worker_waits_for_the_stop(cx: &mut TestAppContext) {
+fn interrupted_cloud_task_with_a_live_worker_still_accepts_a_message(cx: &mut TestAppContext) {
+    // The relay queues the message and stops the stale worker before the next
+    // attempt, so the composer must not wait on that shutdown.
     let (app, store, cx) = open(CloudTaskState::Interrupted, cx);
     store.update(cx, |s, cx| {
         s.overview.as_mut().unwrap().tasks[0].worker = Some(worker("ready"));
@@ -738,8 +740,29 @@ fn interrupted_cloud_task_with_a_live_worker_waits_for_the_stop(cx: &mut TestApp
     app.update(cx, |a, cx| {
         let status = a.conversation_status(cx);
         assert_eq!(status.label, "Reconnecting cloud workspace…");
-        assert!(!status.can_send);
+        assert!(status.can_send);
+        assert_eq!(a.cloud_send_blocker(cx), None);
         assert_eq!(status.action, super::conversation_status::Action::None);
+    });
+}
+#[gpui::test]
+fn failed_cloud_task_with_a_live_worker_can_be_retried_or_resent(cx: &mut TestAppContext) {
+    let (app, store, cx) = open(CloudTaskState::Failed, cx);
+    store.update(cx, |s, cx| {
+        let task = &mut s.overview.as_mut().unwrap().tasks[0];
+        task.worker = Some(worker("ready"));
+        task.error = Some(tnes(
+            "Worker could not complete this run. Its disk is retained for recovery.",
+        ));
+        cx.emit(CloudEvent::Changed);
+        cx.notify();
+    });
+    draw(cx);
+    app.update(cx, |a, cx| {
+        let status = a.conversation_status(cx);
+        assert_eq!(status.action, super::conversation_status::Action::Retry);
+        assert!(status.can_send);
+        assert_eq!(a.cloud_send_blocker(cx), None);
     });
 }
 #[test]

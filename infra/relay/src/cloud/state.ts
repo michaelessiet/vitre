@@ -636,13 +636,9 @@ export function applyCommand(
         !liveIdle &&
         task.wakeOnly === true &&
         ["queued", "preparing", "running"].includes(task.state);
-      if (
-        !liveIdle &&
-        !waking &&
-        task.worker &&
-        !["stopped", "deleted"].includes(task.worker.state)
-      )
-        throw new CloudError("worker_busy", "Wait for the previous worker to stop");
+      // A settled task accepts its follow-up even while the previous worker is
+      // still shutting down: the request queues, the scheduler stops that
+      // worker first, and a fresh attempt starts once the stop is confirmed.
       if (
         !liveIdle &&
         !waking &&
@@ -949,6 +945,10 @@ export function schedule(
         ))
     ) {
       enqueue(state, task, "stop", now);
+    } else if (!stopped && task.state === "queued") {
+      // A follow-up queued behind a settled worker replaces it with a fresh
+      // attempt; the old worker must release its lease and disk first.
+      enqueue(state, task, "stop", now);
     }
     if (!resident && !stopped && (state.usage[month(now)] ?? 0) >= state.monthlyLimit) {
       if (executing) {
@@ -977,6 +977,8 @@ export function schedule(
       continue;
     }
     if (account.leasedBy && !isPreparingHandoff(state, task)) continue;
+    // Never start a second attempt while the previous worker is still stopping.
+    if (task.worker && !["stopped", "deleted"].includes(task.worker.state)) continue;
     if (
       persistentMachine &&
       !isPreparingHandoff(state, task) &&
@@ -1206,8 +1208,12 @@ export function acceptCallback(
     if (["completed", "failed", "needs_auth", "usage_limited"].includes(callback.phase))
       delete task.publicationPreparation;
     if (callback.phase === "running" || callback.phase === "waiting_for_input") task.error = null;
-    if (["failed", "needs_auth", "usage_limited"].includes(callback.phase))
+    if (["failed", "needs_auth", "usage_limited"].includes(callback.phase)) {
       task.error = callback.detail;
+      // The worker exits after reporting these phases. Release its lease now
+      // instead of after the settled grace period so a follow-up can start.
+      enqueue(state, task, "stop", now);
+    }
     if (
       (callback.phase === "needs_auth" || callback.phase === "usage_limited") &&
       state.accounts[task.provider].leasedBy === attempt.id
@@ -1272,7 +1278,13 @@ export function acceptCheckpoint(
   }
   if (["preparing", "running", "waiting_for_input"].includes(task.state))
     return acceptCallback(state, callback, now);
-  if (!["cancelled", "interrupted", "failed", "needs_auth", "usage_limited"].includes(task.state)) {
+  // A queued follow-up keeps the previous attempt until its stop is confirmed;
+  // that worker's shutdown checkpoint is what the next attempt restores.
+  if (
+    !["cancelled", "interrupted", "failed", "needs_auth", "usage_limited", "queued"].includes(
+      task.state,
+    )
+  ) {
     throw new CloudError("task_settled", "Task no longer accepts checkpoints");
   }
   attempt.lastSequence = callback.sequence;
