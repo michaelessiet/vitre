@@ -25,7 +25,6 @@ import {
 } from "../auth/http.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
-import { transferConversationEffect } from "../cloud/conversationTransfer.ts";
 
 const isInvariantError = Schema.is(OrchestrationCommandInvariantError);
 const isPreviouslyRejected = Schema.is(OrchestrationCommandPreviouslyRejectedError);
@@ -43,9 +42,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
         Effect.fn("environment.orchestration.transfer")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
           yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
-          return yield* transferConversationEffect(args.payload).pipe(
-            Effect.catch((cause) => failEnvironmentInternal("internal_error", cause)),
-          );
+          return yield* failEnvironmentInvalidRequest("invalid_command");
         }),
       )
       .handle(

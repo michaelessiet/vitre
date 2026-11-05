@@ -50,9 +50,6 @@ jobs:
         run: vp check
       - name: Typecheck
         run: vp run typecheck
-      - name: Verify relay release bundle startup
-        working-directory: infra/relay
-        run: node scripts/check-startup.mjs
       - name: Build bundled sidecar
         run: vp run --filter ./apps/server build:bundle
       - name: Build marketing site
@@ -103,18 +100,3 @@ jobs:
     uses: ./.github/workflows/build-vitre.yml
     with:
       ref: ${{ github.sha }}
-
-  relay:
-    name: Cloud deployment
-    needs: result
-    if: >-
-      !cancelled() && needs.result.result == 'success' && github.event_name == 'push' &&
-      github.ref == 'refs/heads/main' && vars.RELAY_DEPLOY_ENABLED != 'false'
-    permissions:
-      contents: read
-      deployments: read
-    uses: ./.github/workflows/deploy-relay.yml
-    secrets: inherit
-    with:
-      ref: ${{ github.sha }}
-      ci_result: ${{ needs.result.result }}

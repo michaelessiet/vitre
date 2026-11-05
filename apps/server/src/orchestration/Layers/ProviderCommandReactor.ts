@@ -1,5 +1,5 @@
-import { isolatedWorkspaceRoots } from "../../cloud/executionOwnership.ts";
-import { importedConversationContext } from "../../cloud/conversationContext.ts";
+import { importedConversationContext } from "../conversationContext.ts";
+import { isolatedWorkspaceRoots } from "../executionOwnership.ts";
 import {
   type ChatAttachment,
   CommandId,
