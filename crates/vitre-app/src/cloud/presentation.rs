@@ -69,6 +69,27 @@ pub(crate) fn provider_icon(provider: &CloudProvider, cx: &App) -> Icon {
     )
 }
 
+/// Whether Create PR can start for this task: the repository publishes through
+/// the connected GitHub account and either a completed result is saved, a
+/// snapshot is being prepared, or an idle workspace can save one now.
+pub(crate) fn publication_available(task: &CloudTask) -> bool {
+    use vitre_contracts::{CloudTaskSource, CloudWorkerState};
+    if matches!(task.source, Some(CloudTaskSource::Local { .. }))
+        || matches!(task.repository.installation_id.as_str(), "local" | "public")
+    {
+        return false;
+    }
+    let live_idle = task.state == CloudTaskState::Running
+        && task.idle == Some(true)
+        && task
+            .worker
+            .as_ref()
+            .is_some_and(|worker| worker.state == CloudWorkerState::Ready);
+    (task.state == CloudTaskState::Completed && task.result.is_some())
+        || task.publication_preparation.is_some()
+        || live_idle
+}
+
 /// A task's one-line title: the first line of its prompt, trimmed.
 pub(crate) fn task_title(task: &CloudTask, max: usize) -> String {
     let prompt = crate::chat::displayed_user_prompt(&task.prompt);

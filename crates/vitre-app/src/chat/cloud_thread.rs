@@ -860,6 +860,7 @@ impl ChatApp {
         let Some(task_id) = self.open_cloud_task_id() else {
             return;
         };
+        self.auto_wake_cloud_task(cx);
         let identity = (self.cloud_store.read(cx).session == SessionState::SignedIn)
             .then(|| self.cloud_task(cx).as_ref().and_then(connection_identity))
             .flatten();
@@ -907,6 +908,27 @@ impl ChatApp {
         }
         if connect {
             self.connect_cloud_live(task_id, cx);
+        }
+    }
+    /// An open conversation whose workspace lost contact is restored from its
+    /// checkpoint as soon as the stale worker has stopped, once per attempt.
+    fn auto_wake_cloud_task(&mut self, cx: &mut Context<Self>) {
+        let Some(task) = self.cloud_task(cx) else {
+            return;
+        };
+        let Some(key) = cloud_auto_wake_key(&task) else {
+            return;
+        };
+        if self.cloud_wake_attempts.contains(&key)
+            || self.cloud_store.read(cx).session != SessionState::SignedIn
+        {
+            return;
+        }
+        if self
+            .cloud_store
+            .update(cx, |store, cx| store.wake_task(task.id.clone(), cx))
+        {
+            self.cloud_wake_attempts.insert(key);
         }
     }
     fn connect_cloud_live(&mut self, task_id: String, cx: &mut Context<Self>) {
@@ -2781,11 +2803,7 @@ impl ChatApp {
                         .on_click(move |_, _, cx| cx.open_url(&url)),
                 ),
             );
-        } else if let Some(revision) = task
-            .result
-            .clone()
-            .filter(|_| task.kind != CloudTaskKind::Ask)
-        {
+        } else if task.kind != CloudTaskKind::Ask && cloud::publication_available(&task) {
             let investigate =
                 task.kind == CloudTaskKind::Investigate && task.issue_number.is_some();
             let title = cloud::task_title(&task, 72);
@@ -2793,7 +2811,9 @@ impl ChatApp {
                 .cloud_detail(cx)
                 .and_then(|d| d.result)
                 .map(|r| r.result.summary.0)
-                .unwrap_or_else(|| revision.summary.0.clone());
+                .or_else(|| task.result.as_ref().map(|r| r.summary.0.clone()))
+                .unwrap_or_default();
+            let pending = pending || store.is_publishing(&task.id);
             let id = task.id.clone();
             actions = actions.child(
                 div().debug_selector(|| "cloud-publish".into()).child(
@@ -2815,7 +2835,6 @@ impl ChatApp {
                             };
                             let sheet = Sheet::publish(
                                 id.clone(),
-                                revision.clone(),
                                 kind,
                                 title.clone(),
                                 summary.clone(),
@@ -2841,6 +2860,26 @@ impl ChatApp {
         self.cloud_store
             .update(cx, |store, cx| store.retry_task(task, cx));
     }
+}
+
+/// The wake key for a paused task with a checkpoint to restore, or `None`
+/// when the task must wait for a message (no checkpoint) or is archived.
+pub(super) fn cloud_auto_wake_key(task: &vitre_contracts::CloudTask) -> Option<String> {
+    let recovery = super::conversation_status::cloud_recovery(task);
+    if !recovery.paused
+        || task.checkpoint.is_none()
+        || task.archived_at.as_ref().is_some_and(|at| at.is_some())
+    {
+        return None;
+    }
+    Some(format!(
+        "{}:{}",
+        task.id,
+        task.attempt
+            .as_ref()
+            .map(|a| a.id.as_str())
+            .unwrap_or("none")
+    ))
 }
 
 impl ChatApp {

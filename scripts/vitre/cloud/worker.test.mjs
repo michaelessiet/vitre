@@ -16,6 +16,7 @@ import {
   settleResidentTurn,
   preparePublicationSnapshot,
   cloudTurnContext,
+  consumePublicationRequest,
   atomicJson,
   retryControlRequest,
   bootstrapWorker,
@@ -98,12 +99,36 @@ describe("publication snapshot preparation", () => {
     ).rejects.toThrow("cancelled");
     expect(saved).toBe(false);
   });
-  it("explains the supported PR flow instead of claiming cloud PRs are forbidden", () => {
+  it("tells the agent to request PRs through the cloud tool instead of deferring to the user", () => {
     const context = cloudTurnContext("build");
+    expect(context).toContain("cloud_create_pull_request");
     expect(context).toContain("Create PR");
     expect(context).toContain("draft PR");
     expect(context).toContain("credentials are read-only");
+    expect(context).not.toContain("direct the user to Create PR");
     expect(context).not.toContain("Do not publish branches, PRs, or comments");
+  });
+  it("consumes the agent's publication request exactly once", async () => {
+    const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "vitre-publication-"));
+    const path = NodePath.join(directory, "request.json");
+    expect(await consumePublicationRequest(path)).toBeNull();
+    await atomicJson(path, { title: "  Add retries  ", body: "Adds retries." });
+    expect(await consumePublicationRequest(path)).toEqual({
+      kind: "pull_request",
+      title: "Add retries",
+      body: "Adds retries.",
+    });
+    expect(await consumePublicationRequest(path)).toBeNull();
+    await NodeFSP.writeFile(path, "not json");
+    expect(await consumePublicationRequest(path)).toBeNull();
+    await atomicJson(path, { title: "" });
+    expect(await consumePublicationRequest(path)).toBeNull();
+    await atomicJson(path, { title: "Only title" });
+    expect(await consumePublicationRequest(path)).toEqual({
+      kind: "pull_request",
+      title: "Only title",
+      body: "Only title",
+    });
   });
 });
 

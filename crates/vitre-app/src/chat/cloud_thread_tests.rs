@@ -690,16 +690,106 @@ fn terminal_cloud_task_enables_follow_up(cx: &mut TestAppContext) {
         assert_eq!(a.cloud_send_blocker(cx), None);
     });
 }
+fn worker(state: &str) -> vitre_contracts::CloudWorker {
+    serde_json::from_value(serde_json::json!({
+        "cpu": 2, "diskGiB": 10, "memoryGiB": 4,
+        "environmentId": "environment", "id": "worker", "sandboxId": null,
+        "state": state, "stoppedAt": null
+    }))
+    .unwrap()
+}
+fn checkpoint() -> vitre_contracts::CloudCheckpoint {
+    serde_json::from_value(serde_json::json!({
+        "attemptId": "attempt-1", "createdAt": "2026-10-09T10:30:00Z", "id": "chk-1",
+        "objectKey": "chk-1", "sequence": 3, "sha256": "abc", "sizeBytes": 10, "taskId": "task-1"
+    }))
+    .unwrap()
+}
 #[gpui::test]
-fn interrupted_cloud_task_offers_specific_retry(cx: &mut TestAppContext) {
-    let (app, _, cx) = open(CloudTaskState::Interrupted, cx);
+fn interrupted_cloud_task_pauses_and_accepts_a_message(cx: &mut TestAppContext) {
+    let (app, store, cx) = open(CloudTaskState::Interrupted, cx);
+    store.update(cx, |s, cx| {
+        s.overview.as_mut().unwrap().tasks[0].error =
+            Some(tnes("Worker heartbeat lost; review before continuing"));
+        cx.emit(CloudEvent::Changed);
+        cx.notify();
+    });
     draw(cx);
     app.update(cx, |a, cx| {
-        assert_eq!(
-            a.conversation_status(cx).action,
-            super::conversation_status::Action::Retry
-        )
+        let status = a.conversation_status(cx);
+        assert_eq!(status.action, super::conversation_status::Action::None);
+        assert_eq!(status.label, "Workspace paused · send a message to resume");
+        assert!(status.can_send);
+        assert_eq!(a.cloud_send_blocker(cx), None);
+        // Without a checkpoint there is nothing to wake; the next message
+        // starts a fresh attempt instead.
+        assert!(a.cloud_wake_attempts.is_empty());
     });
+}
+#[gpui::test]
+fn interrupted_cloud_task_with_a_live_worker_waits_for_the_stop(cx: &mut TestAppContext) {
+    let (app, store, cx) = open(CloudTaskState::Interrupted, cx);
+    store.update(cx, |s, cx| {
+        s.overview.as_mut().unwrap().tasks[0].worker = Some(worker("ready"));
+        cx.emit(CloudEvent::Changed);
+        cx.notify();
+    });
+    draw(cx);
+    app.update(cx, |a, cx| {
+        let status = a.conversation_status(cx);
+        assert_eq!(status.label, "Reconnecting cloud workspace…");
+        assert!(!status.can_send);
+        assert_eq!(status.action, super::conversation_status::Action::None);
+    });
+}
+#[test]
+fn auto_wake_targets_paused_tasks_with_a_checkpoint_once_per_attempt() {
+    let mut paused = task("task-1", CloudTaskState::Interrupted, false);
+    assert_eq!(cloud_auto_wake_key(&paused), None);
+    paused.checkpoint = Some(checkpoint());
+    assert_eq!(cloud_auto_wake_key(&paused).as_deref(), Some("task-1:none"));
+    paused.worker = Some(worker("stopped"));
+    paused.attempt = Some(
+        serde_json::from_value(serde_json::json!({
+            "id": "attempt-1", "generation": 1, "lastSequence": 3,
+            "billedThrough": "2026-10-09T10:30:00Z", "reservedMicroDollars": 0,
+            "startedAt": "2026-10-09T10:00:00Z", "deadlineAt": "2026-10-09T12:00:00Z",
+            "heartbeatAt": "2026-10-09T10:30:00Z"
+        }))
+        .unwrap(),
+    );
+    assert_eq!(
+        cloud_auto_wake_key(&paused).as_deref(),
+        Some("task-1:attempt-1")
+    );
+    paused.worker = Some(worker("ready"));
+    assert_eq!(cloud_auto_wake_key(&paused), None);
+    paused.worker = None;
+    paused.archived_at = Some(Some(tnes("2026-10-09T11:00:00Z")));
+    assert_eq!(cloud_auto_wake_key(&paused), None);
+    let mut running = task("task-1", CloudTaskState::Running, false);
+    running.checkpoint = Some(checkpoint());
+    assert_eq!(cloud_auto_wake_key(&running), None);
+}
+#[gpui::test]
+fn idle_cloud_workspace_offers_create_pr_before_a_result_exists(cx: &mut TestAppContext) {
+    let (_app, store, cx) = open(CloudTaskState::Running, cx);
+    store.update(cx, |s, cx| {
+        let task = &mut s.overview.as_mut().unwrap().tasks[0];
+        task.result = None;
+        task.idle = Some(true);
+        task.worker = Some(worker("ready"));
+        cx.emit(CloudEvent::Changed);
+        cx.notify();
+    });
+    draw(cx);
+    assert!(cx.debug_bounds("cloud-publish").is_some());
+    store.update(cx, |s, cx| {
+        s.overview.as_mut().unwrap().tasks[0].idle = Some(false);
+        cx.notify();
+    });
+    draw(cx);
+    assert!(cx.debug_bounds("cloud-publish").is_none());
 }
 #[gpui::test]
 fn cloud_thread_never_renders_revert(cx: &mut TestAppContext) {

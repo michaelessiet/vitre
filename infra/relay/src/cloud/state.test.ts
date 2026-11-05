@@ -9,6 +9,7 @@ import {
   confirmStopped,
   initialState,
   publicOverview,
+  requestWorkerPublication,
   schedule,
   shouldYieldIdleWorker,
 } from "./state.ts";
@@ -65,6 +66,167 @@ const heartbeat = (sequence: number): CloudWorkerCallback => ({
 });
 
 describe("cloud task lifecycle", () => {
+  it("accepts a follow-up while a checkpoint restore is still waking", () => {
+    const state = running();
+    const task = state.tasks.task!;
+    const stopped = now + 1000;
+    task.state = "interrupted";
+    task.worker!.state = "stopped";
+    task.turnRequestId = "turn-one";
+    task.checkpoint = {
+      id: "saved",
+      taskId: task.id,
+      attemptId: task.attempt!.id,
+      sequence: 1,
+      objectKey: "saved-manifest",
+      sha256: "a".repeat(64),
+      sizeBytes: 100,
+      createdAt: iso(now),
+    };
+    applyCommand(
+      state,
+      { type: "task.wake", taskId: task.id, idempotencyKey: "wake" },
+      "wake",
+      "wake",
+      stopped,
+      true,
+    );
+    expect(task.wakeOnly).toBe(true);
+    expect(task.state).toBe("queued");
+    state.accounts.codex.leasedBy = null;
+    schedule(state, stopped, true);
+    expect(task.worker?.state).not.toBe("stopped");
+    const before = task.state;
+    applyCommand(
+      state,
+      { type: "task.continue", taskId: task.id, idempotencyKey: "next", prompt: "Keep going" },
+      "next",
+      "next",
+      stopped + 1,
+      true,
+    );
+    expect(task.state).toBe(before);
+    expect(task.wakeOnly).toBe(false);
+    expect(task.idle).toBe(false);
+    expect(task.turnRequestId).toBe("next");
+    expect(task.error).toBeNull();
+  });
+
+  it("publishes the agent's requested pull request once the turn's snapshot completes", () => {
+    const state = running();
+    const task = state.tasks.task!;
+    task.turnRequestId = "turn-one";
+    const request = { kind: "pull_request" as const, title: "Add retries", body: "Adds retries." };
+    expect(() =>
+      requestWorkerPublication(state, task.id, "other-attempt", "turn-one", request, now),
+    ).toThrow("replaced");
+    expect(() =>
+      requestWorkerPublication(state, task.id, task.attempt!.id, "turn-zero", request, now),
+    ).toThrow("newer turn");
+    requestWorkerPublication(state, task.id, task.attempt!.id, "turn-one", request, now);
+    expect(task.publicationPreparation).toMatchObject({ turnRequestId: "turn-one", request });
+    expect(task.result).toBeNull();
+    // A repeat for the same turn keeps the first request.
+    requestWorkerPublication(
+      state,
+      task.id,
+      task.attempt!.id,
+      "turn-one",
+      { ...request, title: "Second" },
+      now + 1,
+    );
+    expect(task.publicationPreparation?.request?.title).toBe("Add retries");
+    expect(() =>
+      applyCommand(
+        state,
+        { type: "task.continue", taskId: task.id, idempotencyKey: "next", prompt: "More" },
+        "next",
+        "next",
+        now,
+        true,
+      ),
+    ).toThrow("finish saving");
+    const checkpoint = {
+      id: "saved",
+      taskId: task.id,
+      attemptId: task.attempt!.id,
+      sequence: 1,
+      objectKey: "saved-manifest",
+      sha256: "b".repeat(64),
+      sizeBytes: 100,
+      createdAt: iso(now),
+    };
+    const result = {
+      id: "saved",
+      taskId: task.id,
+      checkpointId: "saved",
+      sha256: checkpoint.sha256,
+      summary: "Finished changes",
+      createdAt: iso(now),
+    };
+    acceptCheckpoint(
+      state,
+      { ...heartbeat(1), phase: "completed", checkpoint, result, turnRequestId: "turn-one" },
+      now + 2,
+    );
+    expect(task.publicationPreparation).toBeUndefined();
+    expect(task.state).toBe("completed");
+    const publication = Object.values(state.publications).find((p) => p.taskId === task.id);
+    expect(publication).toMatchObject({
+      kind: "pull_request",
+      title: "Add retries",
+      body: "Adds retries.",
+      resultId: "saved",
+      resultSha256: checkpoint.sha256,
+      state: "queued",
+    });
+    expect(state.publicationInputs?.[publication!.id]?.id).toBe(task.id);
+    expect(
+      Object.values(state.operations).some(
+        (operation) => operation.kind === "publish" && operation.publicationId === publication!.id,
+      ),
+    ).toBe(true);
+  });
+
+  it("refuses agent publication requests the user could not make", () => {
+    const state = running();
+    const task = state.tasks.task!;
+    task.turnRequestId = "turn-one";
+    task.state = "completed";
+    expect(() =>
+      requestWorkerPublication(
+        state,
+        task.id,
+        task.attempt!.id,
+        "turn-one",
+        { kind: "pull_request", title: "T", body: "B" },
+        now,
+      ),
+    ).toThrow("state");
+    task.state = "running";
+    expect(() =>
+      requestWorkerPublication(
+        state,
+        task.id,
+        task.attempt!.id,
+        "turn-one",
+        { kind: "issue_comment", title: "T", body: "B" },
+        now,
+      ),
+    ).toThrow("issue");
+    task.repository.installationId = "public";
+    expect(() =>
+      requestWorkerPublication(
+        state,
+        task.id,
+        task.attempt!.id,
+        "turn-one",
+        { kind: "pull_request", title: "T", body: "B" },
+        now,
+      ),
+    ).toThrow("Connect this repository");
+  });
+
   it("prepares an idle resident workspace once and fences follow-ups until its result is saved", () => {
     const state = running();
     const task = state.tasks.task!;

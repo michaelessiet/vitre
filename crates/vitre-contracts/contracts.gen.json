@@ -4405,6 +4405,39 @@
       ],
       "type": "object"
     },
+    "CloudPublicationRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "allOf": [
+            {
+              "minLength": 1
+            },
+            {
+              "maxLength": 65536
+            }
+          ],
+          "type": "string"
+        },
+        "kind": {
+          "enum": ["pull_request", "issue_comment"],
+          "type": "string"
+        },
+        "title": {
+          "allOf": [
+            {
+              "minLength": 1
+            },
+            {
+              "maxLength": 65536
+            }
+          ],
+          "type": "string"
+        }
+      },
+      "required": ["kind", "title", "body"],
+      "type": "object"
+    },
     "CloudRepository": {
       "additionalProperties": false,
       "properties": {
@@ -5531,6 +5564,39 @@
                 }
               ],
               "type": "string"
+            },
+            "request": {
+              "additionalProperties": false,
+              "properties": {
+                "body": {
+                  "allOf": [
+                    {
+                      "minLength": 1
+                    },
+                    {
+                      "maxLength": 65536
+                    }
+                  ],
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": ["pull_request", "issue_comment"],
+                  "type": "string"
+                },
+                "title": {
+                  "allOf": [
+                    {
+                      "minLength": 1
+                    },
+                    {
+                      "maxLength": 65536
+                    }
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": ["kind", "title", "body"],
+              "type": "object"
             },
             "requestedAt": {
               "$ref": "#/$defs/TrimmedNonEmptyString"

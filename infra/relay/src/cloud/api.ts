@@ -392,6 +392,19 @@ const callbackGroup = HttpApiGroup.make("cloudWorker").add(
     success: Schema.Unknown,
     error: cloudErrors,
   }),
+  HttpApiEndpoint.post("workerPublication", "/v1/cloud/worker/:taskId/publication", {
+    params: taskParams,
+    headers: workerHeaders,
+    payload: Schema.Struct({
+      attemptId: Id,
+      turnRequestId: Schema.NullOr(Id),
+      kind: Schema.Literals(["pull_request", "issue_comment"]),
+      title: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(65536)),
+      body: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(65536)),
+    }),
+    success: Ok,
+    error: cloudErrors,
+  }),
   HttpApiEndpoint.post("refreshCredential", "/v1/cloud/worker/:taskId/credential/refresh", {
     params: taskParams,
     headers: workerHeaders,
@@ -696,6 +709,21 @@ export const cloudWorkerApiLayer = HttpApiBuilder.group(
             payload.turnRequestId,
           )
           .pipe(Effect.mapError(cloudError)),
+      )
+      .handle("workerPublication", ({ headers, params, payload }) =>
+        control
+          .requestPublication(
+            params.taskId,
+            token(headers),
+            payload.attemptId,
+            payload.turnRequestId,
+            {
+              kind: payload.kind,
+              title: payload.title,
+              body: payload.body,
+            },
+          )
+          .pipe(Effect.as({ ok: true as const }), Effect.mapError(cloudError)),
       )
       .handle("refreshCredential", ({ headers, params, payload }) =>
         control

@@ -2314,6 +2314,24 @@ pub enum CloudPublicationState {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudPublicationRequest {
+    pub body: String,
+    pub kind: CloudPublicationRequestKind,
+    pub title: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CloudPublicationRequestKind {
+    #[serde(rename = "pull_request")]
+    PullRequest,
+    #[serde(rename = "issue_comment")]
+    IssueComment,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CloudRepository {
     #[serde(rename = "defaultBranch")]
     pub default_branch: String,
@@ -2800,9 +2818,29 @@ pub struct CloudTaskProjectSnapshot {
     pub workspace: Option<CloudSnapshotRef>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum CloudTaskPublicationPreparationRequestKind {
+    #[serde(rename = "pull_request")]
+    PullRequest,
+    #[serde(rename = "issue_comment")]
+    IssueComment,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloudTaskPublicationPreparationRequest {
+    pub body: String,
+    pub kind: CloudTaskPublicationPreparationRequestKind,
+    pub title: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CloudTaskPublicationPreparation {
     pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request: Option<CloudTaskPublicationPreparationRequest>,
     #[serde(rename = "requestedAt")]
     pub requested_at: TrimmedNonEmptyString,
     #[serde(rename = "turnRequestId")]

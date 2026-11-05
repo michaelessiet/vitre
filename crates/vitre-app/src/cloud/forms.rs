@@ -13,7 +13,7 @@ use gpui_component::{
     input::{Input, InputState, Textarea, TextareaState},
     v_flex,
 };
-use vitre_contracts::{CloudCommandPublicationCreateKind, CloudRepository, CloudResultRevision};
+use vitre_contracts::{CloudCommandPublicationCreateKind, CloudRepository};
 
 use super::store::{CloudStore, Op, repository_with_setup};
 
@@ -30,7 +30,6 @@ pub(crate) enum Sheet {
     },
     Publish {
         task_id: String,
-        revision: CloudResultRevision,
         kind: CloudCommandPublicationCreateKind,
         title: Entity<InputState>,
         body: Entity<TextareaState>,
@@ -86,7 +85,6 @@ impl Sheet {
 
     pub fn publish(
         task_id: String,
-        revision: CloudResultRevision,
         kind: CloudCommandPublicationCreateKind,
         default_title: String,
         default_body: String,
@@ -106,7 +104,6 @@ impl Sheet {
         });
         Sheet::Publish {
             task_id,
-            revision,
             kind,
             title,
             body,
@@ -171,7 +168,6 @@ impl Sheet {
             }
             Sheet::Publish {
                 task_id,
-                revision,
                 kind,
                 title,
                 body,
@@ -179,15 +175,7 @@ impl Sheet {
                 let title = title.read(cx).value().trim().to_string();
                 let body = body.read(cx).value().trim().to_string();
                 store.update(cx, |store, cx| {
-                    store.publish(
-                        task_id,
-                        revision.id.clone(),
-                        revision.sha256.clone(),
-                        kind,
-                        title,
-                        body,
-                        cx,
-                    )
+                    store.publish_task(task_id, kind, title, body, cx)
                 });
             }
             Sheet::Limit { amount } => {
@@ -303,7 +291,7 @@ pub(crate) fn render_sheet(
                 CloudCommandPublicationCreateKind::IssueComment => {
                     "Posted as you, exactly as written below.".into()
                 }
-                _ => "The task's branch is pushed and a draft PR is opened against the base branch."
+                _ => "The workspace is saved for review, its branch is pushed, and a draft PR is opened against the base branch."
                     .into(),
             }),
             match kind {
