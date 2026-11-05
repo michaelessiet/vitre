@@ -50,6 +50,9 @@ jobs:
         run: vp check
       - name: Typecheck
         run: vp run typecheck
+      - name: Verify relay release bundle startup
+        working-directory: infra/relay
+        run: node scripts/check-startup.mjs
       - name: Build bundled sidecar
         run: vp run --filter ./apps/server build:bundle
       - name: Build marketing site

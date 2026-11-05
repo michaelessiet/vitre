@@ -1,6 +1,7 @@
 .git
 .repos
 .alchemy
+**/.alchemy
 .t3
 .plans
 .reference

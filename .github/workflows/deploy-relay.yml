@@ -110,6 +110,9 @@ jobs:
           VITRE_CLOUD_MACHINE_TOKEN: ${{ secrets.VITRE_CLOUD_MACHINE_TOKEN }}
           VITRE_CLOUD_ENCRYPTION_KEY: ${{ secrets.VITRE_CLOUD_ENCRYPTION_KEY }}
           VITRE_GITHUB_PRIVATE_KEY: ${{ secrets.VITRE_GITHUB_PRIVATE_KEY }}
+      - name: Build and verify relay startup before publishing a runtime
+        working-directory: infra/relay
+        run: node scripts/check-startup.mjs
       - name: Install database tunnel client
         if: env.RELAY_DATABASE_TUNNEL_HOSTNAME != ''
         run: |

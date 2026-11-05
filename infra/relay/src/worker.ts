@@ -20,6 +20,7 @@ import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import { documentationLayer } from "./http/documentation.ts";
 import { requestRouteFamily } from "./http/requestRouting.ts";
+import { relayWorkerBuild } from "./workerBuild.ts";
 
 import { RelayApi } from "@t3tools/contracts/relay";
 
@@ -132,10 +133,7 @@ export default class Api extends Cloudflare.Worker<Api>()(
   RelayDeploymentConfig.pipe(
     Effect.map(({ relayPublicDomain }) => ({
       main: import.meta.filename,
-      compatibility: {
-        date: "2026-05-22",
-        flags: ["nodejs_compat"],
-      },
+      ...relayWorkerBuild,
       domain: relayPublicDomain,
     })),
     Effect.orDie,
