@@ -42,5 +42,4 @@ simulator capture on iOS 26.5. Development preview labels are intentional.
   alignment issue before the final layout correction; retained for QA comparison,
   not as the current design reference.
 
-Implementation: `crates/vitre-app/src/lens.rs`, `crates/vitre-app/src/visuals.rs`,
-`apps/mobile/src/Lens.tsx`, and `apps/mobile/src/Visual.tsx`.
+Implementation: `crates/vitre-app/src/lens.rs` and `crates/vitre-app/src/visuals.rs`.

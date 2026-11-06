@@ -1238,6 +1238,7 @@ impl ChatApp {
         Some(card.into_any_element())
     }
 
+    #[allow(dead_code)]
     pub(super) fn select_cloud_repository(
         &mut self,
         id: String,
@@ -2566,6 +2567,7 @@ impl ChatApp {
             self.cloud_draft.repository = None;
         }
     }
+    #[allow(dead_code)]
     pub(super) fn new_cloud_thread(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.new_thread(None, window, cx);
         let method = self.draft_project.as_ref().and_then(|project| {
@@ -2630,42 +2632,6 @@ impl ChatApp {
                 .into_any_element(),
         )
     }
-    fn github_location_available(&self, cx: &App) -> bool {
-        if self
-            .cloud_task(cx)
-            .is_some_and(|task| task.repository.installation_id != "local")
-        {
-            return true;
-        }
-        let is_github = |project: &vitre_contracts::OrchestrationProjectShell| {
-            vitre_state::wire_opt::defined3(&project.repository_identity)
-                .flatten()
-                .and_then(|identity| identity.provider.as_ref())
-                .is_some_and(|provider| provider.0.eq_ignore_ascii_case("github"))
-        };
-        if let Some(client) = self.workspace_client().filter(|_| self.is_cloud_thread()) {
-            let shell = client.shell().borrow().clone();
-            if shell
-                .snapshot
-                .as_ref()
-                .is_some_and(|snapshot| snapshot.projects.iter().any(&is_github))
-            {
-                return true;
-            }
-        }
-        let project_id = self.draft_project.as_ref().or_else(|| {
-            self.thread
-                .as_ref()
-                .and_then(|thread| self.shell_thread(&thread.id))
-                .map(|thread| &thread.project_id)
-        });
-        self.shell.snapshot.as_ref().is_some_and(|snapshot| {
-            snapshot
-                .projects
-                .iter()
-                .any(|project| Some(&project.id) == project_id && is_github(project))
-        })
-    }
     pub(super) fn render_location_switch(&self, cx: &mut Context<Self>) -> AnyElement {
         let selected = {
             self.cloud_task(cx)
@@ -2686,7 +2652,6 @@ impl ChatApp {
                 })
         };
         let disabled = !self.can_switch_work_location();
-        let github_available = self.github_location_available(cx);
         let owner = cx.entity().downgrade();
         let (label, icon) = match selected {
             WorkLocation::Local => ("Local", IconName::Folder),
@@ -2705,29 +2670,17 @@ impl ChatApp {
                     .label(label)
                     .disabled(disabled)
                     .tooltip("Choose where this conversation runs")
-                    .dropdown_menu(move |mut menu, _, _| {
-                        for (location, label) in [
-                            (WorkLocation::Local, "Local"),
-                            (WorkLocation::Cloud, "Cloud: GitHub"),
-                            (WorkLocation::CloudLocal, "Cloud: Local"),
-                        ] {
-                            let owner = owner.clone();
-                            menu = menu.item(
-                                PopupMenuItem::new(label)
-                                    .checked(selected == location)
-                                    .disabled(location == WorkLocation::Cloud && !github_available)
-                                    .on_click(move |_, window, cx| {
-                                        let _ = owner.update(cx, |app, cx| {
-                                            app.set_draft_work_location(location, window, cx)
-                                        });
-                                    }),
-                            );
-                        }
-                        if !github_available {
-                            menu = menu
-                                .item(PopupMenuItem::label("No GitHub remote; use Cloud: Local"));
-                        }
-                        menu
+                    .dropdown_menu(move |menu, _, _| {
+                        let owner = owner.clone();
+                        menu.item(
+                            PopupMenuItem::new("Local")
+                                .checked(selected == WorkLocation::Local)
+                                .on_click(move |_, window, cx| {
+                                    let _ = owner.update(cx, |app, cx| {
+                                        app.set_draft_work_location(WorkLocation::Local, window, cx)
+                                    });
+                                }),
+                        )
                     }),
             )
             .into_any_element()

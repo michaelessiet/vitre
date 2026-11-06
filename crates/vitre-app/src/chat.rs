@@ -8529,7 +8529,7 @@ impl Render for ChatApp {
             .on_action(
                 cx.listener(|this, _: &crate::cloud::NewCloudThread, window, cx| {
                     this.close_settings(window, cx);
-                    this.new_cloud_thread(window, cx);
+                    this.new_thread(None, window, cx);
                 }),
             )
             .on_action(cx.listener(|this, _: &NewThread, window, cx| {

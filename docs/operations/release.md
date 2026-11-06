@@ -16,7 +16,6 @@ only when the change selector determines that native inputs are unchanged.
 | `ci.yml`           | Linux formatting, lint, type checks, package tests, sidecar and website builds; selects and aggregates validation |
 | `vitre-ci.yml`     | Reusable macOS Rust checks, licensing, contracts drift, and real-sidecar wire/typed/client spikes                 |
 | `build-vitre.yml`  | Reusable verified Apple Silicon development DMG build                                                             |
-| `deploy-relay.yml` | Automatic deployment of the existing cloud runtime and relay after successful main validation                     |
 | `issue-labels.yml` | Synchronizes issue and size label definitions from `.github/labels.json`                                          |
 | `pr-size.yml`      | Labels PR size using trusted base code and passive Git inspection                                                 |
 
@@ -78,41 +77,9 @@ See [native packaging](../../scripts/vitre/README.md#native-macos-package) for
 certificate-based local signing and output-directory options. Developer ID
 signing, notarization, public releases, and automatic updates remain future work.
 
-## Cloud deployment
-
-Cloud deployment runs automatically after successful main validation when cloud
-inputs changed. Set `RELAY_DEPLOY_ENABLED=false` to pause it; an unset variable
-does not disable it. See [relay deployment CI](../../infra/relay/README.md#deployment-ci)
-for the production configuration, existing-stack guard, and AWS OIDC setup.
-
-Successful main CI invokes deployment at the exact validated SHA.
-The whole deployment workflow is serialized with a queue, including baseline
-selection. It compares cumulatively against the last successful `production`
-deployment, so a failed relay change can be retried by a later unrelated main
-push. Already deployed and superseded commits are skipped. Divergent or unreadable
-history fails closed. With no baseline, it attempts the configured existing stack.
-
-Only successful verified deployments advance the GitHub environment history.
-Missing configuration fails before infrastructure or migration commands. The
-existing-stack guard rejects creation of a replacement stack or signing key.
-
-Configure the existing `production` environment with its stack/stage and retained
-cloud credentials, and restrict it to `main`. The next successful main push deploys
-pending cloud changes. Setting the pause flag does not cancel an in-progress
-deployment; remove it or set it to `true` to resume future releases.
-
-Runtime inputs include the server, shared packages, worker scripts and image build
-configuration. CI builds and smoke-tests an immutable Linux image, publishes and
-verifies it, and upgrades the existing AWS host before deploying the relay. Live
-checks verify health plus the Lens and GitHub account routes. Compatible updates
-preserve resident workers on their previous filesystem; incompatible protocol
-changes still require a coordinated drain.
-
 ## Verification while changing automation
 
 Run actionlint against `.github/workflows/*.yml`, targeted formatting/lint, the
 `scripts/ci/*.test.ts` tests, and the scripts package type check. Use the existing
 DMG self-test for packaging changes. Full workspace validation belongs in CI.
-The actionlint configuration exempts only its unsupported `queue` key diagnostic
-in the relay workflow; workflow tests validate queued concurrency and cancellation.
 No branch-protection settings or old workflow-run history are changed automatically.

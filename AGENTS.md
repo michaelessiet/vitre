@@ -38,7 +38,6 @@
 - `crates/vitre-app`: Native Vitre user interface.
 - `packages/contracts`: Shared effect/Schema schemas and TypeScript contracts for provider events, WebSocket protocol, and model/session types. Keep this package schema-only — no runtime logic.
 - `packages/shared`: Shared runtime utilities consumed by the server and client integrations. Uses explicit subpath exports (e.g. `@t3tools/shared/git`) — no barrel index.
-- `packages/client-runtime`: Shared runtime package for the relay and native client integration.
 
 ## Reference Repos
 
