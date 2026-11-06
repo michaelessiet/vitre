@@ -10,7 +10,7 @@ use gpui_component::{
 use serde_json::{Value, json};
 use std::collections::{HashSet, VecDeque};
 use vitre_contracts::{
-    ServerProvider, ServerProviderAuthStatus, ServerProviderUpdateInput,
+    ServerProvider, ServerProviderAuthAction, ServerProviderAuthStatus, ServerProviderUpdateInput,
     ServerRefreshProvidersPayload, methods::ServerRefreshProviders,
 };
 
@@ -325,11 +325,9 @@ impl SettingsPanel {
                                 .ghost()
                                 .xsmall()
                                 .icon(IconName::Plus)
-                                .tooltip("Add provider")
+                                .tooltip("Add account")
                                 .on_click(move |_, w, cx| {
-                                    let _ = add.update(cx, |p, cx| {
-                                        p.open_form(forms::FormKind::Provider(String::new()), w, cx)
-                                    });
+                                    let _ = add.update(cx, |p, cx| p.open_account_picker(w, cx));
                                 }),
                         )
                         .child(
@@ -384,8 +382,21 @@ impl SettingsPanel {
             let name = provider_name(&provider);
             let keywords = [
                 driver.clone(),
-                format!("{driver} models environment binary authentication enabled"),
+                format!(
+                    "{driver} models environment binary authentication enabled account sign in"
+                ),
             ];
+            let auth_run = self.accounts.runs.get(&provider.instance_id.0).map(|run| {
+                (
+                    run.action.clone(),
+                    run.url.clone(),
+                    run.line.clone(),
+                    run.is_cancelling(),
+                )
+            });
+            let auth_error = self.accounts.errors.get(&provider.instance_id.0).cloned();
+            let can_sign_in =
+                accounts::supports_sign_in(&driver) && provider.enabled && provider.installed;
             group = group.item(SettingItem::render(move |_, _, cx| {
                 let id = provider.instance_id.0.clone();
                 let mut title = h_flex().gap_2().child(div().relative().child(crate::icons::provider_icon(&driver, cx).size_4())
@@ -417,14 +428,50 @@ impl SettingsPanel {
                 }
                 let toggle = owner.clone(); let toggle_id = id.clone();
                 let enable = owner.clone(); let edit = ProviderEdit { id: id.clone(), driver: driver.clone(), path: vec!["enabled".into()], value: json!(!provider.enabled) };
-                let mut summary = h_flex().gap_2().child(div().text_sm().text_color(cx.theme().muted_foreground.opacity(0.85)).child(provider_summary(&provider, reveal)));
-                if provider.auth.email.as_ref().and_then(Option::as_ref).is_some() {
+                let summary_text = match &auth_run {
+                    Some((action, _, line, _)) => line.clone().unwrap_or_else(|| match action {
+                        ServerProviderAuthAction::SignOut => "Signing out…".into(),
+                        _ => "Waiting for sign-in in your browser…".into(),
+                    }),
+                    None => provider_summary(&provider, reveal),
+                };
+                let mut summary = h_flex().gap_2().min_w_0().child(div().min_w_0().truncate().text_sm().text_color(cx.theme().muted_foreground.opacity(0.85)).child(summary_text));
+                if auth_run.is_none() && provider.auth.email.as_ref().and_then(Option::as_ref).is_some() {
                     let reveal_owner = owner.clone(); let reveal_id = id.clone();
                     summary = summary.child(Button::new("reveal-auth").ghost().xsmall().icon(IconName::Eye).tooltip(if reveal { "Hide account" } else { "Reveal account" })
                         .on_click(move |_, _, cx| { let _ = reveal_owner.update(cx, |p, cx| { if !p.providers.revealed.insert(reveal_id.clone()) { p.providers.revealed.remove(&reveal_id); } cx.notify(); }); }));
                 }
+                if let Some((_, url, _, cancelling)) = &auth_run {
+                    if let Some(url) = url.clone() {
+                        summary = summary.child(Button::new("open-sign-in").ghost().xsmall().icon(IconName::ExternalLink).label("Open sign-in page")
+                            .tooltip("Open the sign-in page in your browser").on_click(move |_, _, cx| cx.open_url(&url)));
+                    }
+                    let cancel = owner.clone(); let cancel_id = id.clone();
+                    summary = summary.child(Button::new("cancel-sign-in").ghost().xsmall().label(if *cancelling { "Cancelling…" } else { "Cancel" }).disabled(*cancelling)
+                        .on_click(move |_, _, cx| { let _ = cancel.update(cx, |p, cx| p.cancel_provider_auth(&cancel_id, cx)); }));
+                } else if can_sign_in {
+                    let signed_in = matches!(provider.auth.status, ServerProviderAuthStatus::Authenticated);
+                    let auth = owner.clone(); let auth_id = id.clone(); let auth_name = name.clone();
+                    summary = summary.child(Button::new("provider-auth").ghost().xsmall().label(if signed_in { "Sign out" } else { "Sign in" })
+                        .tooltip(if signed_in { "Sign this account out" } else { "Sign in to this account with your browser" })
+                        .on_click(move |_, window, cx| {
+                            if !signed_in { let _ = auth.update(cx, |p, cx| p.start_provider_auth(auth_id.clone(), ServerProviderAuthAction::SignIn, cx)); return; }
+                            let owner = auth.clone(); let id = auth_id.clone(); let name = auth_name.clone();
+                            window.open_dialog(cx, move |dialog, _, _| {
+                                let owner = owner.clone(); let id = id.clone();
+                                dialog.title(format!("Sign out of {name}?"))
+                                    .child("Vitre and the provider CLI will need you to sign in again before using this account. Other accounts stay signed in.")
+                                    .button_props(gpui_component::dialog::DialogButtonProps::default().ok_text("Sign out").cancel_text("Cancel").show_cancel(true).ok_variant(gpui_component::button::ButtonVariant::Danger))
+                                    .on_ok(move |_, _, cx| { let _ = owner.update(cx, |p, cx| p.start_provider_auth(id.clone(), ServerProviderAuthAction::SignOut, cx)); true })
+                            });
+                        }));
+                }
+                let mut details = v_flex().flex_1().min_w_0().gap_1().child(title).child(summary);
+                if let Some(error) = auth_error.clone() {
+                    details = details.child(div().text_xs().text_color(cx.theme().danger).child(error));
+                }
                 let header = h_flex().w_full().gap_4().py_3()
-                    .child(v_flex().flex_1().min_w_0().gap_1().child(title).child(summary))
+                    .child(details)
                     .child(Button::new("expand-provider").ghost().xsmall().icon(if expanded { IconName::ChevronUp } else { IconName::ChevronDown }).tooltip(if expanded { "Collapse provider" } else { "Configure provider" })
                         .on_click(move |_, _, cx| { let _ = toggle.update(cx, |p, cx| { if !p.providers.expanded.insert(toggle_id.clone()) { p.providers.expanded.remove(&toggle_id); } cx.notify(); }); }))
                     .child(Switch::new("enable-provider").small().checked(provider.enabled).disabled(busy).on_click(move |_, _, cx| { let _ = enable.update(cx, |p, cx| p.queue_provider_edit(edit.clone(), cx)); }));

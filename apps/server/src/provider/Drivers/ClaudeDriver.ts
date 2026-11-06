@@ -61,8 +61,16 @@ import {
   makeProviderSnapshotSettingsSource,
   type ProviderSnapshotSettings,
 } from "../providerUpdateSettings.ts";
-import { makeClaudeCapabilitiesCacheKey, makeClaudeContinuationGroupKey } from "./ClaudeHome.ts";
-import { claudeBinaryStatusOption } from "./ClaudeManagedBinary.ts";
+import {
+  makeClaudeCapabilitiesCacheKey,
+  makeClaudeContinuationGroupKey,
+  makeClaudeEnvironment,
+  resolveClaudeHomePath,
+} from "./ClaudeHome.ts";
+import {
+  claudeBinaryStatusOption,
+  resolveEffectiveClaudeExecutablePath,
+} from "./ClaudeManagedBinary.ts";
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
 
 const DRIVER_KIND = ProviderDriverKind.make("claudeAgent");
@@ -249,6 +257,21 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
         snapshot,
         adapter,
         textGeneration,
+        accountCommands: Effect.gen(function* () {
+          const env = yield* makeClaudeEnvironment(effectiveConfig, processEnv);
+          const command = yield* resolveEffectiveClaudeExecutablePath(
+            effectiveConfig.binaryPath,
+            env,
+          );
+          const credentialDirectory =
+            effectiveConfig.homePath.trim().length > 0
+              ? yield* resolveClaudeHomePath(effectiveConfig)
+              : undefined;
+          return {
+            signIn: { command, args: ["auth", "login"], env, credentialDirectory },
+            signOut: { command, args: ["auth", "logout"], env, credentialDirectory },
+          };
+        }).pipe(Effect.provideService(Path.Path, path)),
         getComposerCapabilities: (cwd) =>
           Effect.all(
             [

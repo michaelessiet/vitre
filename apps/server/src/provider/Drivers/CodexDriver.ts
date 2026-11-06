@@ -224,6 +224,28 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
         snapshot,
         adapter,
         textGeneration,
+        accountCommands: Effect.sync(() => {
+          // Shadow homes keep sessions shared but give each instance its own
+          // auth.json, so login must target the effective (shadow) home.
+          const env = homeLayout.effectiveHomePath
+            ? { ...processEnv, CODEX_HOME: homeLayout.effectiveHomePath }
+            : processEnv;
+          const credentialDirectory = homeLayout.effectiveHomePath;
+          return {
+            signIn: {
+              command: effectiveConfig.binaryPath,
+              args: ["login"],
+              env,
+              credentialDirectory,
+            },
+            signOut: {
+              command: effectiveConfig.binaryPath,
+              args: ["logout"],
+              env,
+              credentialDirectory,
+            },
+          };
+        }),
         getComposerCapabilities: (cwd) =>
           probeCodexAppServerProvider({
             binaryPath: effectiveConfig.binaryPath,

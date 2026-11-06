@@ -63,6 +63,25 @@ export interface ProviderDriverMetadata {
  * instance of the same driver does not reach into the first instance's
  * state.
  */
+/**
+ * One CLI invocation that signs an instance in or out. `env` already points
+ * the CLI at this instance's credential directory (e.g. `CLAUDE_CONFIG_DIR`,
+ * `CODEX_HOME`), so running it never changes another account of the same
+ * driver.
+ */
+export interface ProviderAccountCommand {
+  readonly command: string;
+  readonly args: ReadonlyArray<string>;
+  readonly env: NodeJS.ProcessEnv;
+  /** Created before the command runs when the CLI expects it to exist. */
+  readonly credentialDirectory?: string | undefined;
+}
+
+export interface ProviderAccountCommands {
+  readonly signIn: ProviderAccountCommand;
+  readonly signOut?: ProviderAccountCommand | undefined;
+}
+
 export interface ProviderInstance {
   readonly instanceId: ProviderInstanceId;
   readonly driverKind: ProviderDriverKind;
@@ -73,6 +92,12 @@ export interface ProviderInstance {
   readonly snapshot: ServerProviderShape;
   readonly adapter: ProviderAdapterShape<ProviderAdapterError>;
   readonly textGeneration: TextGeneration.TextGeneration["Service"];
+  /**
+   * Sign-in/out commands scoped to this instance's credentials. Omitted by
+   * drivers whose CLI cannot isolate an account per instance; those use API
+   * keys from the instance environment instead.
+   */
+  readonly accountCommands?: Effect.Effect<ProviderAccountCommands>;
   /** Resolve composer actions for the thread's cwd, including project-scoped skills and commands. */
   readonly getComposerCapabilities?: (cwd: string) => Effect.Effect<
     | {

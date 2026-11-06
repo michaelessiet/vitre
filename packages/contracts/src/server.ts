@@ -575,6 +575,53 @@ export class ServerProviderUpdateError extends Schema.TaggedErrorClass<ServerPro
   }
 }
 
+/**
+ * Account actions for one provider instance. Each instance keeps its own
+ * credential directory, so signing in here never touches another account of
+ * the same driver.
+ */
+export const ServerProviderAuthAction = Schema.Literals(["signIn", "signOut"]);
+export type ServerProviderAuthAction = typeof ServerProviderAuthAction.Type;
+
+export const ServerProviderAuthInput = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  action: ServerProviderAuthAction,
+});
+export type ServerProviderAuthInput = typeof ServerProviderAuthInput.Type;
+
+/**
+ * Progress for `server.providerAuth`. `url` carries a sign-in link printed by
+ * the provider CLI so a client can open it when the server cannot launch a
+ * browser itself. `completed` is always the final event.
+ */
+export const ServerProviderAuthEvent = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("output"),
+    text: Schema.String,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("url"),
+    url: TrimmedNonEmptyString,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("completed"),
+    providers: ServerProviders,
+  }),
+]);
+export type ServerProviderAuthEvent = typeof ServerProviderAuthEvent.Type;
+
+export class ServerProviderAuthError extends Schema.TaggedErrorClass<ServerProviderAuthError>()(
+  "ServerProviderAuthError",
+  {
+    instanceId: ProviderInstanceId,
+    reason: TrimmedNonEmptyString,
+  },
+) {
+  override get message(): string {
+    return `Provider account action failed for ${this.instanceId}: ${this.reason}`;
+  }
+}
+
 export const ServerSelfUpdateInput = Schema.Struct({
   /** Exact npm version of the `t3` package to install (never a dist-tag, so
       the server and the acknowledging client agree on what was requested). */
