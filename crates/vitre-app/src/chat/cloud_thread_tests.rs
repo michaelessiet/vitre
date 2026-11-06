@@ -1417,7 +1417,7 @@ fn cloud_location_selector_is_inside_the_composer(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn cloud_location_popup_selects_from_the_composer(cx: &mut TestAppContext) {
+fn location_popup_only_offers_local_work(cx: &mut TestAppContext) {
     let (app, _, cx) = setup(cx);
     draw(cx);
     let selector = cx
@@ -1434,10 +1434,11 @@ fn cloud_location_popup_selects_from_the_composer(cx: &mut TestAppContext) {
         Default::default(),
     );
     draw(cx);
+    // The cloud entries are gone, so moving past the first row still lands on Local.
     cx.simulate_keystrokes("down down enter");
     draw(cx);
     app.read_with(cx, |a, _| {
-        assert_eq!(a.draft_work_location, WorkLocation::CloudLocal)
+        assert_eq!(a.draft_work_location, WorkLocation::Local)
     });
 }
 

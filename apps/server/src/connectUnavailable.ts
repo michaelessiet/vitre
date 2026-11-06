@@ -4,15 +4,13 @@ import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
 const removed = Effect.fail(
   new EnvironmentHttpForbiddenError({
-    message: "Cloud has been removed from this desktop build.",
+    message: "Vitre Cloud has been removed.",
   }),
 );
 
-export const connectHttpApiLayer = HttpApiBuilder.group(
-  EnvironmentHttpApi,
-  "connect",
-  Effect.fnUntraced(function* (handlers) {
-    return handlers
+export const connectHttpApiLayer = HttpApiBuilder.group(EnvironmentHttpApi, "connect", (handlers) =>
+  Effect.succeed(
+    handlers
       .handle("linkProof", () => removed)
       .handle("relayConfig", () => removed)
       .handle("linkState", () => removed)
@@ -20,6 +18,6 @@ export const connectHttpApiLayer = HttpApiBuilder.group(
       .handle("preferences", () => removed)
       .handle("health", () => removed)
       .handle("mintCredential", () => removed)
-      .handle("t3MintCredential", () => removed);
-  }),
+      .handle("t3MintCredential", () => removed),
+  ),
 );

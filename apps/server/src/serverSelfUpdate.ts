@@ -9,11 +9,8 @@ import * as Layer from "effect/Layer";
 
 import * as ServerConfig from "./config.ts";
 
-export const resolveServerSelfUpdateCapability = Effect.fn(
-  "server.self_update.resolve_capability",
-)(function* (input: { readonly desktopManaged: boolean }) {
-  return input.desktopManaged ? ("desktop-managed" as const) : null;
-});
+export const resolveServerSelfUpdateCapability = (input: { readonly desktopManaged: boolean }) =>
+  Effect.succeed(input.desktopManaged ? ("desktop-managed" as const) : null);
 
 export class ServerSelfUpdate extends Context.Service<
   ServerSelfUpdate,

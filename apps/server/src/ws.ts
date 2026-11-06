@@ -55,6 +55,7 @@ import {
   ClaudeBinaryInstallFailedError,
   type ClaudeBinaryInstallProgressEvent,
   DEFAULT_CLAUDE_BINARY_PATH,
+  RelayClientInstallFailedError,
   type GraphCommandFailedError,
   type GraphDisabledError,
   type GraphInstallEvent,
@@ -570,7 +571,7 @@ const makeWsRpcLayer = (
       const graphifyRuntime = yield* GraphifyRuntime;
       const graphService = yield* GraphService;
       const cloudRemoved = new CloudDesktopAuthError({
-        message: "Cloud has been removed from this desktop build.",
+        message: "Vitre Cloud has been removed.",
         code: "cloud_removed",
         requestDisposition: "rejected",
         retryable: false,
@@ -1754,7 +1755,12 @@ const makeWsRpcLayer = (
         [WS_METHODS.cloudGetRelayClientStatus]: (_input) =>
           observeRpcEffect(
             WS_METHODS.cloudGetRelayClientStatus,
-            Effect.fail(authorizationError(AuthRelayReadScope)),
+            Effect.fail(
+              new EnvironmentAuthorizationError({
+                message: cloudRemoved.message,
+                requiredScope: AuthRelayReadScope,
+              }),
+            ),
             { "rpc.aggregate": "cloud" },
           ),
         [WS_METHODS.cloudContinueConversation]: (_input) => Effect.fail(cloudRemoved),
@@ -1771,7 +1777,12 @@ const makeWsRpcLayer = (
         [WS_METHODS.cloudInstallRelayClient]: (_input) =>
           observeRpcStream(
             WS_METHODS.cloudInstallRelayClient,
-            Stream.fail(authorizationError(AuthRelayWriteScope)),
+            Stream.fail(
+              new RelayClientInstallFailedError({
+                reason: "unsupported_platform",
+                message: cloudRemoved.message,
+              }),
+            ),
             { "rpc.aggregate": "cloud" },
           ),
         [WS_METHODS.claudeGetBinaryStatus]: (_input) =>
