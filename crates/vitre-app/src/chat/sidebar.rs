@@ -1325,22 +1325,7 @@ impl ChatApp {
                                 let project_id = project_id.clone();
                                 move |this, _, window, cx| {
                                     cx.stop_propagation();
-                                    if cloud_group {
-                                        this.new_cloud_thread(window, cx);
-                                        let repo = this
-                                            .cloud_tasks
-                                            .values()
-                                            .find(|t| {
-                                                super::cloud_thread::cloud_group_key(t)
-                                                    == project_id.0
-                                            })
-                                            .map(|t| t.repository.id.clone());
-                                        if let Some(id) = repo {
-                                            this.select_cloud_repository(id, window, cx);
-                                        }
-                                    } else {
-                                        this.new_thread(Some(project_id.clone()), window, cx);
-                                    }
+                                    this.new_thread(Some(project_id.clone()), window, cx);
                                 }
                             })),
                     ),
