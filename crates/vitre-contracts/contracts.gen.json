@@ -20975,6 +20975,86 @@
       "required": ["status"],
       "type": "object"
     },
+    "ServerProviderAuthAction": {
+      "enum": ["signIn", "signOut"],
+      "type": "string"
+    },
+    "ServerProviderAuthError": {
+      "additionalProperties": false,
+      "properties": {
+        "_tag": {
+          "enum": ["ServerProviderAuthError"],
+          "type": "string"
+        },
+        "instanceId": {
+          "$ref": "#/$defs/ProviderInstanceId"
+        },
+        "reason": {
+          "$ref": "#/$defs/TrimmedNonEmptyString"
+        }
+      },
+      "required": ["_tag", "instanceId", "reason"],
+      "type": "object"
+    },
+    "ServerProviderAuthEvent": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "enum": ["output"],
+              "type": "string"
+            }
+          },
+          "required": ["type", "text"],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "enum": ["url"],
+              "type": "string"
+            },
+            "url": {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            }
+          },
+          "required": ["type", "url"],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "providers": {
+              "$ref": "#/$defs/ServerProviders"
+            },
+            "type": {
+              "enum": ["completed"],
+              "type": "string"
+            }
+          },
+          "required": ["type", "providers"],
+          "type": "object"
+        }
+      ]
+    },
+    "ServerProviderAuthInput": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/ServerProviderAuthAction"
+        },
+        "instanceId": {
+          "$ref": "#/$defs/ProviderInstanceId"
+        }
+      },
+      "required": ["instanceId", "action"],
+      "type": "object"
+    },
     "ServerProviderAuthStatus": {
       "enum": ["authenticated", "unauthenticated", "unknown"],
       "type": "string"
@@ -27868,6 +27948,13 @@
       "stream": false,
       "success": "#/$defs/ServerProbeSuccess",
       "tag": "server.probe"
+    },
+    {
+      "errors": ["#/$defs/ServerProviderAuthError", "#/$defs/EnvironmentAuthorizationError"],
+      "payload": "#/$defs/ServerProviderAuthInput",
+      "stream": true,
+      "success": "#/$defs/ServerProviderAuthEvent",
+      "tag": "server.providerAuth"
     },
     {
       "errors": ["#/$defs/EnvironmentAuthorizationError"],

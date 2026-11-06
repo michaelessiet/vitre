@@ -28,6 +28,7 @@
 //!   as Electron does it — *not* applied optimistically: the switch moves when
 //!   the server's new settings come back.
 
+mod accounts;
 pub(crate) mod cloud;
 mod forms;
 mod graph;
@@ -166,6 +167,7 @@ pub struct SettingsPanel {
     cloud: gpui::Entity<cloud::CloudPanel>,
     layout: layout::SettingsLayout,
     providers: providers::ProviderUi,
+    accounts: accounts::AccountUi,
     graph: graph::GraphSettingsUi,
     client: Option<Arc<EnvironmentClient>>,
     cwd: Option<String>,
@@ -196,6 +198,7 @@ impl SettingsPanel {
             cloud,
             layout: Default::default(),
             providers: Default::default(),
+            accounts: Default::default(),
             graph: Default::default(),
             client,
             cwd,
