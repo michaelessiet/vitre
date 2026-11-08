@@ -1,41 +1,48 @@
 ---
-description: Cursor Cloud environment setup and run notes for T3 Code (Cursor-specific; not for other editors/CI)
+description: Cursor Cloud environment setup and run notes for Vitre (Cursor-specific; not for other editors/CI)
 alwaysApply: true
 ---
 
 # Cursor Cloud specific instructions
 
-These notes apply only to Cursor Cloud agents (kept out of the shared `AGENTS.md` since T3 Code is
-developed in many places). They cover the pre-provisioned VM environment and non-obvious run caveats.
+These notes apply only to Cursor Cloud agents (kept out of the shared `AGENTS.md` since Vitre is
+developed in many places). They cover the VM toolchain and non-obvious run caveats.
 
 ## Toolchain
 
-Pre-installed and wired into login shells (`~/.bashrc`/`~/.profile`): Node 24 (via nvm), the global
-`vp` (Vite+) CLI, and its bundled pnpm. `vp` is the package manager + task runner for this repo
-(`vp i`, `vp check`, `vp run typecheck`, `vp test`, `vp run --filter <pkg> <script>`).
+Login shells source `~/.vite-plus/env` from `~/.profile` and `~/.bashrc`. That file prepends
+`~/.vite-plus/bin`, where `node` is the Vite+ shim for Node 24.22.2 (`engines.node` is `^24.13.1`)
+and `vp` is Vite+ CLI 0.2.2. `vp` is the package manager and task runner (`vp install`, `vp run`,
+`vp test`, `vp fmt`) and uses pnpm 11.10.0 (`packageManager`).
 
-- Node gotcha: the base image also ships an older Node on `/exec-daemon` that wins on `PATH` in
-  non-login shells. Run commands in a login shell (`bash -lc '...'`) or prepend
-  `$HOME/.nvm/versions/node/v24.13.1/bin` so Node 24 (`engines.node: ^24.13.1`) is used.
-- `vp check` also runs the formatter (not just lint); markdown edits must be formatter-clean. Run
-  `vp check --fix` before committing.
+- Node gotcha: non-login shells do not source `~/.profile`, so `/exec-daemon` Node 22.23.4 wins on
+  `PATH`. Run commands in a login shell (`bash -lc '...'`) or prepend `$HOME/.vite-plus/bin`.
+- Rust 1.95.0 with rustfmt and clippy is selected by `rust-toolchain.toml`. Do not `cargo fetch` the
+  Zed GPUI git dependency during environment install.
+- Native Vitre (`vp run dev:vitre`, `crates/vitre-app`) is macOS-only. Do not build it on these
+  Linux VMs.
+- `vp check` runs the formatter as well as lint. Format changed markdown with `vp fmt` on those
+  files. Do not run repo-wide `vp check`, `vp run typecheck`, or `vp run test` unless asked; CI runs
+  the full suite.
 
-## Running the web app
+## Running the server and marketing site
 
-- `npm run dev` (from repo root) starts contracts (watch), web (Vite, port 5733), and the server
-  (`node --watch`, port 13773) together, auto-wiring `VITE_HTTP_URL`/`VITE_WS_URL`. Use
-  `npm run dev:server` / `npm run dev:web` for one side. If base ports are taken it auto-offsets to
-  the next free pair, so read the actual ports from stdout. Avoid production `build`/`start` in dev.
-- Auth/pairing: the server is unauthenticated by default and prints a pairing URL to stdout on startup
-  (e.g. `http://localhost:5733/pair#token=XXXX`). Open that URL in the browser to pair before the web
-  UI can talk to the server. Server state (SQLite, auth, projects) lives under `~/.t3`
-  (`T3CODE_HOME`); multiple `npm run dev` instances bind different ports but share that same DB.
-- Agent providers are external CLIs (`codex`, `claude`, `cursor-agent`, `opencode`) probed on `PATH`.
-  Without one installed the UI loads but no agent can run. Claude Code
-  (`npm i -g @anthropic-ai/claude-code`) works headlessly using `ANTHROPIC_API_KEY` from the
-  environment (the server forwards `process.env` to the child; no interactive `claude auth login`
-  needed). Provider probing runs at startup and refreshes roughly every 5 minutes — restart the dev
-  server to pick up a newly installed provider CLI immediately.
+Cloud agents can run the headless server and the marketing site. The native app cannot run here.
+
+- Headless server, from the repo root:
+  `vp run --filter t3 dev -- serve --host 127.0.0.1 --port 3773 --no-browser`.
+  It listens on `http://127.0.0.1:3773`. With no static directory and no dev URL, `GET /` returns
+  503 and `No static directory configured and no dev URL set.` That response means the process is
+  up. Startup also logs a native-app pairing URL.
+- Marketing site, from `apps/marketing`:
+  `vp exec astro dev --host 127.0.0.1 --port 4173`.
+  Root `vp run dev:marketing -- --host` does not forward those flags (Astro treats them as a bad
+  command).
+- Server state (SQLite, auth, projects) lives under `~/.t3` (`T3CODE_HOME`). Pass `--base-dir <dir>`
+  to `serve` or `node apps/server/src/bin.ts project add` to use another directory.
+- Agent providers are external CLIs (`codex`, `claude`, `cursor-agent`, `opencode`) probed on
+  `PATH`. The server still starts without one. Provider probing runs at startup and refreshes
+  roughly every 5 minutes.
 
 ## Known flaky tests (unrelated to setup)
 
