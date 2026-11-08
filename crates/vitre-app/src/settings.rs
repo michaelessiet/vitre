@@ -28,6 +28,7 @@
 //!   as Electron does it — *not* applied optimistically: the switch moves when
 //!   the server's new settings come back.
 
+mod accounts;
 mod forms;
 mod graph;
 mod keybindings;
@@ -164,6 +165,7 @@ fn format_when(node: &KeybindingWhenNode) -> String {
 pub struct SettingsPanel {
     layout: layout::SettingsLayout,
     providers: providers::ProviderUi,
+    accounts: accounts::AccountUi,
     graph: graph::GraphSettingsUi,
     client: Option<Arc<EnvironmentClient>>,
     cwd: Option<String>,
@@ -192,6 +194,7 @@ impl SettingsPanel {
         let mut panel = Self {
             layout: Default::default(),
             providers: Default::default(),
+            accounts: Default::default(),
             graph: Default::default(),
             client,
             cwd,

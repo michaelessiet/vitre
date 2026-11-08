@@ -29,6 +29,18 @@ codex login
 
 ## I Want Work And Personal Codex Accounts
 
+### Quickest: Add An Account In Vitre
+
+1. Open **Settings → Providers** and click **+** (Add account).
+2. Choose **Codex**, enter a name such as `Personal`, and click **Add and sign in**.
+3. Finish sign-in in the browser. Use **Open sign-in page** if a browser did not open.
+
+Vitre gives the new account a shadow home (`~/.vitre/accounts/<id>`) on top of your main
+`CODEX_HOME`, which is the recommended setup below: sessions stay shared, and each account keeps its
+own `auth.json`. Each account row has **Sign in** / **Sign out**.
+
+### Manual Setup
+
 Use one real Codex home and one shadow home.
 
 Recommended setup:
