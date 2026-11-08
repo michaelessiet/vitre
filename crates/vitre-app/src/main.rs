@@ -4,6 +4,7 @@
 mod assets;
 mod chat;
 mod client_settings;
+#[allow(dead_code)] // Cloud screens are no longer opened from the desktop.
 mod cloud;
 mod desktop;
 mod files;

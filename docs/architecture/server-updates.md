@@ -114,8 +114,7 @@ the hosted web deployment depends on that release. See [Release Checklist](../op
 
 - Capability contract: `packages/contracts/src/environment.ts`
 - Update RPC contract: `packages/contracts/src/server.ts` and `packages/contracts/src/rpc.ts`
-- Capability detection and handoff: `apps/server/src/cloud/selfUpdate.ts`
+- Capability detection: `apps/server/src/serverSelfUpdate.ts`
 - Host service commands: `apps/server/src/cli/service.ts`
-- Pinned runtime installation: `apps/server/src/cloud/pinnedRuntime.ts`
 - Client version comparison: `apps/web/src/versionSkew.ts`
 - Shared update action: `apps/web/src/components/ServerUpdateAction.tsx`

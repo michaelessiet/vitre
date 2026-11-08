@@ -56,7 +56,6 @@ import {
   type ClaudeBinaryInstallProgressEvent,
   DEFAULT_CLAUDE_BINARY_PATH,
   RelayClientInstallFailedError,
-  type RelayClientInstallProgressEvent,
   type GraphCommandFailedError,
   type GraphDisabledError,
   type GraphInstallEvent,
@@ -96,7 +95,6 @@ import {
 } from "./orchestration/DispatchError.ts";
 import { AssistantStreamBus } from "./orchestration/AssistantStreamBus.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
-import { CloudHandoffService } from "./cloud/HandoffService.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
   observeRpcEffect as instrumentRpcEffect,
@@ -108,13 +106,8 @@ import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 import { ClaudeManagedBinary } from "./provider/Drivers/ClaudeManagedBinary.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
-import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
-import { cloudStarts } from "./cloud/startProgress.ts";
-import {
-  startCloudConversationEffect,
-  continueCloudConversationEffect,
-} from "./cloud/StartCloudConversation.ts";
-import { desktopCloudSession } from "./cloud/DesktopCloudSession.ts";
+import * as ServerSelfUpdate from "./serverSelfUpdate.ts";
+import { CloudDesktopAuthError } from "@t3tools/contracts/cloud";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServerSettings from "./serverSettings.ts";
@@ -154,7 +147,6 @@ import * as VcsProcess from "./vcs/VcsProcess.ts";
 import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
-import * as RelayClient from "@t3tools/shared/relayClient";
 import { GraphifyRuntime } from "./graph/GraphifyRuntime.ts";
 import { GraphService } from "./graph/GraphService.ts";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
@@ -532,7 +524,6 @@ const makeWsRpcLayer = (
       const crypto = yield* Crypto.Crypto;
       const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
       const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
-      const cloudHandoff = yield* CloudHandoffService;
       const assistantStreamBus = yield* AssistantStreamBus;
       const checkpointDiffQuery = yield* CheckpointDiffQuery.CheckpointDiffQuery;
       const keybindings = yield* Keybindings.Keybindings;
@@ -576,10 +567,15 @@ const makeWsRpcLayer = (
       const sessions = yield* SessionStore.SessionStore;
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
-      const relayClient = yield* RelayClient.RelayClient;
       const claudeManagedBinary = yield* ClaudeManagedBinary;
       const graphifyRuntime = yield* GraphifyRuntime;
       const graphService = yield* GraphService;
+      const cloudRemoved = new CloudDesktopAuthError({
+        message: "Vitre Cloud has been removed.",
+        code: "cloud_removed",
+        requestDisposition: "rejected",
+        retryable: false,
+      });
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
           message: `The authenticated token is missing required scope: ${requiredScope}.`,
@@ -1757,51 +1753,35 @@ const makeWsRpcLayer = (
             "rpc.aggregate": "server",
           }),
         [WS_METHODS.cloudGetRelayClientStatus]: (_input) =>
-          observeRpcEffect(WS_METHODS.cloudGetRelayClientStatus, relayClient.resolve, {
+          observeRpcEffect(
+            WS_METHODS.cloudGetRelayClientStatus,
+            Effect.fail(
+              new EnvironmentAuthorizationError({
+                message: cloudRemoved.message,
+                requiredScope: AuthRelayReadScope,
+              }),
+            ),
+            { "rpc.aggregate": "cloud" },
+          ),
+        [WS_METHODS.cloudContinueConversation]: (_input) => Effect.fail(cloudRemoved),
+        [WS_METHODS.cloudStartConversation]: (_input) => Effect.fail(cloudRemoved),
+        [WS_METHODS.cloudStartProgress]: (_input) => Effect.fail(cloudRemoved),
+        [WS_METHODS.cloudSwitchConversation]: (_input) => Effect.fail(cloudRemoved),
+        [WS_METHODS.cloudSwitchStatus]: (_input) => Effect.fail(cloudRemoved),
+        [WS_METHODS.cloudResolveSwitch]: (_input) => Effect.fail(cloudRemoved),
+        [WS_METHODS.cloudCancelSwitch]: (_input) => Effect.fail(cloudRemoved),
+        [WS_METHODS.cloudGetDesktopSession]: (_input) =>
+          observeRpcEffect(WS_METHODS.cloudGetDesktopSession, Effect.fail(cloudRemoved), {
             "rpc.aggregate": "cloud",
           }),
-        [WS_METHODS.cloudContinueConversation]: (input) => continueCloudConversationEffect(input),
-        [WS_METHODS.cloudStartConversation]: (input) => startCloudConversationEffect(input),
-        [WS_METHODS.cloudStartProgress]: (input) =>
-          Effect.sync(() => cloudStarts.status(input.idempotencyKey, input.cancel)),
-        [WS_METHODS.cloudSwitchConversation]: (input) => cloudHandoff.request(input),
-        [WS_METHODS.cloudSwitchStatus]: (input) => cloudHandoff.status(input.conversationId),
-        [WS_METHODS.cloudResolveSwitch]: (input) => cloudHandoff.resolve(input),
-        [WS_METHODS.cloudCancelSwitch]: (input) => cloudHandoff.cancel(input.operationId),
-        [WS_METHODS.cloudGetDesktopSession]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.cloudGetDesktopSession,
-            desktopCloudSession(input.authorize, input.cancel),
-            {
-              "rpc.aggregate": "cloud",
-            },
-          ),
         [WS_METHODS.cloudInstallRelayClient]: (_input) =>
           observeRpcStream(
             WS_METHODS.cloudInstallRelayClient,
-            Stream.callback<RelayClientInstallProgressEvent, RelayClientInstallFailedError>(
-              (queue) =>
-                relayClient
-                  .installWithProgress((event) => Queue.offer(queue, event).pipe(Effect.asVoid))
-                  .pipe(
-                    Effect.flatMap((status) =>
-                      Queue.offer(queue, {
-                        type: "complete",
-                        status,
-                      }),
-                    ),
-                    Effect.catchTag("RelayClientInstallError", (error) =>
-                      Queue.fail(
-                        queue,
-                        new RelayClientInstallFailedError({
-                          reason: error.reason,
-                          message: error.message,
-                        }),
-                      ),
-                    ),
-                    Effect.andThen(Queue.end(queue)),
-                    Effect.forkScoped,
-                  ),
+            Stream.fail(
+              new RelayClientInstallFailedError({
+                reason: "unsupported_platform",
+                message: cloudRemoved.message,
+              }),
             ),
             { "rpc.aggregate": "cloud" },
           ),

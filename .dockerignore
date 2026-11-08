@@ -12,7 +12,6 @@ release
 **/dist-electron
 **/.vite-plus
 **/.cache
-**/.expo
 **/.env
 **/.env.*
 **/*.env
@@ -20,5 +19,3 @@ release
 **/*.key
 **/*.p12
 **/*.mobileprovision
-apps/mobile/ios
-apps/mobile/android

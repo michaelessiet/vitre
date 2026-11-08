@@ -29,9 +29,7 @@ body:
       options:
         - Native Vitre (crates/vitre-app)
         - Sidecar and providers (apps/server)
-        - Mobile companion (apps/mobile)
-        - Relay and cloud (infra/relay)
-        - Shared contracts and client runtime (packages)
+        - Shared contracts (packages)
         - Website (apps/marketing)
         - Build, CI, or release tooling
         - Docs
