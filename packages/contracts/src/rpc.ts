@@ -148,6 +148,9 @@ import {
 import {
   ServerConfigStreamEvent,
   ServerConfig,
+  ServerProviderAuthError,
+  ServerProviderAuthEvent,
+  ServerProviderAuthInput,
   ServerProviderUpdateError,
   ServerProviderUpdateInput,
   ServerLifecycleStreamEvent,
@@ -320,6 +323,7 @@ export const WS_METHODS = {
   serverRefreshProviders: "server.refreshProviders",
   serverGetComposerCapabilities: "server.getComposerCapabilities",
   serverUpdateProvider: "server.updateProvider",
+  serverProviderAuth: "server.providerAuth",
   serverUpdateServer: "server.updateServer",
   serverUpsertKeybinding: "server.upsertKeybinding",
   serverRemoveKeybinding: "server.removeKeybinding",
@@ -433,6 +437,18 @@ export const WsServerUpdateProviderRpc = Rpc.make(WS_METHODS.serverUpdateProvide
   payload: ServerProviderUpdateInput,
   success: ServerProviderUpdatedPayload,
   error: Schema.Union([ServerProviderUpdateError, EnvironmentAuthorizationError]),
+});
+
+/**
+ * Sign one provider instance in or out with its own credential directory.
+ * Streams CLI output and any sign-in URL; closing the stream cancels the
+ * pending sign-in.
+ */
+export const WsServerProviderAuthRpc = Rpc.make(WS_METHODS.serverProviderAuth, {
+  payload: ServerProviderAuthInput,
+  success: ServerProviderAuthEvent,
+  error: Schema.Union([ServerProviderAuthError, EnvironmentAuthorizationError]),
+  stream: true,
 });
 
 export const WsServerUpdateServerRpc = Rpc.make(WS_METHODS.serverUpdateServer, {
@@ -1156,6 +1172,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerRefreshProvidersRpc,
   WsServerGetComposerCapabilitiesRpc,
   WsServerUpdateProviderRpc,
+  WsServerProviderAuthRpc,
   WsServerUpdateServerRpc,
   WsServerUpsertKeybindingRpc,
   WsServerRemoveKeybindingRpc,

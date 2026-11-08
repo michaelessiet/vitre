@@ -31,6 +31,18 @@ An empty `Claude HOME path` means T3 Code uses your normal home directory.
 
 ## I Want Work And Personal Claude Accounts
 
+### Quickest: Add An Account In Vitre
+
+1. Open **Settings → Providers** and click **+** (Add account).
+2. Choose **Claude**, enter a name such as `Personal`, and click **Add and sign in**.
+3. Finish sign-in in the browser. Use **Open sign-in page** if a browser did not open.
+
+Vitre stores the new account's credentials in its own Claude config directory
+(`~/.vitre/accounts/<id>`), so your other Claude accounts stay signed in. Each account row has
+**Sign in** / **Sign out**, and the trash button removes the account from Vitre.
+
+### Manual Setup
+
 Use a different Claude home for each account.
 
 Example:
@@ -62,7 +74,7 @@ Log in with a separate home:
 
 ```bash
 mkdir -p ~/.claude_personal_home
-HOME=~/.claude_personal_home claude auth login
+CLAUDE_CONFIG_DIR=~/.claude_personal_home claude auth login
 ```
 
 Then add another Claude provider in T3 Code:

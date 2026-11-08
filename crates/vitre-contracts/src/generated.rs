@@ -11056,6 +11056,54 @@ pub struct ServerProviderAuth {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ServerProviderAuthAction {
+    #[serde(rename = "signIn")]
+    SignIn,
+    #[serde(rename = "signOut")]
+    SignOut,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ServerProviderAuthError {
+    #[serde(rename = "_tag")]
+    pub tag: ServerProviderAuthErrorTag,
+    #[serde(rename = "instanceId")]
+    pub instance_id: ProviderInstanceId,
+    pub reason: TrimmedNonEmptyString,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum ServerProviderAuthErrorTag {
+    #[default]
+    #[serde(rename = "ServerProviderAuthError")]
+    ServerProviderAuthError,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum ServerProviderAuthEvent {
+    #[serde(rename = "output")]
+    Output { text: String },
+    #[serde(rename = "url")]
+    Url { url: TrimmedNonEmptyString },
+    #[serde(rename = "completed")]
+    Completed { providers: ServerProviders },
+    /// Forward compatibility: an event kind this build does not know.
+    #[serde(untagged)]
+    Unknown(serde_json::Value),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ServerProviderAuthInput {
+    pub action: ServerProviderAuthAction,
+    #[serde(rename = "instanceId")]
+    pub instance_id: ProviderInstanceId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ServerProviderAuthStatus {
     #[serde(rename = "authenticated")]
     Authenticated,
@@ -15862,6 +15910,24 @@ pub mod methods {
     #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
     #[serde(untagged)]
     pub enum ServerProbeError {
+        EnvironmentAuthorizationError(super::EnvironmentAuthorizationError),
+        Unknown(serde_json::Value),
+    }
+
+    pub struct ServerProviderAuth;
+
+    impl RpcMethod for ServerProviderAuth {
+        const TAG: &'static str = "server.providerAuth";
+        const STREAM: bool = true;
+        type Payload = super::ServerProviderAuthInput;
+        type Success = super::ServerProviderAuthEvent;
+        type Error = ServerProviderAuthErrorX;
+    }
+
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+    #[serde(untagged)]
+    pub enum ServerProviderAuthErrorX {
+        ServerProviderAuthError(super::ServerProviderAuthError),
         EnvironmentAuthorizationError(super::EnvironmentAuthorizationError),
         Unknown(serde_json::Value),
     }

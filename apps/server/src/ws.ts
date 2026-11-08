@@ -54,6 +54,8 @@ import {
   ProjectWriteFileError,
   ClaudeBinaryInstallFailedError,
   type ClaudeBinaryInstallProgressEvent,
+  type ServerProviderAuthError,
+  type ServerProviderAuthEvent,
   DEFAULT_CLAUDE_BINARY_PATH,
   RelayClientInstallFailedError,
   type GraphCommandFailedError,
@@ -105,6 +107,7 @@ import { wsThreadEventDeliveryLag } from "./observability/Metrics.ts";
 import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 import { ClaudeManagedBinary } from "./provider/Drivers/ClaudeManagedBinary.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
+import * as ProviderAuthRunner from "./provider/providerAuthRunner.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import * as ServerSelfUpdate from "./serverSelfUpdate.ts";
 import { CloudDesktopAuthError } from "@t3tools/contracts/cloud";
@@ -373,6 +376,7 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.serverRefreshProviders, AuthOrchestrationOperateScope],
   [WS_METHODS.serverGetComposerCapabilities, AuthOrchestrationReadScope],
   [WS_METHODS.serverUpdateProvider, AuthOrchestrationOperateScope],
+  [WS_METHODS.serverProviderAuth, AuthOrchestrationOperateScope],
   [WS_METHODS.serverUpdateServer, AuthOrchestrationOperateScope],
   [WS_METHODS.serverUpsertKeybinding, AuthOrchestrationOperateScope],
   [WS_METHODS.serverRemoveKeybinding, AuthOrchestrationOperateScope],
@@ -537,6 +541,7 @@ const makeWsRpcLayer = (
       const portDiscovery = yield* PortScanner.PortDiscovery;
       const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
       const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
+      const providerAuthRunner = yield* ProviderAuthRunner.ProviderAuthRunner;
       const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
       const config = yield* ServerConfig.ServerConfig;
       const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
@@ -1675,6 +1680,20 @@ const makeWsRpcLayer = (
               "rpc.aggregate": "server",
             },
           ),
+        [WS_METHODS.serverProviderAuth]: (input) =>
+          observeRpcStream(
+            WS_METHODS.serverProviderAuth,
+            Stream.callback<ServerProviderAuthEvent, ServerProviderAuthError>((queue) =>
+              providerAuthRunner
+                .run(input, (event) => Queue.offer(queue, event).pipe(Effect.asVoid))
+                .pipe(
+                  Effect.catch((error) => Queue.fail(queue, error)),
+                  Effect.andThen(Queue.end(queue)),
+                  Effect.forkScoped,
+                ),
+            ),
+            { "rpc.aggregate": "server" },
+          ),
         [WS_METHODS.serverUpdateServer]: (input) =>
           observeRpcEffect(WS_METHODS.serverUpdateServer, serverSelfUpdate.update(input), {
             "rpc.aggregate": "server",
@@ -2547,6 +2566,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
             makeWsRpcLayer(session, previewAutomationBroker).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               Layer.provide(ProviderMaintenanceRunner.layer),
+              Layer.provide(ProviderAuthRunner.layer),
               Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
               Layer.provide(
                 SourceControlDiscovery.layer.pipe(
