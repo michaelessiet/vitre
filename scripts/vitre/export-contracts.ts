@@ -1,6 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off globalConsole:off - Standalone codegen exporter, runs via plain `node` outside the Effect runtime.
 // Stage A of the Vitre contracts pipeline: export the sidecar's Effect-RPC
-// surface (WsRpcGroup, 101 methods) as JSON Schema (draft 2020-12, wire/encoded
+// surface (WsRpcGroup) as JSON Schema (draft 2020-12, wire/encoded
 // side) into crates/vitre-contracts/contracts.gen.json. Stage B
 // (vitre-contracts-gen) emits serde Rust from that file.
 //

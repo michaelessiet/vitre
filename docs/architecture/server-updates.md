@@ -75,17 +75,6 @@ Before any restart, the current Node executable runs the replacement with `--ver
 install, failed preflight, or wrong reported version leaves the current server running. A failed
 preflight also removes the candidate runtime so retrying the same version performs a clean install.
 
-## Host Service Lifecycle
-
-The systemd user service is a host lifecycle concern, not a T3 Connect resource. The standalone
-`t3 service install`, `uninstall`, `update`, and `status` commands own it. Install and update both
-reconcile the unit through `BootService`; running `npx t3@latest service update` therefore pins and
-activates the latest CLI release without requiring a connected client.
-
-The `t3 connect` onboarding flow may offer service installation, but it calls the same reconciliation
-operation as `t3 service install`. Connect logout only disables cloud access and clears its
-authorization; it does not uninstall the host service.
-
 ## Process Handoff
 
 For `boot-service`, the server atomically rewrites the T3-managed user unit to point at the verified

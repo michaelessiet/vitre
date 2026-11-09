@@ -19,12 +19,10 @@
     "test": "vp run -r test",
     "fmt": "vp fmt",
     "fmt:check": "vp fmt --check",
-    "build:contracts": "vp run --filter @t3tools/contracts build",
-    "clean": "rm -rf node_modules apps/*/node_modules packages/*/node_modules apps/*/dist apps/*/dist-electron packages/*/dist .vite-plus apps/*/.vite-plus packages/*/.vite-plus",
+    "clean": "rm -rf node_modules apps/*/node_modules packages/*/node_modules apps/*/dist packages/*/dist .vite-plus apps/*/.vite-plus packages/*/.vite-plus",
     "sync:repos": "node scripts/sync-reference-repos.ts"
   },
   "devDependencies": {
-    "@babel/plugin-transform-react-jsx": "7.28.6",
     "@effect/tsgo": "catalog:",
     "@oxlint/plugins": "^1.63.0",
     "@types/node": "catalog:",

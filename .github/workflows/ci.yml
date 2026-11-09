@@ -14,7 +14,7 @@ on:
 permissions:
   contents: read
 
-# Only PR runs share a cancelable group. Main runs must not cancel deployments.
+# Only PR runs share a cancelable group. Main runs are never canceled.
 concurrency:
   group: vitre-ci-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}

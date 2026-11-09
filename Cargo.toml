@@ -23,7 +23,7 @@ license = "MIT"
 publish = false
 
 [workspace.dependencies]
-# --- zed pin (Apache-2.0 island only; see docs/vitre-licensing.md) ---
+# --- zed pin (Apache-2.0 island only; see docs/vitre-handover.md §1) ---
 gpui = { git = "https://github.com/zed-industries/zed", rev = "f66ed399cdde86092af8af3dc7b418abf45f37f8", features = [
   "scene-capture",
 ] }
