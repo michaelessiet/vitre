@@ -12993,6 +12993,91 @@
         }
       ]
     },
+    "ProviderUsageLimits": {
+      "additionalProperties": false,
+      "properties": {
+        "dashboardUrl": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "displayName": {
+          "$ref": "#/$defs/TrimmedNonEmptyString"
+        },
+        "driver": {
+          "$ref": "#/$defs/ProviderDriverKind"
+        },
+        "instanceId": {
+          "$ref": "#/$defs/ProviderInstanceId"
+        },
+        "limitReached": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "at": {
+                  "$ref": "#/$defs/TrimmedNonEmptyString"
+                },
+                "message": {
+                  "$ref": "#/$defs/TrimmedNonEmptyString"
+                }
+              },
+              "required": ["at", "message"],
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "note": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "planLabel": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reportsWindows": {
+          "type": "boolean"
+        },
+        "updatedAt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "windows": {
+          "items": {
+            "$ref": "#/$defs/UsageLimitWindow"
+          },
+          "type": "array"
+        }
+      },
+      "required": ["instanceId", "driver", "displayName", "reportsWindows", "windows"],
+      "type": "object"
+    },
     "ProviderUserInputAnswers": {
       "type": "object"
     },
@@ -13481,6 +13566,9 @@
         },
         {
           "$ref": "#/$defs/ServerConfigStreamSettingsUpdatedEvent"
+        },
+        {
+          "$ref": "#/$defs/ServerConfigStreamUsageLimitsEvent"
         }
       ]
     },
@@ -13554,6 +13642,37 @@
         }
       },
       "required": ["version", "type", "config"],
+      "type": "object"
+    },
+    "ServerConfigStreamUsageLimitsEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "payload": {
+          "$ref": "#/$defs/ServerConfigUsageLimitsPayload"
+        },
+        "type": {
+          "enum": ["usageLimits"],
+          "type": "string"
+        },
+        "version": {
+          "enum": [1],
+          "type": "number"
+        }
+      },
+      "required": ["version", "type", "payload"],
+      "type": "object"
+    },
+    "ServerConfigUsageLimitsPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "limits": {
+          "items": {
+            "$ref": "#/$defs/ProviderUsageLimits"
+          },
+          "type": "array"
+        }
+      },
+      "required": ["limits"],
       "type": "object"
     },
     "ServerDiscoverSourceControlPayload": {
@@ -19765,6 +19884,62 @@
           "type": "object"
         }
       ]
+    },
+    "UsageLimitStatus": {
+      "enum": ["ok", "warning", "exceeded"],
+      "type": "string"
+    },
+    "UsageLimitWindow": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/TrimmedNonEmptyString"
+        },
+        "label": {
+          "$ref": "#/$defs/TrimmedNonEmptyString"
+        },
+        "resetsAt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "$ref": "#/$defs/UsageLimitStatus"
+        },
+        "usedPercent": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "enum": ["NaN"],
+                  "type": "string"
+                },
+                {
+                  "enum": ["Infinity"],
+                  "type": "string"
+                },
+                {
+                  "enum": ["-Infinity"],
+                  "type": "string"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": ["id", "label", "status"],
+      "type": "object"
     },
     "VcsBaselineBlob": {
       "additionalProperties": false,

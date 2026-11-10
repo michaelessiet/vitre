@@ -72,6 +72,7 @@ import {
   type TerminalError,
   type TerminalEvent,
   type TerminalMetadataStreamEvent,
+  type ProviderUsageLimits,
   WS_METHODS,
   WsRpcGroup,
 } from "@t3tools/contracts";
@@ -109,6 +110,7 @@ import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner
 import * as ServerSelfUpdate from "./serverSelfUpdate.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
+import * as UsageLimits from "./usage/UsageLimits.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
@@ -533,6 +535,7 @@ const makeWsRpcLayer = (
       const config = yield* ServerConfig.ServerConfig;
       const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
+      const usageLimits = yield* Effect.serviceOption(UsageLimits.UsageLimits);
       const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
@@ -2421,8 +2424,23 @@ const makeWsRpcLayer = (
                 .refresh()
                 .pipe(Effect.ignoreCause({ log: true }), Effect.forkScoped);
 
+              // Plan limits: the current list right after the snapshot, then changes.
+              const toUsageEvent = (limits: ReadonlyArray<ProviderUsageLimits>) => ({
+                version: 1 as const,
+                type: "usageLimits" as const,
+                payload: { limits: [...limits] },
+              });
+              const usageInitial =
+                usageLimits._tag === "Some"
+                  ? Stream.fromEffect(usageLimits.value.snapshot).pipe(Stream.map(toUsageEvent))
+                  : Stream.empty;
+              const usageUpdates =
+                usageLimits._tag === "Some"
+                  ? usageLimits.value.changes.pipe(Stream.map(toUsageEvent))
+                  : Stream.empty;
+
               const liveUpdates = Stream.merge(
-                keybindingsUpdates,
+                Stream.merge(keybindingsUpdates, usageUpdates),
                 Stream.merge(providerStatuses, settingsUpdates),
               );
 
@@ -2432,7 +2450,7 @@ const makeWsRpcLayer = (
                   type: "snapshot" as const,
                   config: yield* loadServerConfig,
                 }),
-                liveUpdates,
+                Stream.concat(usageInitial, liveUpdates),
               );
             }),
             { "rpc.aggregate": "server" },

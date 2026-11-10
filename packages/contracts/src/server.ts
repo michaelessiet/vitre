@@ -2,6 +2,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { ExecutionEnvironmentDescriptor, ServerSelfUpdateMethod } from "./environment.ts";
 import { ServerAuthDescriptor } from "./auth.ts";
+import { ServerConfigUsageLimitsPayload } from "./usageLimits.ts";
 import {
   IsoDateTime,
   NonNegativeInt,
@@ -506,11 +507,20 @@ export const ServerConfigStreamSettingsUpdatedEvent = Schema.Struct({
 export type ServerConfigStreamSettingsUpdatedEvent =
   typeof ServerConfigStreamSettingsUpdatedEvent.Type;
 
+/** The latest plan-limit snapshot for every provider instance. */
+export const ServerConfigStreamUsageLimitsEvent = Schema.Struct({
+  version: Schema.Literal(1),
+  type: Schema.Literal("usageLimits"),
+  payload: ServerConfigUsageLimitsPayload,
+});
+export type ServerConfigStreamUsageLimitsEvent = typeof ServerConfigStreamUsageLimitsEvent.Type;
+
 export const ServerConfigStreamEvent = Schema.Union([
   ServerConfigStreamSnapshotEvent,
   ServerConfigStreamKeybindingsUpdatedEvent,
   ServerConfigStreamProviderStatusesEvent,
   ServerConfigStreamSettingsUpdatedEvent,
+  ServerConfigStreamUsageLimitsEvent,
 ]);
 export type ServerConfigStreamEvent = typeof ServerConfigStreamEvent.Type;
 

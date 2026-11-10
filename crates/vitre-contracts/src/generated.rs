@@ -7697,6 +7697,58 @@ pub enum ProviderOptionSelectionValue {
     Unknown(serde_json::Value),
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProviderUsageLimits {
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::support::double_option"
+    )]
+    #[serde(rename = "dashboardUrl")]
+    pub dashboard_url: Option<Option<TrimmedNonEmptyString>>,
+    #[serde(rename = "displayName")]
+    pub display_name: TrimmedNonEmptyString,
+    pub driver: ProviderDriverKind,
+    #[serde(rename = "instanceId")]
+    pub instance_id: ProviderInstanceId,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::support::double_option"
+    )]
+    #[serde(rename = "limitReached")]
+    pub limit_reached: Option<Option<ProviderUsageLimitsLimitReached>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::support::double_option"
+    )]
+    pub note: Option<Option<TrimmedNonEmptyString>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::support::double_option"
+    )]
+    #[serde(rename = "planLabel")]
+    pub plan_label: Option<Option<TrimmedNonEmptyString>>,
+    #[serde(rename = "reportsWindows")]
+    pub reports_windows: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::support::double_option"
+    )]
+    #[serde(rename = "updatedAt")]
+    pub updated_at: Option<Option<TrimmedNonEmptyString>>,
+    pub windows: Vec<UsageLimitWindow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProviderUsageLimitsLimitReached {
+    pub at: TrimmedNonEmptyString,
+    pub message: TrimmedNonEmptyString,
+}
+
 pub type ProviderUserInputAnswers = serde_json::Map<String, serde_json::Value>;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -8005,6 +8057,7 @@ pub enum ServerConfigStreamEvent {
     ServerConfigStreamKeybindingsUpdatedEvent(ServerConfigStreamKeybindingsUpdatedEvent),
     ServerConfigStreamProviderStatusesEvent(ServerConfigStreamProviderStatusesEvent),
     ServerConfigStreamSettingsUpdatedEvent(ServerConfigStreamSettingsUpdatedEvent),
+    ServerConfigStreamUsageLimitsEvent(ServerConfigStreamUsageLimitsEvent),
     /// Forward compatibility: a member this build does not know.
     Unknown(serde_json::Value),
 }
@@ -8063,6 +8116,25 @@ pub enum ServerConfigStreamSnapshotEventType {
     #[default]
     #[serde(rename = "snapshot")]
     Snapshot,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ServerConfigStreamUsageLimitsEvent {
+    pub payload: ServerConfigUsageLimitsPayload,
+    pub r#type: ServerConfigStreamUsageLimitsEventType,
+    pub version: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum ServerConfigStreamUsageLimitsEventType {
+    #[default]
+    #[serde(rename = "usageLimits")]
+    UsageLimits,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ServerConfigUsageLimitsPayload {
+    pub limits: Vec<ProviderUsageLimits>,
 }
 
 /// Void payload — send `{}` on the wire.
@@ -11162,6 +11234,40 @@ pub enum UploadChatAttachment {
     /// Forward compatibility: an event kind this build does not know.
     #[serde(untagged)]
     Unknown(serde_json::Value),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum UsageLimitStatus {
+    #[serde(rename = "ok")]
+    Ok,
+    #[serde(rename = "warning")]
+    Warning,
+    #[serde(rename = "exceeded")]
+    Exceeded,
+    /// Forward compatibility: a literal this build does not know.
+    #[serde(untagged)]
+    Unknown(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UsageLimitWindow {
+    pub id: TrimmedNonEmptyString,
+    pub label: TrimmedNonEmptyString,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::support::double_option"
+    )]
+    #[serde(rename = "resetsAt")]
+    pub resets_at: Option<Option<TrimmedNonEmptyString>>,
+    pub status: UsageLimitStatus,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "crate::support::double_option"
+    )]
+    #[serde(rename = "usedPercent")]
+    pub used_percent: Option<Option<DurationMillis>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

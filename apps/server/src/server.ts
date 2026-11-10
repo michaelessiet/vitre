@@ -59,6 +59,7 @@ import { layer as AssistantStreamBusLayer } from "./orchestration/AssistantStrea
 import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRuntimeIngestion.ts";
 import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderCommandReactor.ts";
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor.ts";
+import * as UsageLimits from "./usage/UsageLimits.ts";
 import { SubagentSummaryReactorLive } from "./orchestration/Layers/SubagentSummaryReactor.ts";
 import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletionReactor.ts";
 import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
@@ -174,6 +175,8 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(CheckpointReactorLive),
   Layer.provideMerge(ThreadDeletionReactorLive),
   Layer.provideMerge(SubagentSummaryReactorLive),
+  // Plan limits for the dock's Usage surface, streamed over subscribeServerConfig.
+  Layer.provideMerge(UsageLimits.layer),
   Layer.provideMerge(RuntimeReceiptBusLive),
   // Shared by ProviderRuntimeIngestion (publisher) and the websocket thread
   // subscriptions (subscribers); provided once so both see the same PubSub.

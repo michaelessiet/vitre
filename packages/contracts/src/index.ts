@@ -28,3 +28,4 @@ export * from "./search.ts";
 export * from "./lsp.ts";
 export * from "./graph.ts";
 export * from "./rpc.ts";
+export * from "./usageLimits.ts";
