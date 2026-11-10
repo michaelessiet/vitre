@@ -1,4 +1,4 @@
-//! Mirror of `packages/client-runtime/src/state/threadReducer.test.ts`, plus
+//! Mirror of T3 Code's `packages/client-runtime/src/state/threadReducer.test.ts`, plus
 //! extra pins for the wire-Option semantics the TS type system hides
 //! (absent vs `null` on optional/nullable payload fields).
 

@@ -1,5 +1,5 @@
 //! Path arithmetic for the add-project filesystem browser, ported from
-//! `packages/client-runtime/src/state/projects.ts` and the pieces of
+//! T3 Code's `packages/client-runtime/src/state/projects.ts` and the pieces of
 //! `packages/shared/src/path.ts` that [`crate::project_grouping`] does not
 //! already carry.
 //!

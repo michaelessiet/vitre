@@ -63,8 +63,6 @@ export const ClaudeBinaryInstallFailureReasonSchema = Schema.Literals([
   "validation_failed",
   "write_failed",
 ]);
-export type ClaudeBinaryInstallFailureReason = typeof ClaudeBinaryInstallFailureReasonSchema.Type;
-
 export class ClaudeBinaryInstallFailedError extends Schema.TaggedErrorClass<ClaudeBinaryInstallFailedError>()(
   "ClaudeBinaryInstallFailedError",
   {

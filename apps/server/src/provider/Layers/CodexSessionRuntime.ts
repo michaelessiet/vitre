@@ -138,6 +138,10 @@ export interface CodexSessionRuntimeShape {
     input: CodexSessionRuntimeSendTurnInput,
   ) => Effect.Effect<ProviderTurnStartResult, CodexSessionRuntimeError>;
   readonly interruptTurn: (turnId?: TurnId) => Effect.Effect<void, CodexSessionRuntimeError>;
+  /** Interrupt a spawned subagent's running turn, by the subagent's thread id. */
+  readonly interruptSubagent: (
+    subagentThreadId: string,
+  ) => Effect.Effect<boolean, CodexSessionRuntimeError>;
   readonly readThread: Effect.Effect<CodexThreadSnapshot, CodexSessionRuntimeError>;
   readonly rollbackThread: (
     numTurns: number,
@@ -601,6 +605,22 @@ function readRouteFields(notification: CodexServerNotification): {
   }
 }
 
+function rememberCollabReceiverToolCalls(
+  toolCalls: Map<string, string>,
+  notification: CodexServerNotification,
+): void {
+  if (notification.method !== "item/started" && notification.method !== "item/completed") {
+    return;
+  }
+  const item = notification.params.item;
+  if (item.type !== "collabAgentToolCall") {
+    return;
+  }
+  for (const receiverThreadId of item.receiverThreadIds) {
+    if (!toolCalls.has(receiverThreadId)) toolCalls.set(receiverThreadId, item.id);
+  }
+}
+
 function rememberCollabReceiverTurns(
   collabReceiverTurns: Map<string, TurnId>,
   notification: CodexServerNotification,
@@ -724,6 +744,9 @@ export const makeCodexSessionRuntime = (
     const approvalCorrelationsRef = yield* Ref.make(new Map<string, ApprovalCorrelation>());
     const pendingUserInputsRef = yield* Ref.make(new Map<ApprovalRequestId, PendingUserInput>());
     const collabReceiverTurnsRef = yield* Ref.make(new Map<string, TurnId>());
+    // Subagent thread → the spawnAgent call that created it, and its running turn.
+    const collabReceiverToolCalls = new Map<string, string>();
+    const subagentActiveTurns = new Map<string, string>();
     const closedRef = yield* Ref.make(false);
 
     // `~` is not shell-expanded when env vars are set via
@@ -853,6 +876,16 @@ export const makeCodexSessionRuntime = (
         })();
 
         rememberCollabReceiverTurns(collabReceiverTurns, notification, route.turnId);
+        rememberCollabReceiverToolCalls(collabReceiverToolCalls, notification);
+        const subagentThreadId = childParentTurnId
+          ? readNotificationThreadId(notification)
+          : undefined;
+        if (subagentThreadId && notification.method === "turn/started") {
+          subagentActiveTurns.set(subagentThreadId, notification.params.turn.id);
+        }
+        if (subagentThreadId && notification.method === "turn/completed") {
+          subagentActiveTurns.delete(subagentThreadId);
+        }
         if (childParentTurnId && shouldSuppressChildConversationNotification(notification.method)) {
           yield* Ref.set(collabReceiverTurnsRef, collabReceiverTurns);
           return;
@@ -893,6 +926,16 @@ export const makeCodexSessionRuntime = (
           ...(itemId ? { itemId } : {}),
           ...(requestId ? { requestId } : {}),
           ...(requestKind ? { requestKind } : {}),
+          ...(subagentThreadId
+            ? {
+                subagent: {
+                  threadId: subagentThreadId,
+                  ...(collabReceiverToolCalls.get(subagentThreadId)
+                    ? { toolCallId: collabReceiverToolCalls.get(subagentThreadId) }
+                    : {}),
+                },
+              }
+            : {}),
           ...(notification.method === "item/agentMessage/delta"
             ? { textDelta: notification.params.delta }
             : {}),
@@ -1343,6 +1386,15 @@ export const makeCodexSessionRuntime = (
             threadId: providerThreadId,
             turnId: effectiveTurnId,
           });
+        }),
+      interruptSubagent: (subagentThreadId) =>
+        Effect.gen(function* () {
+          const turnId = subagentActiveTurns.get(subagentThreadId);
+          if (!turnId) {
+            return false;
+          }
+          yield* client.request("turn/interrupt", { threadId: subagentThreadId, turnId });
+          return true;
         }),
       readThread: Effect.gen(function* () {
         const providerThreadId = yield* readProviderThreadId;

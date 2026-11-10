@@ -45,7 +45,6 @@ use vitre_state::worktree_cleanup::{
 
 use crate::client_settings::ClientSettings;
 
-use super::cloud_thread::ThreadLocation;
 use super::project_actions::{ProjectMember, project_context_menu};
 use super::{ChatApp, QuickSearchMode, SyncPhase, fresh_id, now_iso, relative_time, tnes};
 
@@ -82,17 +81,10 @@ pub(super) struct SidebarProjectRow {
 pub(super) struct SidebarThreadRow {
     id: ThreadId,
     project_id: ProjectId,
-    location: ThreadLocation,
-    cloud: Option<CloudRowMeta>,
     title: SharedString,
     status: Option<ThreadStatus>,
     /// Relative timestamp label, from the same candidate chain Electron uses.
     time: Option<SharedString>,
-}
-
-pub(super) struct CloudRowMeta {
-    provider: vitre_contracts::CloudProvider,
-    needs_attention: bool,
 }
 
 /// The two colours a status pill paints with: the label/glyph colour and the
@@ -413,36 +405,12 @@ impl ChatApp {
     /// from `render`, which is the point: this groups every project and walks
     /// every thread.
     pub(super) fn rebuild_sidebar(&mut self) {
-        let mut projects = self
+        let projects = self
             .shell
             .snapshot
             .as_ref()
             .map(|s| s.projects.clone())
             .unwrap_or_default();
-        for thread in &self.cloud_shells {
-            if projects.iter().any(|p| p.id == thread.project_id) {
-                continue;
-            }
-            let Some(task) = self
-                .thread_location(&thread.id)
-                .task_id()
-                .and_then(|id| self.cloud_tasks.get(id))
-            else {
-                continue;
-            };
-            projects.push(vitre_contracts::OrchestrationProjectShell {
-                id: thread.project_id.clone(),
-                title: tnes(crate::cloud::repo_label(task)),
-                workspace_root: tnes(thread.project_id.0.clone()),
-                created_at: task.created_at.clone(),
-                updated_at: task.updated_at.clone(),
-                default_model_selection: None,
-                repository_identity: None,
-                additional_roots: None,
-                resolved_additional_roots: None,
-                scripts: vec![],
-            });
-        }
 
         // Electron orders the raw project list by the persisted manual order
         // first (`orderItemsByPreferredIds`) and only then groups, so a manual
@@ -471,19 +439,7 @@ impl ChatApp {
         }
 
         let mut threads_by_row: HashMap<String, Vec<&OrchestrationThreadShell>> = HashMap::new();
-        for thread in self
-            .shell
-            .snapshot
-            .iter()
-            .flat_map(|s| s.threads.iter())
-            .filter(|thread| {
-                !self.cloud_shell_index.contains_key(&thread.id)
-                    && !self.cloud_bindings.get(&thread.id).is_some_and(|binding| {
-                        binding.target != vitre_contracts::CloudExecutionTarget::Local
-                    })
-            })
-            .chain(self.cloud_shells.iter())
-        {
+        for thread in self.shell.snapshot.iter().flat_map(|s| s.threads.iter()) {
             if is_archived(thread) {
                 continue;
             }
@@ -508,7 +464,6 @@ impl ChatApp {
             },
         );
 
-        groups.sort_by_key(|g| ordered[g.representative].id.0.starts_with("cloud:"));
         let open = self.thread.as_ref().map(|open| open.id.clone());
         self.sidebar_rows = groups
             .iter()
@@ -567,15 +522,6 @@ impl ChatApp {
                         .map(|(thread, status)| SidebarThreadRow {
                             id: thread.id.clone(),
                             project_id: thread.project_id.clone(),
-                            location: self.thread_location(&thread.id),
-                            cloud: self
-                                .thread_location(&thread.id)
-                                .task_id()
-                                .and_then(|id| self.cloud_tasks.get(id))
-                                .map(|task| CloudRowMeta {
-                                    provider: task.provider.clone(),
-                                    needs_attention: crate::cloud::needs_attention(&task.state),
-                                }),
                             title: thread.title.0.clone().into(),
                             status,
                             // Electron labels a row with the same candidate
@@ -594,31 +540,11 @@ impl ChatApp {
             .collect();
     }
 
-    pub(super) fn sidebar_project_ids(&self) -> Vec<ProjectId> {
-        self.sidebar_rows
-            .iter()
-            .flat_map(|row| row.members.iter().map(|member| member.project_id.clone()))
-            .collect()
-    }
-
-    #[cfg(test)]
-    pub(super) fn cloud_sidebar_rows(&self) -> Vec<(ProjectId, Vec<ThreadId>)> {
-        self.sidebar_rows
-            .iter()
-            .map(|r| {
-                (
-                    r.project_id.clone(),
-                    r.threads.iter().map(|t| t.id.clone()).collect(),
-                )
-            })
-            .collect()
-    }
-
     /// `ChatView`'s visit effect: while a thread is open, its last-visited
     /// stamp tracks the thread's `updatedAt`, which is what keeps the
     /// "Completed" pill off the row you are looking at.
-    pub(super) fn sync_thread_visit(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.lens_open || self.settings.is_some() {
+    pub(super) fn sync_thread_visit(&mut self) -> bool {
+        if self.settings.is_some() {
             return false;
         }
         let Some(open) = self.thread.as_ref() else {
@@ -628,44 +554,7 @@ impl ChatApp {
             return false;
         };
         let (id, updated_at) = (thread.id.0.clone(), thread.updated_at.0.clone());
-        let changed = self.sidebar.mark_thread_visited(&id, &updated_at);
-        if changed && let Some(client) = self.client.clone() {
-            let source =
-                if self.is_cloud_thread() {
-                    Some("cloud".to_owned())
-                } else {
-                    client.sessions().borrow().as_ref().map(|session| {
-                        format!("local:{}", session.config.environment.environment_id.0)
-                    })
-                };
-            if let Some(source_id) = source {
-                let target_id = if source_id == "cloud" {
-                    self.open_cloud_task_id()
-                        .unwrap_or_else(|| id.strip_prefix("cloud-").unwrap_or(&id).to_owned())
-                } else {
-                    id.clone()
-                };
-                let command = vitre_contracts::LensCommand::Read {
-                    idempotency_key: format!("read:{source_id}:{target_id}:{updated_at}"),
-                    source_id,
-                    target_id,
-                    through: updated_at,
-                };
-                cx.spawn(async move |_, cx| {
-                    let _ = cx
-                        .update(|cx| {
-                            gpui_tokio::Tokio::spawn_result(cx, async move {
-                                Ok(vitre_client::cloud::CloudClient::new(client)
-                                    .lens_command(&command)
-                                    .await?)
-                            })
-                        })
-                        .await;
-                })
-                .detach();
-            }
-        }
-        changed
+        self.sidebar.mark_thread_visited(&id, &updated_at)
     }
 
     /// Land a manual reorder drag: move `dragged`'s keys to where `target`'s
@@ -721,12 +610,6 @@ impl ChatApp {
     /// Archive a thread (`ThreadArchive`). The shell drops it from the row on
     /// the resulting event, so nothing is removed optimistically.
     pub(super) fn archive_thread(&mut self, id: ThreadId, cx: &mut Context<Self>) {
-        if let Some(task_id) = self.thread_location(&id).task_id().map(str::to_owned) {
-            self.cloud_store.update(cx, |store, cx| {
-                store.update_task(task_id, None, Some(true), cx)
-            });
-            return;
-        }
         let Some(client) = self.client.clone() else {
             return;
         };
@@ -1084,36 +967,6 @@ impl ChatApp {
                     })
                     .child(self.render_thread_title(&thread.id, thread.title.clone(), cx)),
             )
-            .when(thread.location.is_cloud(), |row| {
-                row.child(
-                    div()
-                        .id(SharedString::from(format!("cloud-meta-{}", thread.id.0)))
-                        .flex_shrink_0()
-                        .text_color(cx.theme().muted_foreground.opacity(0.65))
-                        .child(Icon::new(IconName::Globe).size_3())
-                        .tooltip({
-                            let label = thread
-                                .cloud
-                                .as_ref()
-                                .map(|meta| {
-                                    format!(
-                                        "Cloud · {}{}",
-                                        crate::cloud::provider_label(&meta.provider),
-                                        if meta.needs_attention {
-                                            " · Needs attention"
-                                        } else {
-                                            ""
-                                        }
-                                    )
-                                })
-                                .unwrap_or_else(|| "Cloud".into());
-                            move |window, cx| {
-                                gpui_component::tooltip::Tooltip::new(label.clone())
-                                    .build(window, cx)
-                            }
-                        }),
-                )
-            })
             .child(
                 Button::new(SharedString::from(format!("thread-menu-{}", thread.id.0)))
                     .ghost()
@@ -1175,7 +1028,6 @@ impl ChatApp {
         let row_key = row.key.clone();
         let project_id = row.project_id.clone();
         let expanded = row.expanded;
-        let cloud_group = row.project_id.0.starts_with("cloud:");
 
         // Collapsed rows carry their most urgent thread status as a dot that
         // crossfades to the chevron on hover; expanded rows just show the
@@ -1243,7 +1095,7 @@ impl ChatApp {
             // sortable context. A grouped row carries every member key, so
             // the whole repository moves as one block.
             .when(
-                !cloud_group && self.sidebar.project_sort_order == ProjectSortOrder::Manual,
+                self.sidebar.project_sort_order == ProjectSortOrder::Manual,
                 |this| {
                     let member_keys: Vec<String> = row
                         .members
@@ -1337,11 +1189,7 @@ impl ChatApp {
                 }
             }))
             .context_menu(move |menu, window, cx| {
-                if cloud_group {
-                    menu
-                } else {
-                    project_context_menu(menu, &chat, &members, window, cx)
-                }
+                project_context_menu(menu, &chat, &members, window, cx)
             });
 
         v_flex()
@@ -1671,17 +1519,6 @@ impl ChatApp {
                     ),
             )
             .child(
-                div().px_2().py_1().child(
-                    Button::new("open-lens")
-                        .ghost()
-                        .small()
-                        .w_full()
-                        .justify_start()
-                        .label("Lens")
-                        .on_click(cx.listener(|this, _, window, cx| this.open_lens(window, cx))),
-                ),
-            )
-            .child(
                 div()
                     .id("thread-list")
                     .flex_1()
@@ -1747,9 +1584,6 @@ impl ChatApp {
         hours: Option<i64>,
         cx: &mut Context<Self>,
     ) {
-        if self.thread_location(&id).is_cloud() {
-            return;
-        }
         let Some(client) = self.client.clone() else {
             return;
         };

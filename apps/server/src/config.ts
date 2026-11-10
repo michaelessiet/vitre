@@ -87,8 +87,6 @@ export class ServerConfig extends Context.Service<
     readonly noBrowser: boolean;
     readonly startupPresentation: StartupPresentation;
     readonly desktopBootstrapToken: string | undefined;
-    /** IPC opt-in for a resident cloud worker's process-lifetime bootstrap grant. */
-    readonly residentCloudBootstrap?: boolean;
     readonly autoBootstrapProjectFromCwd: boolean;
     readonly logWebSocketEvents: boolean;
     readonly tailscaleServeEnabled: boolean;
@@ -202,7 +200,6 @@ const makeTest = Effect.fn("ServerConfig.makeTest")(function* (
     port: 0,
     host: undefined,
     desktopBootstrapToken: undefined,
-    residentCloudBootstrap: false,
     staticDir: undefined,
     devUrl,
     devAllowedOrigins: [],

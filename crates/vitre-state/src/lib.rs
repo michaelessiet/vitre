@@ -1,7 +1,7 @@
 //! Pure state reducers over the generated contract types.
 //!
 //! These are line-for-line ports of the shared TypeScript reducers in
-//! `packages/client-runtime/src/state/` (`shellReducer.ts`, `threadReducer.ts`)
+//! T3 Code's `packages/client-runtime/src/state/` (`shellReducer.ts`, `threadReducer.ts`)
 //! and must keep the exact same semantics — both apps reduce the same
 //! orchestration event stream. UI-specific mapping (attachment preview URLs,
 //! model-slug normalisation, scoped fields) is the caller's responsibility,
@@ -42,12 +42,14 @@ pub mod shell;
 pub mod shell_sync;
 pub mod sidebar;
 pub mod source_control;
+pub mod subagents;
 pub mod terminal;
 pub mod terminal_context;
 pub mod terminal_ui;
 pub mod thread;
 pub mod thread_sync;
 pub mod turn_diff_tree;
+pub mod usage_limits;
 pub mod vcs_tree_status;
 pub mod vim;
 pub mod wire_opt;

@@ -39,7 +39,6 @@ impl ChatApp {
         &self,
         model: AnyElement,
         reasoning: Option<AnyElement>,
-        location: AnyElement,
         mode: AnyElement,
         runtime: AnyElement,
         context: Option<AnyElement>,
@@ -65,8 +64,7 @@ impl ChatApp {
                             .overflow_hidden()
                             .child(model),
                     )
-                    .children(reasoning)
-                    .child(location),
+                    .children(reasoning),
             )
             .child(
                 h_flex()
@@ -81,7 +79,6 @@ impl ChatApp {
                             .small()
                             .icon(IconName::Plus)
                             .tooltip("Attach files")
-                            .disabled(self.location_switch_blocks_turn())
                             .on_click(
                                 cx.listener(|app, _, window, cx| app.attach_files(window, cx)),
                             ),
@@ -115,7 +112,7 @@ impl ChatApp {
             .icon(icon)
             .when(!compact, |button| button.label(label))
             .tooltip(format!("Permissions: {label}"))
-            .disabled(self.draft_creating || self.location_switch_blocks_turn())
+            .disabled(self.draft_creating)
             .dropdown_menu(move |mut menu, _, _| {
                 for (mode, label) in [
                     (RuntimeMode::ApprovalRequired, "Supervised"),

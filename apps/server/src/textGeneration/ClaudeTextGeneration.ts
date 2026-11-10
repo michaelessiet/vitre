@@ -25,6 +25,8 @@ import {
   buildCommitMessagePrompt,
   buildPrContentPrompt,
   buildThreadTitlePrompt,
+  buildSubagentSummaryPrompt,
+  sanitizeSubagentSummary,
 } from "./TextGenerationPrompts.ts";
 import {
   normalizeCliError,
@@ -87,7 +89,8 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle",
+      | "generateThreadTitle"
+      | "generateSubagentSummary",
     value: unknown,
     detail: string,
   ): Effect.Effect<string, TextGenerationError> =>
@@ -117,7 +120,8 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle";
+      | "generateThreadTitle"
+      | "generateSubagentSummary";
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
@@ -361,10 +365,27 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       };
     });
 
+  const generateSubagentSummary: TextGeneration.TextGeneration["Service"]["generateSubagentSummary"] =
+    Effect.fn("ClaudeTextGeneration.generateSubagentSummary")(function* (input) {
+      const { prompt, outputSchema } = buildSubagentSummaryPrompt({
+        task: input.task,
+        transcript: input.transcript,
+      });
+      const generated = yield* runClaudeJson({
+        operation: "generateSubagentSummary",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson: outputSchema,
+        modelSelection: input.modelSelection,
+      });
+      return { summary: sanitizeSubagentSummary(generated.summary) };
+    });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    generateSubagentSummary,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

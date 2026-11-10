@@ -153,8 +153,6 @@ export const ClientSettingsSchema = Schema.Struct({
 });
 export type ClientSettings = typeof ClientSettingsSchema.Type;
 
-export const DEFAULT_CLIENT_SETTINGS: ClientSettings = Schema.decodeSync(ClientSettingsSchema)({});
-
 // ── Server Settings (server-authoritative) ────────────────────
 
 export const ThreadEnvMode = Schema.Literals(["local", "worktree"]);
@@ -726,12 +724,6 @@ export class ServerSettingsError extends Schema.TaggedErrorClass<ServerSettingsE
 }
 
 // ── Unified type ─────────────────────────────────────────────────────
-
-export type UnifiedSettings = ServerSettings & ClientSettings;
-export const DEFAULT_UNIFIED_SETTINGS: UnifiedSettings = {
-  ...DEFAULT_SERVER_SETTINGS,
-  ...DEFAULT_CLIENT_SETTINGS,
-};
 
 // ── Server Settings Patch (replace with a Schema.deepPartial if available) ──────────────────────────────────────────
 

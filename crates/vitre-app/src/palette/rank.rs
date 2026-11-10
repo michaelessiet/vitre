@@ -1,8 +1,8 @@
 //! Pure matching/ranking logic behind the palette surfaces, ported verbatim
 //! from the Electron app so both clients order results identically.
 //!
-//! Sources: `apps/web/src/components/CommandPalette.logic.ts` (normalization
-//! and the two rank functions) and `apps/web/src/components/SearchPanel.logic.ts`
+//! Sources: T3 Code's `apps/web/src/components/CommandPalette.logic.ts` (normalization
+//! and the two rank functions) and T3 Code's `apps/web/src/components/SearchPanel.logic.ts`
 //! (`splitSearchResultPath`, `matchLineSegments`).
 
 use std::cmp::Reverse;

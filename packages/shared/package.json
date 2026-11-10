@@ -15,10 +15,6 @@
       "types": "./src/model.ts",
       "import": "./src/model.ts"
     },
-    "./advertisedEndpoint": {
-      "types": "./src/advertisedEndpoint.ts",
-      "import": "./src/advertisedEndpoint.ts"
-    },
     "./git": {
       "types": "./src/git.ts",
       "import": "./src/git.ts"
@@ -79,10 +75,6 @@
       "types": "./src/serverSettings.ts",
       "import": "./src/serverSettings.ts"
     },
-    "./String": {
-      "types": "./src/String.ts",
-      "import": "./src/String.ts"
-    },
     "./projectScripts": {
       "types": "./src/projectScripts.ts",
       "import": "./src/projectScripts.ts"
@@ -90,14 +82,6 @@
     "./t3ProjectFile": {
       "types": "./src/t3ProjectFile.ts",
       "import": "./src/t3ProjectFile.ts"
-    },
-    "./orchestrationTiming": {
-      "types": "./src/orchestrationTiming.ts",
-      "import": "./src/orchestrationTiming.ts"
-    },
-    "./remote": {
-      "types": "./src/remote.ts",
-      "import": "./src/remote.ts"
     },
     "./relaySigning": {
       "types": "./src/relaySigning.ts",
@@ -115,10 +99,6 @@
       "types": "./src/oauthScope.ts",
       "import": "./src/oauthScope.ts"
     },
-    "./searchRanking": {
-      "types": "./src/searchRanking.ts",
-      "import": "./src/searchRanking.ts"
-    },
     "./qrCode": {
       "types": "./src/qrCode.ts",
       "import": "./src/qrCode.ts"
@@ -135,14 +115,6 @@
       "types": "./src/keybindings.ts",
       "import": "./src/keybindings.ts"
     },
-    "./composerTrigger": {
-      "types": "./src/composerTrigger.ts",
-      "import": "./src/composerTrigger.ts"
-    },
-    "./composerInlineTokens": {
-      "types": "./src/composerInlineTokens.ts",
-      "import": "./src/composerInlineTokens.ts"
-    },
     "./threadReferences": {
       "types": "./src/threadReferences.ts",
       "import": "./src/threadReferences.ts"
@@ -155,10 +127,6 @@
       "types": "./src/preview.ts",
       "import": "./src/preview.ts"
     },
-    "./previewViewport": {
-      "types": "./src/previewViewport.ts",
-      "import": "./src/previewViewport.ts"
-    },
     "./filePreview": {
       "types": "./src/filePreview.ts",
       "import": "./src/filePreview.ts"
@@ -166,14 +134,6 @@
     "./fileRevision": {
       "types": "./src/fileRevision.ts",
       "import": "./src/fileRevision.ts"
-    },
-    "./lspSupport": {
-      "types": "./src/lspSupport.ts",
-      "import": "./src/lspSupport.ts"
-    },
-    "./chatList": {
-      "types": "./src/chatList.ts",
-      "import": "./src/chatList.ts"
     },
     "./hostProcess": {
       "types": "./src/hostProcess.ts",
@@ -183,21 +143,11 @@
       "types": "./src/httpReadiness.ts",
       "import": "./src/httpReadiness.ts"
     },
-    "./devHome": {
-      "types": "./src/devHome.ts",
-      "import": "./src/devHome.ts"
-    },
     "./devProxy": {
       "types": "./src/devProxy.ts",
       "import": "./src/devProxy.ts"
     },
-    "./lens": {
-      "types": "./src/lens.ts",
-      "import": "./src/lens.ts"
-    },
-    "./visual": "./src/visual.ts",
-    "./lensPreview": "./src/lensPreview.ts",
-    "./cloudModels": "./src/cloudModels.ts"
+    "./visual": "./src/visual.ts"
   },
   "scripts": {
     "typecheck": "tsgo --noEmit",

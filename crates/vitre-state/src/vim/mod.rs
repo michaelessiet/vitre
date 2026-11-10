@@ -1,7 +1,7 @@
 //! Vim modal editing for the code editor.
 //!
 //! Electron gets its vim mode from `@replit/codemirror-vim`, wired up in
-//! `apps/web/src/components/files/codemirror/CodeMirrorFileEditor.tsx` behind
+//! T3 Code's `apps/web/src/components/files/codemirror/CodeMirrorFileEditor.tsx` behind
 //! the `vimMode` client setting (default off). There is no equivalent crate
 //! for the gpui-component editor and Zed's `vim` crate is GPL, so this is a
 //! from-scratch engine.

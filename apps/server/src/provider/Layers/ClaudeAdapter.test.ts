@@ -17,6 +17,7 @@ import {
   ProviderDriverKind,
   ProviderItemId,
   ProviderRuntimeEvent,
+  RuntimeTaskId,
   type RuntimeMode,
   ThreadId,
   ProviderInstanceId,
@@ -56,6 +57,7 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
   private failure: unknown | undefined;
 
   public readonly interruptCalls: Array<void> = [];
+  public readonly stopTaskCalls: Array<string> = [];
   public readonly setModelCalls: Array<string | undefined> = [];
   public readonly setPermissionModeCalls: Array<string> = [];
   public readonly setMaxThinkingTokensCalls: Array<number | null> = [];
@@ -97,6 +99,10 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
 
   readonly interrupt = async (): Promise<void> => {
     this.interruptCalls.push(undefined);
+  };
+
+  readonly stopTask = async (taskId: string): Promise<void> => {
+    this.stopTaskCalls.push(taskId);
   };
 
   readonly setModel = async (model?: string): Promise<void> => {
@@ -1967,6 +1973,141 @@ describe("ClaudeAdapterLive", () => {
           event.payload.reason.startsWith("api_retry:"),
       );
       assert.equal(heartbeat?.type, "session.state.changed");
+      runtimeEventsFiber.interruptUnsafe();
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("keeps a subagent's messages in its task transcript and can stop it", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const runtimeEvents: Array<ProviderRuntimeEvent> = [];
+      const runtimeEventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
+        Effect.sync(() => runtimeEvents.push(event)),
+      ).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+
+      for (const message of [
+        {
+          type: "system",
+          subtype: "task_started",
+          task_id: "agent-1",
+          tool_use_id: "toolu_agent",
+          subagent_type: "Explore",
+          description: "Find the reducers",
+          prompt: "Look in crates/",
+          session_id: "session",
+          uuid: "ts",
+        },
+        {
+          type: "system",
+          subtype: "task_started",
+          task_id: "housekeeping",
+          description: "Compact memory",
+          skip_transcript: true,
+          session_id: "session",
+          uuid: "ts-hidden",
+        },
+        {
+          type: "assistant",
+          parent_tool_use_id: "toolu_agent",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "text", text: "Searching the state crate." },
+              { type: "tool_use", id: "toolu_grep", name: "Grep", input: { pattern: "reduce" } },
+            ],
+          },
+          session_id: "session",
+          uuid: "sub-a",
+        },
+        {
+          type: "user",
+          parent_tool_use_id: "toolu_agent",
+          message: {
+            role: "user",
+            content: [{ type: "tool_result", tool_use_id: "toolu_grep", content: "3 matches" }],
+          },
+          session_id: "session",
+          uuid: "sub-u",
+        },
+        {
+          type: "system",
+          subtype: "task_updated",
+          task_id: "agent-1",
+          patch: { is_backgrounded: true },
+          session_id: "session",
+          uuid: "tu",
+        },
+        {
+          type: "system",
+          subtype: "task_notification",
+          task_id: "housekeeping",
+          status: "completed",
+          output_file: "/tmp/x",
+          summary: "done",
+          session_id: "session",
+          uuid: "tn-hidden",
+        },
+      ]) {
+        harness.query.emit(message as unknown as SDKMessage);
+      }
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+
+      yield* adapter.stopTask!(THREAD_ID, RuntimeTaskId.make("agent-1"));
+      assert.deepEqual(harness.query.stopTaskCalls, ["agent-1"]);
+
+      const taskEvents = runtimeEvents.filter((event) => event.type.startsWith("task."));
+      const identity = { taskId: "agent-1", toolUseId: "toolu_agent", agentType: "Explore" };
+      assert.deepEqual(
+        taskEvents.map((event) => [event.type, event.payload]),
+        [
+          [
+            "task.started",
+            { ...identity, description: "Find the reducers", prompt: "Look in crates/" },
+          ],
+          [
+            "task.transcript",
+            { ...identity, entry: { kind: "text", text: "Searching the state crate." } },
+          ],
+          [
+            "task.transcript",
+            {
+              ...identity,
+              entry: { kind: "tool", toolUseId: "toolu_grep", toolName: "Grep", detail: "reduce" },
+            },
+          ],
+          [
+            "task.transcript",
+            {
+              ...identity,
+              entry: {
+                kind: "tool_result",
+                toolUseId: "toolu_grep",
+                isError: false,
+                output: "3 matches",
+              },
+            },
+          ],
+          ["task.updated", { ...identity, background: true }],
+        ],
+      );
+      // The subagent's tool call never becomes a main-conversation item.
+      assert.equal(
+        runtimeEvents.some(
+          (event) => event.type === "item.started" || event.type === "content.delta",
+        ),
+        false,
+      );
       runtimeEventsFiber.interruptUnsafe();
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),

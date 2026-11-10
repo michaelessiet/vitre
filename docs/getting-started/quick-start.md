@@ -13,6 +13,6 @@ vp run dev:server
 # Build the backend package
 vp run --filter t3 build
 
-# Run the published backend CLI
-npx t3
+# Run the built backend
+vp run start
 ```

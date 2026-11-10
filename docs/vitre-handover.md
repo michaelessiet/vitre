@@ -47,8 +47,7 @@ by itself, evidence that a parity item is finished.
    crates (`editor`, `vim`, `project`, `workspace`, `ui`, `terminal`,
    `markdown`, `git_ui`, their `.scm` files) are **clean-room reference only —
    never copy code or query data from them**. `cargo deny check licenses` is
-   the gate. (Note: Cargo.toml comments cite a `docs/vitre-licensing.md` that
-   was never written — the licensing story lives here and in the plan.)
+   the gate. The licensing story lives here and in the plan.
 
 ### Where the code lives
 

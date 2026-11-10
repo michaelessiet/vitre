@@ -15,18 +15,6 @@
       "types": "./src/settings.ts",
       "import": "./src/settings.ts"
     },
-    "./relay": {
-      "types": "./src/relay.ts",
-      "import": "./src/relay.ts"
-    },
-    "./cloud": {
-      "types": "./src/cloud.ts",
-      "import": "./src/cloud.ts"
-    },
-    "./lens": {
-      "types": "./src/lens.ts",
-      "import": "./src/lens.ts"
-    },
     "./visual": "./src/visual.ts"
   },
   "scripts": {

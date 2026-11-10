@@ -22,7 +22,6 @@ const deriveExplicitServerPaths = (baseDir: string, devUrl: URL | undefined) =>
   deriveServerPaths(baseDir, devUrl, { baseDirIsExplicit: true });
 
 const encodeDesktopBootstrap = Schema.encodeEffect(Schema.fromJsonString(DesktopBackendBootstrap));
-const isDesktopBootstrap = Schema.is(DesktopBackendBootstrap);
 
 const makeDesktopBootstrap = (
   overrides: Partial<DesktopBackendBootstrapValue> = {},
@@ -56,7 +55,6 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     otlpExportIntervalMs: 10_000,
     otlpServiceName: "t3-server",
     devAllowedOrigins: [],
-    residentCloudBootstrap: false,
   } as const;
 
   const openBootstrapFd = Effect.fn(function* (payload: DesktopBackendBootstrapValue) {
@@ -356,59 +354,6 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         tailscaleServePort: 443,
       });
       assert.equal(join(baseDir, "userdata"), resolved.stateDir);
-    }),
-  );
-
-  it.effect.each([
-    { resident: true, token: "resident-token", mode: "desktop", enabled: true },
-    { resident: false, token: "desktop-token", mode: "desktop", enabled: false },
-    { resident: undefined, token: "desktop-token", mode: "desktop", enabled: false },
-    { resident: true, token: "resident-token", mode: "web", enabled: false },
-    { resident: true, token: "", mode: "desktop", enabled: false },
-  ])("enables managed bootstrap only through a valid resident IPC envelope %#", (testCase) =>
-    Effect.gen(function* () {
-      const fd = yield* openBootstrapFd(
-        makeDesktopBootstrap({
-          desktopBootstrapToken: testCase.token,
-          residentCloudBootstrap: testCase.resident,
-        }),
-      );
-      const resolved = yield* resolveServerConfig(
-        {
-          mode: testCase.mode === "web" ? Option.some("web") : Option.none(),
-          port: Option.none(),
-          host: Option.none(),
-          baseDir: Option.none(),
-          cwd: Option.none(),
-          devUrl: Option.none(),
-          noBrowser: Option.none(),
-          bootstrapFd: Option.some(fd),
-          autoBootstrapProjectFromCwd: Option.none(),
-          logWebSocketEvents: Option.none(),
-          tailscaleServeEnabled: Option.none(),
-          tailscaleServePort: Option.none(),
-        },
-        Option.none(),
-      ).pipe(
-        Effect.provide(
-          Layer.mergeAll(
-            ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })),
-            NetService.layer,
-          ),
-        ),
-      );
-      expect(resolved.residentCloudBootstrap).toBe(testCase.enabled);
-    }),
-  );
-
-  it.effect("rejects non-boolean resident bootstrap policy values", () =>
-    Effect.sync(() => {
-      expect(
-        isDesktopBootstrap({
-          ...makeDesktopBootstrap(),
-          residentCloudBootstrap: "true",
-        }),
-      ).toBe(false);
     }),
   );
 

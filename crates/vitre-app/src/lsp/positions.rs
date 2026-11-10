@@ -2,7 +2,7 @@
 //! 0-based UTF-16 code-unit column — `packages/contracts/src/lsp.ts`
 //! `LspPosition`), while the editor addresses its `ropey::Rope` by byte
 //! offset. Conversions port the Electron clamping semantics from
-//! `apps/web/src/components/files/codemirror/lspPositions.ts`:
+//! T3 Code's `apps/web/src/components/files/codemirror/lspPositions.ts`:
 //!
 //! - position → offset: a line past EOF clamps to the LAST line; a character
 //!   past the line end clamps to the end of that line (never spilling into

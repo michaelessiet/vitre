@@ -216,3 +216,43 @@ export function buildThreadTitlePrompt(input: ThreadTitlePromptInput) {
 
   return { prompt, outputSchema };
 }
+
+// ---------------------------------------------------------------------------
+// Subagent progress summary
+// ---------------------------------------------------------------------------
+
+export interface SubagentSummaryPromptInput {
+  /** What the subagent was asked to do. */
+  task: string;
+  /** The subagent's recent transcript, oldest first, already rendered as lines. */
+  transcript: string;
+}
+
+export function buildSubagentSummaryPrompt(input: SubagentSummaryPromptInput) {
+  const prompt = [
+    "You report the progress of a coding subagent to the person watching it.",
+    "Return a JSON object with key: summary.",
+    "Rules:",
+    "- One sentence in present tense, at most 90 characters, no trailing period.",
+    "- Say what the agent is doing right now and, if clear, what it found so far.",
+    "- Name concrete files, commands or findings; do not restate the task.",
+    "",
+    "Task:",
+    limitSection(input.task, 2_000),
+    "",
+    "Recent transcript:",
+    limitSection(input.transcript, 12_000),
+  ].join("\n");
+  const outputSchema = Schema.Struct({ summary: Schema.String });
+  return { prompt, outputSchema };
+}
+
+/** One line, no wrapping quotes, no trailing period, at most 140 characters. */
+export function sanitizeSubagentSummary(raw: string): string {
+  const line = (raw.trim().split(/\r?\n/g)[0] ?? "")
+    .replace(/^['"`]+|['"`]+$/g, "")
+    .replace(/\s+/g, " ")
+    .replace(/\.+$/, "")
+    .trim();
+  return line.length <= 140 ? line : `${line.slice(0, 139).trimEnd()}…`;
+}

@@ -157,8 +157,7 @@ export type GraphRuntimeStatus = typeof GraphRuntimeStatus.Type;
 
 /**
  * Stages of a runtime install, streamed so a multi-minute `pip install` shows
- * progress instead of an unresolving spinner. Mirrors the relay-client
- * installer's staged events (`RelayClientInstallProgressEventSchema`).
+ * progress instead of an unresolving spinner.
  */
 export const GraphInstallStage = Schema.Literals([
   "checking",

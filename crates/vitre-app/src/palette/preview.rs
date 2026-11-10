@@ -4,7 +4,7 @@
 //! highlighted: a thread or message row previews as a small card, a file or
 //! content-match row previews the file itself, and an empty result list
 //! previews nothing and collapses the pane to zero. See
-//! `apps/web/src/components/QuickSearch.tsx`.
+//! T3 Code's `apps/web/src/components/QuickSearch.tsx`.
 //!
 //! The file view is gpui-component's read-only [`Editor`]. Two of its existing
 //! behaviours do the work Electron needs CodeMirror extensions for: moving the

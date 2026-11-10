@@ -332,9 +332,6 @@ impl ChatApp {
     /// Workspace root of the open thread's project (NOT the worktree) — the
     /// badge and checkout-target logic compare against this.
     fn thread_project_root(&self) -> Option<String> {
-        if self.is_cloud_thread() {
-            return self.search_root();
-        }
         if let Some(root) = self.root_for_file_tab() {
             return Some(root);
         }
@@ -799,16 +796,10 @@ impl ChatApp {
             Icon::new(IconName::Folder)
         };
         let workspace_path = self.open_project_root().unwrap_or_default();
-        let workspace_name = self
-            .cloud_task(cx)
-            .map(|task| crate::cloud::repo_label(&task))
-            .filter(|name| !name.is_empty())
-            .unwrap_or_else(|| {
-                std::path::Path::new(&workspace_path)
-                    .file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "Workspace".into())
-            });
+        let workspace_name = std::path::Path::new(&workspace_path)
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "Workspace".into());
         let workspace = h_flex()
             .id("workspace-details")
             .min_w_0()

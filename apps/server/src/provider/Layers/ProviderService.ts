@@ -755,6 +755,26 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     );
   });
 
+  const stopTask: ProviderServiceMethod<"stopTask"> = Effect.fn("stopTask")(function* (input) {
+    const routed = yield* resolveRoutableSession({
+      threadId: input.threadId,
+      operation: "ProviderService.stopTask",
+      allowRecovery: false,
+    });
+    yield* Effect.annotateCurrentSpan({
+      "provider.operation": "stop-task",
+      "provider.kind": routed.adapter.provider,
+      "provider.thread_id": input.threadId,
+      "provider.task_id": input.taskId,
+    });
+    const stop = routed.adapter.stopTask;
+    if (!stop) {
+      return false;
+    }
+    yield* stop(routed.threadId, input.taskId);
+    return true;
+  });
+
   const interruptTurn: ProviderServiceMethod<"interruptTurn"> = Effect.fn("interruptTurn")(
     function* (rawInput) {
       const input = yield* decodeInputOrValidationError({
@@ -1120,6 +1140,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     startSession,
     sendTurn,
     interruptTurn,
+    stopTask,
     respondToRequest,
     respondToUserInput,
     stopSession,

@@ -1,5 +1,5 @@
 //! HTTP orchestration snapshot loaders — ports of
-//! `packages/client-runtime/src/state/shellSnapshotHttp.ts` and
+//! T3 Code's `packages/client-runtime/src/state/shellSnapshotHttp.ts` and
 //! `threadSnapshotHttp.ts`. Snapshots load over HTTP (gzip-compressible,
 //! keeps multi-KB bodies off the socket) instead of arriving as the WS
 //! subscription's first frame; the projections resume from their sequence.

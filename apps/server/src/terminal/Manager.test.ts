@@ -29,6 +29,10 @@ import { expect } from "vite-plus/test";
 import * as ProcessRunner from "../processRunner.ts";
 import * as TerminalManager from "./Manager.ts";
 import * as PtyAdapter from "./PtyAdapter.ts";
+import * as NodeOS from "node:os";
+
+// Root ignores file permissions, so chmod-based failure paths cannot occur.
+const runningAsRoot = NodeOS.userInfo().uid === 0;
 
 class WaitForConditionError extends Data.TaggedError("WaitForConditionError")<{
   readonly message: string;
@@ -483,7 +487,7 @@ it.layer(
 
   it.effect("preserves non-notFound cwd stat failures", () =>
     Effect.gen(function* () {
-      if ((yield* HostProcessPlatform) === "win32") return;
+      if ((yield* HostProcessPlatform) === "win32" || runningAsRoot) return;
 
       const path = yield* Path.Path;
 

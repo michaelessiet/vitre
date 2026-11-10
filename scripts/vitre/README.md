@@ -1,7 +1,7 @@
 # Vitre contracts export (Stage A)
 
 - `node scripts/vitre/export-contracts.ts` — exports the sidecar's Effect-RPC surface
-  (`WsRpcGroup`, 101 methods) as wire-side JSON Schema into
+  (`WsRpcGroup`) as wire-side JSON Schema into
   `crates/vitre-contracts/contracts.gen.json` (deterministic; asserts internally).
 - `node scripts/vitre/export-fixtures.ts` — writes golden wire fixtures to
   `crates/vitre-contracts/fixtures/*.json`, each validated by a decode → re-encode
@@ -59,10 +59,3 @@ measures three five-minute release idle runs with disposable homes. Run
 `cargo run --release -p vitre-state --example performance` for repeatable terminal
 and conversation publication microbenchmarks. See
 [the optimization status and measurement limits](../../docs/operations/vitre-performance.md).
-
-## Lens preview
-
-`node scripts/vitre/lens-preview.ts` serves sample Lens data on loopback port 4897.
-A debug native build with `VITRE_LENS_PREVIEW=1` uses it for Lens only. See
-[the Lens development guide](../../docs/lens.md#development-and-rollout) for both
-desktop and mobile preview commands and rollout requirements.

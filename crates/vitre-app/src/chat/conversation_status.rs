@@ -2,7 +2,6 @@
 use super::*;
 use std::borrow::Cow;
 use std::time::Instant;
-use vitre_contracts::{CloudHandoffPhase, CloudTaskState};
 use vitre_state::sidebar::ThreadStatus;
 
 pub(super) const STATUS_HEIGHT: f32 = 28.;
@@ -20,7 +19,6 @@ pub(super) struct LocalStop {
 pub(super) enum Connection {
     #[default]
     Dormant,
-    Connecting,
     Synchronizing,
     Live,
     Disconnected,
@@ -52,25 +50,12 @@ pub(super) enum Turn {
     Stopping,
     Finished,
 }
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(super) enum Transfer {
-    #[default]
-    None,
-    Moving(String),
-    Cancelling,
-    WaitingForTurn,
-    Conflict,
-    Recovering,
-    Failed,
-}
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum Attention {
     #[default]
     None,
     Error,
     Auth,
-    Limit,
-    Interrupted,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum Art {
@@ -91,24 +76,15 @@ pub(super) enum Action {
     CheckDelivery,
     Reconnect,
     RetryConnection,
-    Account,
-    Conflicts,
-    RetryTransfer,
-    CancelCreation,
 }
 
 impl Action {
-    fn label(self, cloud: bool) -> Option<&'static str> {
+    fn label(self) -> Option<&'static str> {
         match self {
             Self::None => None,
-            Self::Retry if cloud => Some("Retry request"),
             Self::Retry => Some("Dismiss"),
-            Self::RetryTransfer => Some("Retry"),
             Self::CheckDelivery => Some("Check delivery"),
             Self::Reconnect | Self::RetryConnection => Some("Reconnect"),
-            Self::Account => Some("Account"),
-            Self::Conflicts => Some("Resolve"),
-            Self::CancelCreation => Some("Cancel"),
         }
     }
 }
@@ -120,30 +96,13 @@ pub(super) struct Facts {
     pub transcript: Transcript,
     pub delivery: Delivery,
     pub turn: Turn,
-    pub transfer: Transfer,
     pub attention: Attention,
     pub detail: Option<String>,
     pub preparation: Option<String>,
     pub started_at: Option<String>,
-    pub can_cancel_transfer: bool,
     pub execution_available: bool,
     pub supports_steering: bool,
-    pub execution_invalidated: bool,
-    pub execution_stale: bool,
-    pub cancellable_preparation: bool,
-    pub ownership_fenced: bool,
     pub stop_error: bool,
-    pub editable_after_error: bool,
-    /// The cloud workspace stopped after losing contact; its saved checkpoint
-    /// resumes on the next message, so nothing needs a manual retry.
-    pub cloud_paused: bool,
-    /// The cloud workspace lost contact and is still being stopped; a resume
-    /// follows automatically once it settles.
-    pub cloud_resuming: bool,
-    /// The relay accepts a follow-up for this cloud task right now even though
-    /// no live conversation socket is attached (idle worker, waking checkpoint,
-    /// or paused workspace).
-    pub cloud_accepts_message: bool,
 }
 #[derive(Clone, Debug, Default)]
 pub(super) struct ConversationStatus {
@@ -158,66 +117,33 @@ pub(super) struct ConversationStatus {
 }
 impl ConversationStatus {
     pub(super) fn derive(facts: Facts) -> Self {
-        let (mut label, mut art, mut action) = match &facts.transfer {
-            Transfer::Conflict => (
-                "Resolve file conflicts".into(),
-                Art::Warning,
-                Action::Conflicts,
-            ),
-            Transfer::Failed => (
-                "Could not move this conversation".into(),
-                Art::Error,
-                Action::RetryTransfer,
-            ),
-            Transfer::Recovering => (
-                "Confirming where this conversation runs…".into(),
-                Art::Warning,
-                Action::None,
-            ),
-            Transfer::Cancelling => ("Cancelling move…".into(), Art::Connecting, Action::None),
-            Transfer::WaitingForTurn => (
-                "Waiting for the current turn before moving…".into(),
-                Art::Connecting,
-                Action::None,
-            ),
-            Transfer::Moving(destination) => (
-                format!("Moving to {destination}…"),
-                Art::Connecting,
-                Action::None,
-            ),
-            Transfer::None if facts.delivery == Delivery::Uncertain => (
+        let (mut label, mut art, mut action) = if facts.delivery == Delivery::Uncertain {
+            (
                 "Checking whether your message was received…".into(),
                 Art::Warning,
                 Action::CheckDelivery,
-            ),
-            Transfer::None if facts.delivery == Delivery::Rejected => (
+            )
+        } else if facts.delivery == Delivery::Rejected {
+            (
                 facts
                     .detail
                     .clone()
                     .unwrap_or_else(|| "Message was not sent".into()),
                 Art::Error,
                 Action::None,
-            ),
-            Transfer::None if facts.stop_error => (
+            )
+        } else if facts.stop_error {
+            (
                 "Stop not confirmed".into(),
                 Art::Warning,
                 Action::RetryConnection,
-            ),
-            Transfer::None => match facts.attention {
+            )
+        } else {
+            match facts.attention {
                 Attention::Auth => (
                     "Reconnect your provider to continue".into(),
                     Art::Warning,
                     Action::Reconnect,
-                ),
-                Attention::Limit => (
-                    "Provider usage limit reached".into(),
-                    Art::Warning,
-                    Action::Account,
-                ),
-                Attention::Interrupted => (
-                    "Conversation interrupted".into(),
-                    Art::Warning,
-                    Action::Retry,
                 ),
                 Attention::Error => (
                     facts
@@ -231,25 +157,11 @@ impl ConversationStatus {
                     Turn::Stopping => ("Stopping…".into(), Art::Connecting, Action::None),
                     Turn::Approval => ("Approval required".into(), Art::Approval, Action::None),
                     Turn::Input => ("Waiting for your answer".into(), Art::Input, Action::None),
-                    _ if facts.cloud_resuming => (
-                        "Reconnecting cloud workspace…".into(),
-                        Art::Connecting,
-                        Action::None,
-                    ),
-                    Turn::Idle | Turn::Finished
-                        if facts.cloud_paused && facts.delivery == Delivery::None =>
-                    {
-                        (
-                            "Workspace paused · send a message to resume".into(),
-                            Art::Warning,
-                            Action::None,
-                        )
-                    }
                     Turn::Preparing => (
                         facts
                             .preparation
                             .clone()
-                            .unwrap_or_else(|| "Preparing cloud workspace…".into()),
+                            .unwrap_or_else(|| "Starting your request…".into()),
                         Art::Connecting,
                         Action::None,
                     ),
@@ -262,9 +174,6 @@ impl ConversationStatus {
                         ("Sending message…".into(), Art::Connecting, Action::None)
                     }
                     _ => match facts.connection {
-                        Connection::Connecting => {
-                            ("Connecting…".into(), Art::Connecting, Action::None)
-                        }
                         Connection::Synchronizing => (
                             "Synchronizing conversation…".into(),
                             Art::Connecting,
@@ -281,10 +190,9 @@ impl ConversationStatus {
                         _ => (String::new(), Art::None, Action::None),
                     },
                 },
-            },
+            }
         };
-        if facts.transfer == Transfer::None
-            && facts.attention == Attention::None
+        if facts.attention == Attention::None
             && !facts.stop_error
             && !matches!(facts.delivery, Delivery::Uncertain | Delivery::Rejected)
             && matches!(
@@ -352,45 +260,26 @@ impl ConversationStatus {
             };
         }
         let settled_turn = matches!(facts.turn, Turn::Idle | Turn::Finished);
-        let can_send = facts.transfer == Transfer::None
-            && !facts.ownership_fenced
-            && !facts.cloud_resuming
-            && (facts.attention == Attention::None
-                || (facts.editable_after_error && facts.attention == Attention::Error))
+        let can_send = matches!(facts.attention, Attention::None | Attention::Error)
             && matches!(facts.delivery, Delivery::None | Delivery::Rejected)
             && ((settled_turn
-                && (facts.execution_available
-                    || facts.connection == Connection::Dormant
-                    || facts.cloud_accepts_message))
-                // A waking checkpoint already accepts the next request; the
-                // worker submits it as soon as the provider is up.
-                || (facts.turn == Turn::Preparing && facts.cloud_accepts_message)
+                && (facts.execution_available || facts.connection == Connection::Dormant))
                 || (facts.turn == Turn::Working
                     && facts.supports_steering
-                    && facts.execution_available
-                    && !facts.execution_stale
-                    && !facts.execution_invalidated));
-        let execution_interrupted = facts.execution_invalidated
-            || matches!(
-                facts.attention,
-                Attention::Interrupted | Attention::Auth | Attention::Limit
-            );
+                    && facts.execution_available));
+        let execution_interrupted = facts.attention == Attention::Auth;
         let can_stop = !execution_interrupted
-            && !facts.ownership_fenced
-            && (facts.execution_available || facts.cancellable_preparation)
+            && facts.execution_available
             && matches!(
                 facts.turn,
                 Turn::Working | Turn::Approval | Turn::Input | Turn::Preparing
             )
             && facts.delivery != Delivery::Uncertain;
         let can_respond = !execution_interrupted
-            && !facts.execution_stale
             && facts.execution_available
-            && !facts.ownership_fenced
             && matches!(facts.turn, Turn::Approval | Turn::Input);
-        let show_requests = !execution_interrupted
-            && !facts.execution_stale
-            && matches!(facts.turn, Turn::Approval | Turn::Input);
+        let show_requests =
+            !execution_interrupted && matches!(facts.turn, Turn::Approval | Turn::Input);
         Self {
             facts,
             label,
@@ -475,150 +364,6 @@ fn phase_connection(phase: SyncPhase) -> Connection {
         SyncPhase::Disconnected => Connection::Disconnected,
     }
 }
-fn cloud_connection(
-    phase: SyncPhase,
-    source: cloud_thread::CloudSource,
-    connecting: bool,
-    dormant: bool,
-) -> Connection {
-    match phase {
-        SyncPhase::Live => Connection::Live,
-        SyncPhase::Synchronizing => Connection::Synchronizing,
-        SyncPhase::Disconnected if source == cloud_thread::CloudSource::Live => {
-            Connection::Disconnected
-        }
-        SyncPhase::Disconnected if connecting => Connection::Connecting,
-        SyncPhase::Disconnected if dormant => Connection::Dormant,
-        SyncPhase::Disconnected => Connection::Disconnected,
-    }
-}
-fn task_attention(state: &CloudTaskState) -> Attention {
-    match state {
-        CloudTaskState::NeedsAuth => Attention::Auth,
-        CloudTaskState::UsageLimited => Attention::Limit,
-        CloudTaskState::Failed => Attention::Error,
-        CloudTaskState::Interrupted => Attention::Interrupted,
-        _ => Attention::None,
-    }
-}
-fn task_execution_invalidated(state: &CloudTaskState) -> bool {
-    matches!(
-        state,
-        CloudTaskState::Failed
-            | CloudTaskState::Interrupted
-            | CloudTaskState::NeedsAuth
-            | CloudTaskState::UsageLimited
-    )
-}
-
-/// How a cloud task recovers without a live conversation socket. The relay
-/// accepts `task.continue` for an idle resident worker, a waking checkpoint,
-/// and any settled task whose worker has stopped; the desktop mirrors those
-/// rules so the composer stays usable while the socket reconnects.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) struct CloudRecovery {
-    pub paused: bool,
-    pub resuming: bool,
-    pub accepts_message: bool,
-    pub editable_after_failure: bool,
-}
-
-pub(super) fn cloud_worker_stopped(task: &vitre_contracts::CloudTask) -> bool {
-    use vitre_contracts::CloudWorkerState as W;
-    task.worker
-        .as_ref()
-        .is_none_or(|worker| matches!(worker.state, W::Stopped | W::Deleted))
-}
-
-pub(super) fn cloud_recovery(task: &vitre_contracts::CloudTask) -> CloudRecovery {
-    use vitre_contracts::CloudWorkerState as W;
-    let worker_stopped = cloud_worker_stopped(task);
-    let worker_ready = task
-        .worker
-        .as_ref()
-        .is_some_and(|worker| worker.state == W::Ready);
-    let interrupted = task.state == CloudTaskState::Interrupted;
-    let settled = matches!(
-        task.state,
-        CloudTaskState::Completed
-            | CloudTaskState::Cancelled
-            | CloudTaskState::Interrupted
-            | CloudTaskState::Failed
-    );
-    let live_idle =
-        task.state == CloudTaskState::Running && task.idle == Some(true) && worker_ready;
-    let waking = task.wake_only == Some(true)
-        && matches!(
-            task.state,
-            CloudTaskState::Queued | CloudTaskState::Preparing
-        );
-    CloudRecovery {
-        paused: interrupted && worker_stopped,
-        resuming: interrupted && !worker_stopped,
-        accepts_message: live_idle || waking || (settled && worker_stopped),
-        editable_after_failure: task.state == CloudTaskState::Failed && worker_stopped,
-    }
-}
-
-fn task_preparation_label(task: &vitre_contracts::CloudTask) -> Option<&'static str> {
-    if task.state == CloudTaskState::Queued {
-        return Some("Waiting for a cloud computer…");
-    }
-    let preparation = task
-        .preparation
-        .as_ref()
-        .filter(|p| task.attempt.as_ref().is_some_and(|a| a.id == p.attempt_id))?;
-    use vitre_contracts::CloudTaskPreparationPhase as P;
-    Some(match preparation.phase {
-        P::Restoring => "Restoring workspace…",
-        P::Cloning => "Cloning repository…",
-        P::Dependencies => "Installing dependencies…",
-        P::Backend => "Starting conversation service…",
-        P::Provider => "Connecting provider…",
-        P::Ready => "Connecting…",
-        P::Failed => "Workspace preparation failed",
-        P::Unknown(_) => "Preparing cloud workspace…",
-    })
-}
-
-fn cloud_execution_is_current(
-    task: &vitre_contracts::CloudTask,
-    view: &OrchestrationThread,
-) -> bool {
-    if task_is_idle_restore(task, Some(view)) {
-        return true;
-    }
-    // Older workers without a request identity keep their existing behavior.
-    let Some(request) = task.turn_request_id.as_ref() else {
-        return true;
-    };
-    let Some(message) = view.messages.iter().find(|message| {
-        message.role == OrchestrationMessageRole::User
-            && message.id.0 == format!("{request}-message")
-    }) else {
-        return false;
-    };
-    view.latest_turn.as_ref().is_some_and(|latest| {
-        message.turn_id.as_ref() == Some(&latest.turn_id)
-            || chrono::DateTime::parse_from_rfc3339(&latest.requested_at.0)
-                .ok()
-                .zip(chrono::DateTime::parse_from_rfc3339(&message.created_at.0).ok())
-                .is_some_and(|(requested, created)| requested >= created)
-    })
-}
-
-fn task_is_idle_restore(
-    task: &vitre_contracts::CloudTask,
-    view: Option<&OrchestrationThread>,
-) -> bool {
-    task.state == CloudTaskState::Running
-        && task.idle == Some(true)
-        && (task.wake_only == Some(true) || task.handoff.is_some())
-        && view
-            .and_then(|view| view.latest_turn.as_ref())
-            .is_none_or(|turn| turn.state != OrchestrationLatestTurnState::Running)
-}
-
 pub(super) fn current_request_activities(
     view: &OrchestrationThread,
 ) -> Cow<'_, [vitre_contracts::OrchestrationThreadActivity]> {
@@ -661,133 +406,6 @@ pub(super) fn derive_thread_presentation(
         derive_latest_context_window_snapshot(&view.activities),
     )
 }
-fn task_turn(task: &vitre_contracts::CloudTask) -> Turn {
-    if task.idle == Some(true)
-        && !matches!(
-            task.state,
-            CloudTaskState::Queued | CloudTaskState::Preparing
-        )
-    {
-        return Turn::Finished;
-    }
-    match task.state {
-        CloudTaskState::Queued | CloudTaskState::Preparing => Turn::Preparing,
-        CloudTaskState::Running => Turn::Working,
-        CloudTaskState::WaitingForInput => Turn::Input,
-        CloudTaskState::Completed | CloudTaskState::Cancelled => Turn::Finished,
-        _ => Turn::Idle,
-    }
-}
-
-fn transfer_state(operation: &vitre_contracts::CloudHandoffOperation, conflicts: bool) -> Transfer {
-    use vitre_contracts::{
-        CloudHandoffOperationErrorDisposition as E, CloudHandoffOperationWaitReason as W,
-    };
-    if matches!(
-        operation.phase,
-        CloudHandoffPhase::Completed | CloudHandoffPhase::Cancelled
-    ) {
-        return Transfer::None;
-    }
-    if operation.phase == CloudHandoffPhase::Failed {
-        return if matches!(
-            operation.error_disposition,
-            Some(E::Terminal | E::Retryable)
-        ) {
-            Transfer::Failed
-        } else {
-            Transfer::Recovering
-        };
-    }
-    if operation.cancel_requested == Some(true) {
-        return Transfer::Cancelling;
-    }
-    if conflicts || operation.wait_reason == Some(W::Conflict) {
-        return Transfer::Conflict;
-    }
-    if operation.wait_reason == Some(W::ActiveTurn) {
-        return Transfer::WaitingForTurn;
-    }
-    if operation.wait_reason == Some(W::OwnershipConfirmation) {
-        return Transfer::Recovering;
-    }
-    if operation.error.is_some()
-        && matches!(
-            operation.error_disposition,
-            Some(E::Terminal | E::Retryable)
-        )
-        && !matches!(
-            operation.phase,
-            CloudHandoffPhase::Activating | CloudHandoffPhase::Releasing
-        )
-    {
-        return Transfer::Failed;
-    }
-    Transfer::Moving(
-        match operation.to {
-            vitre_contracts::CloudExecutionTarget::Local => "Local",
-            vitre_contracts::CloudExecutionTarget::CloudGithub => "Cloud: GitHub",
-            _ => "Cloud: Local",
-        }
-        .into(),
-    )
-}
-fn transfer_can_cancel(operation: &vitre_contracts::CloudHandoffOperation) -> bool {
-    let synthetic = operation.revision.is_none()
-        && operation.wait_reason
-            == Some(vitre_contracts::CloudHandoffOperationWaitReason::OwnershipConfirmation);
-    !synthetic
-        && operation.cancel_requested != Some(true)
-        && !matches!(
-            operation.phase,
-            CloudHandoffPhase::Completed
-                | CloudHandoffPhase::Cancelled
-                | CloudHandoffPhase::Failed
-                | CloudHandoffPhase::Activating
-                | CloudHandoffPhase::Releasing
-        )
-}
-
-fn dependency_detail(
-    task: Option<&vitre_contracts::CloudTask>,
-    events: &[vitre_contracts::CloudTaskEvent],
-) -> Option<(String, bool)> {
-    if let Some(setup) = task.and_then(|task| task.dependency_setup.as_ref()) {
-        use vitre_contracts::CloudTaskDependencySetupOutcome as O;
-        let label = match setup.outcome {
-            O::Running => "running",
-            O::Succeeded => "succeeded",
-            O::Reused => "reused",
-            O::Unnecessary => "not required",
-            O::Failed => "failed",
-            O::Unknown(_) => "unknown",
-        };
-        return Some((
-            format!(
-                "Dependency setup: {label}{}",
-                setup
-                    .detail
-                    .as_ref()
-                    .map(|detail| format!(" · {detail}"))
-                    .unwrap_or_default()
-            ),
-            setup.outcome == O::Failed,
-        ));
-    }
-    // Compatibility for workers predating structured setup outcomes. Only disclosure uses legacy copy.
-    events
-        .iter()
-        .rev()
-        .find(|event| {
-            event.phase.0 == "task.warning"
-                || event
-                    .detail
-                    .0
-                    .starts_with("Dependency setup needs attention:")
-        })
-        .map(|event| (event.detail.0.clone(), true))
-}
-
 fn status_frame() -> gpui::Stateful<gpui::Div> {
     h_flex()
         .id("conversation-status")
@@ -827,200 +445,50 @@ fn status_elapsed(started_at: &str, now: chrono::DateTime<chrono::Utc>) -> Optio
     })
 }
 
-fn creation_status(
-    progress: Option<&vitre_contracts::CloudStartProgress>,
-    active: bool,
-    identity: &str,
-) -> ConversationStatus {
-    use vitre_contracts::CloudStartProgressPhase as P;
-    let mut status = ConversationStatus::derive(Facts {
-        identity: format!("draft:{identity}"),
-        ..Facts::default()
-    });
-    if !active
-        && progress.is_none_or(|progress| !matches!(progress.phase, Some(P::Failed | P::Cancelled)))
-    {
-        return status;
-    }
-    let phase = progress.and_then(|progress| progress.phase.as_ref());
-    let (label, busy) = match phase {
-        Some(P::Collection) => ("Collecting workspace files…", true),
-        Some(P::Upload) => ("Uploading workspace…", true),
-        Some(P::Creation) => ("Creating cloud conversation…", true),
-        Some(P::Cancelling) => ("Cancelling workspace upload…", true),
-        Some(P::Cancelled) => ("Workspace upload cancelled", false),
-        Some(P::Completed) => ("Opening cloud conversation…", false),
-        Some(P::Failed) => ("Could not create cloud conversation", false),
-        _ if active => ("Checking workspace creation…", false),
-        _ => ("", false),
-    };
-    status.label = label.into();
-    status.art = if busy {
-        Art::Connecting
-    } else if phase == Some(&P::Failed) {
-        Art::Error
-    } else if active {
-        Art::Warning
-    } else {
-        Art::None
-    };
-    status.facts.started_at = progress.and_then(|progress| progress.started_at.clone());
-    status.facts.turn = if busy { Turn::Preparing } else { Turn::Idle };
-    if matches!(phase, Some(P::Collection | P::Upload | P::Creation)) {
-        status.action = Action::CancelCreation;
-    }
-    if let Some(progress) = progress.filter(|progress| progress.phase == Some(P::Upload))
-        && let (Some(completed), Some(total)) = (progress.completed_bytes, progress.total_bytes)
-        && total > 0
-        && completed >= 0
-        && completed <= total
-    {
-        status.label = format!(
-            "Uploading workspace… {}%",
-            completed.saturating_mul(100) / total
-        );
-    }
-    status
-}
-
 impl ChatApp {
     pub(super) fn conversation_status(&self, cx: &gpui::App) -> ConversationStatus {
         let Some(open) = self.thread.as_ref() else {
-            return self.draft_conversation_status(cx);
+            return self.draft_conversation_status();
         };
         let view = open.state.view.as_deref();
-        let task = self.cloud_task(cx);
-        let idle_restore = task
-            .as_ref()
-            .is_some_and(|task| task_is_idle_restore(task, view));
-        let execution_stale = task
-            .as_ref()
-            .zip(view)
-            .is_some_and(|(task, view)| !cloud_execution_is_current(task, view));
-        let recovery = task.as_ref().map(cloud_recovery).unwrap_or_default();
-        let connection = match &open.feed {
-            ThreadFeed::Local { .. } => phase_connection(open.state.phase),
-            ThreadFeed::Cloud(feed) => cloud_connection(
-                feed.connection_phase,
-                feed.source,
-                feed.live_task.is_some()
-                    || task.as_ref().is_some_and(|task| {
-                        matches!(
-                            task.state,
-                            CloudTaskState::Queued | CloudTaskState::Preparing
-                        )
-                    }),
-                recovery.paused
-                    || recovery.resuming
-                    || task.as_ref().is_some_and(|task| {
-                        task.idle == Some(true)
-                            || matches!(
-                                task.state,
-                                CloudTaskState::Completed | CloudTaskState::Cancelled
-                            )
-                    }),
-            ),
-        };
+        let connection = phase_connection(open.state.phase);
+        let live = connection == Connection::Live;
         let mut facts = Facts {
             identity: format!(
                 "{}:{}",
                 open.id.0,
-                task.as_ref()
-                    .and_then(|task| task.turn_request_id.as_deref())
-                    .or_else(|| view
-                        .and_then(|v| v.latest_turn.as_ref())
-                        .map(|turn| turn.turn_id.0.as_str()))
-                    .or_else(|| task
-                        .as_ref()
-                        .and_then(|t| t.attempt.as_ref())
-                        .map(|a| a.id.as_str()))
+                view.and_then(|v| v.latest_turn.as_ref())
+                    .map(|turn| turn.turn_id.0.as_str())
                     .unwrap_or("idle")
             ),
             connection,
             transcript: if view.is_none() {
                 Transcript::Empty
-            } else if connection == Connection::Live && !execution_stale {
+            } else if live {
                 Transcript::Current
             } else {
                 Transcript::Cached
             },
-            execution_available: connection == Connection::Live && !execution_stale,
-            supports_steering: matches!(open.feed, ThreadFeed::Local { .. }),
-            execution_stale,
-            execution_invalidated: task
-                .as_ref()
-                .is_some_and(|task| task_execution_invalidated(&task.state)),
-            cancellable_preparation: task.as_ref().is_some_and(|task| {
-                matches!(
-                    task.state,
-                    CloudTaskState::Preparing | CloudTaskState::Queued
-                )
-            }),
-            turn: task.as_ref().map(task_turn).unwrap_or_default(),
-            attention: if recovery.paused || recovery.resuming {
-                // A lost heartbeat is recovered by resuming the checkpoint, not
-                // by replaying the last request.
-                Attention::None
-            } else {
-                task.as_ref()
-                    .map(|t| task_attention(&t.state))
-                    .unwrap_or_default()
-            },
-            detail: self
-                .last_error
-                .as_ref()
-                .map(ToString::to_string)
-                .or_else(|| {
-                    task.as_ref()
-                        .filter(|_| !(recovery.paused || recovery.resuming))
-                        .and_then(|t| t.error.as_ref())
-                        .map(|e| e.0.clone())
-                }),
-            ownership_fenced: self.location_switch_blocks_turn(),
-            editable_after_error: task.is_none() || recovery.editable_after_failure,
-            cloud_paused: recovery.paused,
-            cloud_resuming: recovery.resuming,
-            cloud_accepts_message: recovery.accepts_message,
+            execution_available: live,
+            supports_steering: true,
+            detail: self.last_error.as_ref().map(ToString::to_string),
             ..Facts::default()
         };
-        let cleanup_pending = task.as_ref().is_some_and(|task| {
-            task.state == CloudTaskState::Cancelled
-                && task.idle != Some(true)
-                && task.worker.as_ref().is_some_and(|worker| {
-                    !matches!(
-                        worker.state,
-                        vitre_contracts::CloudWorkerState::Stopped
-                            | vitre_contracts::CloudWorkerState::Deleted
-                    )
-                })
-        });
         if let Some(view) = view {
-            if connection == Connection::Live && !execution_stale && !idle_restore {
+            if live {
                 if let Some(turn) = execution_turn(view) {
                     facts.turn = turn;
                     if turn == Turn::Preparing {
                         facts.preparation = Some("Starting your request…".into());
                     }
-                } else if facts.turn != Turn::Preparing {
+                } else {
                     facts.turn = Turn::Finished;
                 }
             }
-            if execution_stale {
-                if matches!(facts.turn, Turn::Working | Turn::Input | Turn::Preparing) {
-                    facts.turn = Turn::Preparing;
-                    facts.preparation = Some("Starting your request…".into());
-                    facts.cancellable_preparation = true;
-                }
-            } else if !idle_restore
-                && task
-                    .as_ref()
-                    .is_none_or(|task| task.state != CloudTaskState::Queued)
-            {
-                if !self.presentation_pending_approvals.is_empty() {
-                    facts.turn = Turn::Approval;
-                } else if !self.presentation_pending_inputs.is_empty() {
-                    facts.turn = Turn::Input;
-                }
+            if !self.presentation_pending_approvals.is_empty() {
+                facts.turn = Turn::Approval;
+            } else if !self.presentation_pending_inputs.is_empty() {
+                facts.turn = Turn::Input;
             }
             if facts.turn == Turn::Working {
                 facts.started_at = view.latest_turn.as_ref().map(|turn| {
@@ -1031,16 +499,13 @@ impl ChatApp {
                         .clone()
                 });
             }
-            if facts.detail.is_none() && !execution_stale && !idle_restore {
+            if facts.detail.is_none() {
                 facts.detail = view
                     .session
                     .as_ref()
                     .and_then(|s| s.last_error.as_ref())
                     .map(|e| e.0.clone());
             }
-        }
-        if cleanup_pending {
-            facts.turn = Turn::Stopping;
         }
         if let Some(pending) = self.local_outbox.get(&open.id) {
             facts.identity = format!("{}:{}", open.id.0, pending.command_id());
@@ -1055,23 +520,6 @@ impl ChatApp {
             facts.detail = pending.error.clone();
             facts.attention = Attention::None;
         }
-        if let Some(pending) = self
-            .cloud_pending_send
-            .as_ref()
-            .filter(|pending| task.as_ref().is_some_and(|task| task.id == pending.task_id))
-        {
-            facts.identity = format!("{}:{}", open.id.0, pending.request_key);
-            facts.started_at = Some(pending.requested_at.0.clone());
-        }
-        if let Some(delivery) = self.cloud_delivery_status(cx) {
-            use cloud_thread::CloudDeliveryState;
-            facts.delivery = match delivery {
-                CloudDeliveryState::Submitting => Delivery::Submitting,
-                CloudDeliveryState::Accepted => Delivery::Accepted,
-                CloudDeliveryState::Unknown => Delivery::Uncertain,
-                CloudDeliveryState::Rejected => Delivery::Rejected,
-            };
-        }
         if let Some(stop) = self.local_stops.get(&open.id).filter(|stop| {
             view.and_then(|view| view.latest_turn.as_ref())
                 .is_some_and(|turn| {
@@ -1085,59 +533,7 @@ impl ChatApp {
                 facts.stop_error = true;
             }
         }
-        if let Some(error) = self
-            .open_cloud_task_id()
-            .as_ref()
-            .and_then(|id| self.cloud_stops.get(id))
-            .and_then(|stop| stop.error.as_ref())
-        {
-            facts.detail = Some(error.clone());
-            facts.stop_error = true;
-        }
-        if self.cloud_stop_pending() {
-            facts.turn = Turn::Stopping;
-        }
-        if let Some(task) = task.as_ref() {
-            if let Some(error) = self.cloud_store.read(cx).task_error(&task.id) {
-                facts.detail = Some(error.into());
-            }
-            if facts.turn == Turn::Preparing && task.state != CloudTaskState::Queued {
-                facts.started_at = task
-                    .preparation
-                    .as_ref()
-                    .filter(|p| task.attempt.as_ref().is_some_and(|a| a.id == p.attempt_id))
-                    .map(|p| p.started_at.0.clone());
-            }
-            facts.preparation = task_preparation_label(task)
-                .map(str::to_owned)
-                .or(facts.preparation);
-        }
-        if let Some(operation) = self
-            .cloud_switch
-            .as_ref()
-            .and_then(|s| s.operation.as_ref())
-        {
-            let terminal = matches!(
-                operation.phase,
-                CloudHandoffPhase::Completed | CloudHandoffPhase::Cancelled
-            );
-            facts.can_cancel_transfer = transfer_can_cancel(operation);
-            facts.transfer = transfer_state(
-                operation,
-                self.cloud_switch
-                    .as_ref()
-                    .is_some_and(|status| !status.conflicts.is_empty()),
-            );
-            if !terminal {
-                facts.identity = format!("{}:{}", open.id.0, operation.id);
-                facts.started_at = operation.started_at.clone();
-                facts.detail = operation.error.as_ref().map(|e| e.0.clone());
-            }
-        } else if self.cloud_switch_saving {
-            facts.transfer = Transfer::Moving("the selected location".into());
-        }
-        if task.is_none()
-            && let Some(provider) = self.selected_provider(cx)
+        if let Some(provider) = self.selected_provider(cx)
             && provider.auth.status == vitre_contracts::ServerProviderAuthStatus::Unauthenticated
         {
             facts.attention = Attention::Auth;
@@ -1148,82 +544,28 @@ impl ChatApp {
             && !facts.stop_error
             && facts.detail.is_some()
             && facts.turn != Turn::Working
-            && facts.transfer == Transfer::None
         {
             facts.attention = Attention::Error;
         }
-        let provider_connected = task.as_ref().is_some_and(|task| {
-            self.cloud_store.read(cx).account_state(&task.provider)
-                == Some(&vitre_contracts::CloudProviderAccountState::Connected)
-        });
-        let mut status = ConversationStatus::derive(facts);
-        if status.action == Action::Reconnect && provider_connected {
-            status.label = "Provider connected · retry this conversation".into();
-            status.action = Action::Retry;
-        }
-        status
+        ConversationStatus::derive(facts)
     }
 
-    fn draft_conversation_status(&self, cx: &gpui::App) -> ConversationStatus {
-        let active = self.draft_creating && self.cloud_creating_project == self.draft_project;
-        if self.draft_creating && !self.draft_work_location.is_cloud() {
+    fn draft_conversation_status(&self) -> ConversationStatus {
+        if self.draft_creating {
             return ConversationStatus::derive(Facts {
                 identity: format!("draft-local:{:?}", self.draft_project),
                 delivery: Delivery::Submitting,
                 ..Facts::default()
             });
         }
-        if let Some(pending) = self.cloud_draft.pending_start.as_ref() {
-            use cloud_thread::CloudDeliveryState as D;
-            if matches!(pending.delivery, D::Unknown | D::Accepted) {
-                let mut status = ConversationStatus::derive(Facts {
-                    identity: format!("draft:{}", pending.input.idempotency_key),
-                    delivery: Delivery::Uncertain,
-                    detail: pending.error.clone(),
-                    started_at: Some(pending.requested_at.clone()),
-                    ..Facts::default()
-                });
-                status.label = if pending.delivery == D::Accepted {
-                    "Confirming cloud conversation…"
-                } else {
-                    "Checking whether your cloud request was received…"
-                }
-                .into();
-                return status;
-            }
-        }
-        let store = self.cloud_store.read(cx);
-        let request_key = self
-            .cloud_draft
-            .pending_start
-            .as_ref()
-            .map(|pending| &pending.input.idempotency_key)
-            .or(self.cloud_draft.request_key.as_ref());
-        let progress = store.creation_status.as_ref().filter(|progress| {
-            progress.request_id.as_ref() == request_key && progress.request_id.is_some()
+        let mut status = ConversationStatus::derive(Facts {
+            identity: "draft:draft".into(),
+            ..Facts::default()
         });
-        let mut status = creation_status(
-            progress,
-            active,
-            request_key.map(String::as_str).unwrap_or("draft"),
-        );
         status.facts.detail = self.last_error.as_ref().map(ToString::to_string);
         if status.facts.detail.is_some() && status.label.is_empty() {
             status.label = "Could not start this conversation".into();
             status.art = Art::Error;
-        }
-        if self.draft_work_location.is_cloud()
-            && !active
-            && status.label.is_empty()
-            && (!self.composer.read(cx).value().trim().is_empty()
-                || !self.pending_attachments.is_empty())
-            && let Some(blocker) = self.cloud_start_blocker(cx)
-        {
-            status.label = blocker.into();
-            status.art = Art::Warning;
-            if store.session != crate::cloud::SessionState::SignedIn {
-                status.action = Action::Account;
-            }
         }
         status
     }
@@ -1233,59 +575,11 @@ impl ChatApp {
         thread: &OrchestrationThreadShell,
         visited: Option<&str>,
     ) -> Option<ThreadStatus> {
-        let task = self
-            .thread_location(&thread.id)
-            .task_id()
-            .and_then(|id| self.cloud_tasks.get(id));
-        if let Some(task) = task {
-            let mut facts = Facts {
-                turn: task_turn(task),
-                attention: task_attention(&task.state),
-                connection: Connection::Dormant,
-                ..Facts::default()
-            };
-            if facts.turn != Turn::Preparing && thread.has_pending_approvals {
-                facts.turn = Turn::Approval;
-            } else if facts.turn != Turn::Preparing && thread.has_pending_user_input {
-                facts.turn = Turn::Input;
-            }
-            let status = ConversationStatus::derive(facts).sidebar();
-            return status.or_else(|| {
-                vitre_state::sidebar::resolve_thread_status(thread, visited).filter(|status| {
-                    !matches!(status, ThreadStatus::Working | ThreadStatus::Connecting)
-                })
-            });
-        }
         vitre_state::sidebar::resolve_thread_status(thread, visited)
     }
 
     pub(super) fn sync_status_motion(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let status = self.conversation_status(cx);
-        let debug_key = format!(
-            "{}:{:?}:{:?}:{:?}:{:?}",
-            status.facts.identity,
-            status.facts.connection,
-            status.facts.delivery,
-            status.facts.turn,
-            status.facts.transfer
-        );
-        if self.status_debug_key.as_ref() != Some(&debug_key) {
-            if std::env::var("VITRE_CLOUD_TIMING")
-                .is_ok_and(|value| matches!(value.as_str(), "1" | "true" | "on"))
-            {
-                eprintln!(
-                    "[vitre-conversation-state] epoch_ms={} identity={} connection={:?} transcript={:?} delivery={:?} turn={:?} transfer={:?}",
-                    chrono::Utc::now().timestamp_millis(),
-                    status.facts.identity,
-                    status.facts.connection,
-                    status.facts.transcript,
-                    status.facts.delivery,
-                    status.facts.turn,
-                    status.facts.transfer
-                );
-            }
-            self.status_debug_key = Some(debug_key);
-        }
         if let Some(open) = self
             .thread
             .as_ref()
@@ -1423,17 +717,9 @@ impl ChatApp {
             .as_ref()
             .filter(|_| status.busy())
             .and_then(|at| status_elapsed(at, chrono::Utc::now()));
-        let action_label = status.action.label(self.is_cloud_thread());
-        let dependency_warning = dependency_detail(
-            self.cloud_task(cx).as_ref(),
-            &self
-                .cloud_detail(cx)
-                .map(|detail| detail.events)
-                .unwrap_or_default(),
-        )
-        .is_some_and(|(_, warning)| warning);
+        let action_label = status.action.label();
         let action = status.action;
-        let primary = status_frame()
+        status_frame()
             .text_xs()
             .text_color(cx.theme().muted_foreground)
             .child(
@@ -1464,212 +750,34 @@ impl ChatApp {
                         .ghost()
                         .xsmall()
                         .label(label)
-                        .on_click(cx.listener(move |app, _, window, cx| {
-                            match action {
-                                Action::Retry => {
-                                    if app.is_cloud_thread() {
-                                        app.retry_cloud_task(cx);
-                                    } else {
-                                        app.last_error = None;
-                                        cx.notify();
-                                    }
-                                }
-                                Action::CheckDelivery => {
-                                    if app.thread.is_none() {
-                                        app.retry_pending_cloud_start(cx);
-                                    } else if app.is_cloud_thread() {
-                                        app.retry_pending_cloud_send(cx);
-                                    } else {
-                                        app.retry_pending_local_send(window, cx);
-                                    }
-                                }
-                                Action::RetryConnection => {
-                                    if let Some(client) = app.workspace_client() {
-                                        client.retry_connection();
-                                    }
-                                    if app.is_cloud_thread() {
-                                        app.sync_cloud_thread(cx);
-                                        app.cloud_store.update(cx, |store, cx| store.refresh(cx));
-                                    }
-                                    cx.notify();
-                                }
-                                Action::Reconnect => {
-                                    if let Some(task) = app.cloud_task(cx) {
-                                        app.connect_cloud_provider(task.provider, window, cx);
-                                    } else {
-                                        app.toggle_settings(window, cx);
-                                    }
-                                }
-                                Action::Account => app.toggle_settings(window, cx),
-                                Action::Conflicts => app.open_location_conflicts(window, cx),
-                                Action::RetryTransfer => app.retry_location_switch(window, cx),
-                                Action::CancelCreation => app
-                                    .cloud_store
-                                    .update(cx, |store, cx| store.cancel_creation(cx)),
-                                Action::None => {}
+                        .on_click(cx.listener(move |app, _, window, cx| match action {
+                            Action::Retry => {
+                                app.last_error = None;
+                                cx.notify();
                             }
+                            Action::CheckDelivery => app.retry_pending_local_send(window, cx),
+                            Action::RetryConnection => {
+                                if let Some(client) = app.workspace_client() {
+                                    client.retry_connection();
+                                }
+                                cx.notify();
+                            }
+                            Action::Reconnect => app.toggle_settings(window, cx),
+                            Action::None => {}
                         })),
-                )
-            })
-            .when(status.facts.can_cancel_transfer, |row| {
-                row.child(
-                    Button::new("status-cancel-transfer")
-                        .ghost()
-                        .xsmall()
-                        .label("Cancel")
-                        .on_click(cx.listener(|app, _, _, cx| app.cancel_location_switch(cx))),
                 )
             })
             .child(
                 Button::new("conversation-details")
                     .ghost()
                     .xsmall()
-                    .icon(if dependency_warning {
-                        IconName::TriangleAlert
-                    } else {
-                        IconName::Info
-                    })
-                    .when(dependency_warning, |button| {
-                        button.text_color(cx.theme().warning)
-                    })
-                    .tooltip(if dependency_warning {
-                        "Dependency setup needs attention · open details"
-                    } else {
-                        "Conversation details and activity"
-                    })
+                    .icon(IconName::Info)
+                    .tooltip("Conversation details and activity")
                     .on_click(
                         cx.listener(|app, _, window, cx| app.open_conversation_details(window, cx)),
                     ),
             )
-            .into_any_element();
-        let login = self
-            .cloud_store
-            .read(cx)
-            .login
-            .clone()
-            .filter(|_| self.is_cloud_thread());
-        v_flex()
-            .child(primary)
-            .children(login.map(|login| {
-                div()
-                    .mx_auto()
-                    .w_full()
-                    .max_w(px(768.))
-                    .px_3()
-                    .py_2()
-                    .child(crate::cloud::render_codex_login(&login, cx))
-            }))
             .into_any_element()
-    }
-
-    pub(super) fn open_location_conflicts(&self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(thread_id) = self.thread.as_ref().map(|thread| thread.id.clone()) else {
-            return;
-        };
-        let Some(status) = self.cloud_switch.as_ref() else {
-            return;
-        };
-        let Some(operation) = status.operation.as_ref() else {
-            return;
-        };
-        let operation_id = operation.id.clone();
-        let conflicts = status.conflicts.clone();
-        let owner = cx.entity().downgrade();
-        window.open_dialog(cx, move |dialog, _, _| {
-            let owner = owner.clone();
-            let thread_id = thread_id.clone();
-            let operation_id = operation_id.clone();
-            let conflicts = conflicts.clone();
-            dialog
-                .title("Resolve file conflicts")
-                .w(px(560.))
-                .content(move |content, _, _cx| {
-                    let mut body = v_flex().gap_3().child(
-                        div()
-                            .text_sm()
-                            .child("Choose which files to keep before moving this conversation."),
-                    );
-                    for conflict in &conflicts {
-                        let path = conflict.0.clone();
-                        let owner = owner.clone();
-                        let thread_id = thread_id.clone();
-                        let operation_id = operation_id.clone();
-                        body = body.child(
-                            Button::new(SharedString::from(format!("conflict-{path}")))
-                                .ghost()
-                                .small()
-                                .label(path.clone())
-                                .on_click(move |_, window, cx| {
-                                    let _ = owner.update(cx, |app, cx| {
-                                        if app
-                                            .thread
-                                            .as_ref()
-                                            .is_some_and(|thread| thread.id == thread_id)
-                                            && app
-                                                .cloud_switch
-                                                .as_ref()
-                                                .and_then(|status| status.operation.as_ref())
-                                                .is_some_and(|operation| {
-                                                    operation.id == operation_id
-                                                })
-                                        {
-                                            window.close_dialog(cx);
-                                            app.edit_switch_conflict(&path, window, cx);
-                                        }
-                                    });
-                                }),
-                        );
-                    }
-                    let mut actions = h_flex().gap_2().flex_wrap();
-                    for (label, choice) in [
-                        (
-                            "Use edited files",
-                            vitre_contracts::CloudSwitchResolveInputChoice::Edited,
-                        ),
-                        (
-                            "Keep local files",
-                            vitre_contracts::CloudSwitchResolveInputChoice::Local,
-                        ),
-                        (
-                            "Keep cloud files",
-                            vitre_contracts::CloudSwitchResolveInputChoice::Cloud,
-                        ),
-                    ] {
-                        let owner = owner.clone();
-                        let thread_id = thread_id.clone();
-                        let operation_id = operation_id.clone();
-                        actions = actions.child(
-                            Button::new(SharedString::from(label))
-                                .small()
-                                .label(label)
-                                .on_click(move |_, window, cx| {
-                                    let _ = owner.update(cx, |app, cx| {
-                                        if app
-                                            .thread
-                                            .as_ref()
-                                            .is_some_and(|thread| thread.id == thread_id)
-                                            && app
-                                                .cloud_switch
-                                                .as_ref()
-                                                .and_then(|status| status.operation.as_ref())
-                                                .is_some_and(|operation| {
-                                                    operation.id == operation_id
-                                                })
-                                        {
-                                            window.close_dialog(cx);
-                                            app.resolve_switch_conflicts(
-                                                choice.clone(),
-                                                window,
-                                                cx,
-                                            );
-                                        }
-                                    });
-                                }),
-                        );
-                    }
-                    content.child(body.child(actions))
-                })
-        });
     }
 
     pub(super) fn open_conversation_details(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1679,15 +787,6 @@ impl ChatApp {
             "Connection: {:?} · History: {:?}",
             status.facts.connection, status.facts.transcript
         ));
-        if let Some((dependency, _)) = dependency_detail(
-            self.cloud_task(cx).as_ref(),
-            &self
-                .cloud_detail(cx)
-                .map(|detail| detail.events)
-                .unwrap_or_default(),
-        ) {
-            lines.push(dependency);
-        }
         if let Some(detail) = status.facts.detail {
             lines.push(detail);
         }
@@ -1702,11 +801,6 @@ impl ChatApp {
                         activity.created_at.0, activity.summary.0
                     ));
                 }
-            }
-        }
-        if let Some(detail) = self.cloud_detail(cx) {
-            for event in detail.events {
-                lines.push(format!("{} · {}", event.created_at.0, event.detail.0));
             }
         }
         window.open_dialog(cx, move |dialog, _, _| {
@@ -1771,18 +865,6 @@ mod tests {
                 execution_available: false,
                 ..working()
             },
-            Facts {
-                execution_stale: true,
-                ..working()
-            },
-            Facts {
-                execution_invalidated: true,
-                ..working()
-            },
-            Facts {
-                ownership_fenced: true,
-                ..working()
-            },
         ] {
             assert!(!ConversationStatus::derive(facts).can_send);
         }
@@ -1817,7 +899,7 @@ mod tests {
     }
     #[test]
     fn running_projection_fences_send_before_provider_session_arrives() {
-        let mut view = crate::cloud::tests::fixtures::thread();
+        let mut view = super::super::thread_feed::thread_fixture();
         view.latest_turn = Some(serde_json::from_value(serde_json::json!({
             "turnId":"turn-starting", "state":"running", "requestedAt":"2026-10-16T10:00:00Z",
             "startedAt":null, "completedAt":null, "assistantMessageId":null, "sourceProposedPlan":null
@@ -1834,46 +916,8 @@ mod tests {
         assert_ne!(status.art, Art::Working);
     }
     #[test]
-    fn queued_task_reports_waiting_without_inventing_worker_preparation() {
-        let mut task = crate::cloud::tests::fixtures::task("queued", CloudTaskState::Queued, false);
-        let status = ConversationStatus::derive(Facts {
-            turn: task_turn(&task),
-            preparation: task_preparation_label(&task).map(str::to_owned),
-            ..Facts::default()
-        });
-        assert_eq!(status.label, "Waiting for a cloud computer…");
-        assert_ne!(status.art, Art::Working);
-        task.state = CloudTaskState::Preparing;
-        let older_worker = ConversationStatus::derive(Facts {
-            turn: task_turn(&task),
-            preparation: task_preparation_label(&task).map(str::to_owned),
-            ..Facts::default()
-        });
-        assert_eq!(older_worker.label, "Preparing cloud workspace…");
-    }
-    #[test]
-    fn idle_restore_does_not_override_a_new_running_projection() {
-        let mut task =
-            crate::cloud::tests::fixtures::task("restore", CloudTaskState::Running, false);
-        task.idle = Some(true);
-        task.wake_only = Some(true);
-        task.turn_request_id = Some("restore-request".into());
-        let mut view = crate::cloud::tests::fixtures::thread();
-        assert!(task_is_idle_restore(&task, Some(&view)));
-        view.latest_turn = Some(
-            serde_json::from_value(serde_json::json!({
-                "turnId":"new-execution", "state":"running", "requestedAt":"2026-10-16T11:00:00Z",
-                "startedAt":"2026-10-16T11:00:00Z", "completedAt":null,
-                "assistantMessageId":null, "sourceProposedPlan":null
-            }))
-            .unwrap(),
-        );
-        assert!(!task_is_idle_restore(&task, Some(&view)));
-        assert!(!cloud_execution_is_current(&task, &view));
-    }
-    #[test]
     fn current_request_scope_excludes_old_questions_including_untagged_legacy_events() {
-        let mut view = crate::cloud::tests::fixtures::thread();
+        let mut view = super::super::thread_feed::thread_fixture();
         view.latest_turn = Some(
             serde_json::from_value(serde_json::json!({
                 "turnId":"current", "state":"running", "requestedAt":"2026-10-16T11:00:00Z",
@@ -1907,7 +951,7 @@ mod tests {
     }
     #[test]
     fn current_request_scope_retains_import_markers_that_fence_historical_actions() {
-        let mut view = crate::cloud::tests::fixtures::thread();
+        let mut view = super::super::thread_feed::thread_fixture();
         view.latest_turn = Some(
             serde_json::from_value(serde_json::json!({
                 "turnId":"restored-turn", "state":"running", "requestedAt":"2026-10-16T11:00:00Z",
@@ -1941,7 +985,7 @@ mod tests {
     }
     #[test]
     fn presentation_snapshot_tracks_requests_resolutions_and_rehydration() {
-        let mut view = crate::cloud::tests::fixtures::thread();
+        let mut view = super::super::thread_feed::thread_fixture();
         view.latest_turn = Some(
             serde_json::from_value(serde_json::json!({
                 "turnId":"active", "state":"running", "requestedAt":"2026-10-16T11:00:00Z",
@@ -2009,72 +1053,6 @@ mod tests {
         assert!(approvals.is_empty());
         assert!(inputs.is_empty());
         assert_eq!(context.unwrap().used_percentage, Some(25.0));
-    }
-    #[test]
-    fn terminal_transfer_failure_stops_motion_at_the_recoverable_phase() {
-        let operation: vitre_contracts::CloudHandoffOperation = serde_json::from_value(serde_json::json!({
-            "id":"move", "conversationId":"conversation", "generation":1,
-            "from":"local", "to":"cloud-local", "phase":"verifying", "error":"Verification failed",
-            "checkpoint":null, "errorDisposition":"retryable"
-        })).unwrap();
-        assert_eq!(transfer_state(&operation, false), Transfer::Failed);
-        assert!(transfer_can_cancel(&operation));
-        let status = ConversationStatus::derive(Facts {
-            transfer: transfer_state(&operation, false),
-            ..working()
-        });
-        assert!(!status.busy());
-        assert_eq!(status.action, Action::RetryTransfer);
-    }
-    #[test]
-    fn dependency_failure_survives_ready_idle_and_empty_reconnect_history() {
-        let mut task =
-            crate::cloud::tests::fixtures::task("setup", CloudTaskState::Preparing, false);
-        task.dependency_setup = Some(serde_json::from_value(serde_json::json!({
-            "attemptId":"attempt", "sequence":2, "outcome":"failed", "updatedAt":"2026-10-16T10:00:00Z", "detail":"pnpm installation timed out"
-        })).unwrap());
-        for state in [CloudTaskState::Running, CloudTaskState::Completed] {
-            task.state = state;
-            task.idle = Some(true);
-            let (line, warning) = dependency_detail(Some(&task), &[]).unwrap();
-            assert!(warning);
-            assert!(line.contains("pnpm installation timed out"));
-        }
-        task.dependency_setup.as_mut().unwrap().outcome =
-            vitre_contracts::CloudTaskDependencySetupOutcome::Reused;
-        assert!(!dependency_detail(Some(&task), &[]).unwrap().1);
-        let event: vitre_contracts::CloudTaskEvent = serde_json::from_value(serde_json::json!({
-            "attemptId":"old-worker", "createdAt":"2026-10-16T10:00:00Z", "cursor":1, "sequence":1, "phase":"task.warning", "detail":"Dependency setup needs attention: installation did not finish."
-        })).unwrap();
-        assert!(dependency_detail(None, &[event]).unwrap().1);
-    }
-    #[test]
-    fn reconnect_reports_disconnect_before_synchronizing_again() {
-        use cloud_thread::CloudSource;
-        assert_eq!(
-            cloud_connection(SyncPhase::Disconnected, CloudSource::Mirror, true, false),
-            Connection::Connecting
-        );
-        assert_eq!(
-            cloud_connection(SyncPhase::Live, CloudSource::Live, true, false),
-            Connection::Live
-        );
-        assert_eq!(
-            cloud_connection(SyncPhase::Disconnected, CloudSource::Live, true, false),
-            Connection::Disconnected
-        );
-        assert_eq!(
-            cloud_connection(SyncPhase::Synchronizing, CloudSource::Live, true, false),
-            Connection::Synchronizing
-        );
-        assert_eq!(
-            cloud_connection(SyncPhase::Live, CloudSource::Live, true, false),
-            Connection::Live
-        );
-        assert_eq!(
-            cloud_connection(SyncPhase::Disconnected, CloudSource::Mirror, false, true),
-            Connection::Dormant
-        );
     }
     #[test]
     fn disconnect_and_sync_are_visible_even_while_waiting_for_approval_or_startup() {
@@ -2147,34 +1125,6 @@ mod tests {
         assert!(!status.can_stop);
     }
     #[test]
-    fn pending_transfer_blocks_new_turns_without_blocking_source_turn_actions() {
-        for transfer in [
-            Transfer::Moving("Local".into()),
-            Transfer::WaitingForTurn,
-            Transfer::Cancelling,
-        ] {
-            let idle = ConversationStatus::derive(Facts {
-                transfer: transfer.clone(),
-                turn: Turn::Finished,
-                ..working()
-            });
-            assert!(!idle.can_send);
-            let active = ConversationStatus::derive(Facts {
-                transfer: transfer.clone(),
-                ..working()
-            });
-            assert!(active.can_stop);
-            let approval = ConversationStatus::derive(Facts {
-                transfer,
-                turn: Turn::Approval,
-                ..working()
-            });
-            assert!(approval.can_respond);
-            assert!(approval.can_stop);
-        }
-    }
-
-    #[test]
     fn required_user_actions_stop_busy_motion_immediately() {
         for (turn, art) in [(Turn::Approval, Art::Approval), (Turn::Input, Art::Input)] {
             let status = ConversationStatus::derive(Facts { turn, ..working() });
@@ -2183,7 +1133,7 @@ mod tests {
             assert!(!status.can_send);
             assert!(status.show_requests);
         }
-        for attention in [Attention::Auth, Attention::Limit, Attention::Error] {
+        for attention in [Attention::Auth, Attention::Error] {
             let status = ConversationStatus::derive(Facts {
                 attention,
                 ..working()
@@ -2192,139 +1142,28 @@ mod tests {
         }
     }
     #[test]
-    fn interrupted_cached_approval_requires_attention_and_an_explicit_request_retry() {
+    fn auth_attention_fences_actions_and_dismiss_clears_errors() {
         let status = ConversationStatus::derive(Facts {
-            connection: Connection::Disconnected,
-            transcript: Transcript::Cached,
-            attention: Attention::Interrupted,
+            attention: Attention::Auth,
             turn: Turn::Approval,
-            ..Facts::default()
+            ..working()
         });
-        assert_eq!(status.label, "Conversation interrupted");
-        assert_eq!(status.art, Art::Warning);
-        assert_eq!(status.sidebar(), Some(ThreadStatus::NeedsAttention));
-        assert!(!status.busy());
         assert!(!status.can_respond);
         assert!(!status.can_stop);
-        assert_eq!(status.action, Action::Retry);
-        assert_eq!(status.action.label(true), Some("Retry request"));
-        assert_eq!(Action::RetryConnection.label(true), Some("Reconnect"));
-        assert_eq!(Action::CheckDelivery.label(true), Some("Check delivery"));
-    }
-
-    #[test]
-    fn paused_cloud_workspace_accepts_a_message_instead_of_a_retry() {
-        let status = ConversationStatus::derive(Facts {
-            connection: Connection::Dormant,
-            transcript: Transcript::Cached,
-            turn: Turn::Idle,
-            execution_invalidated: true,
-            cloud_paused: true,
-            cloud_accepts_message: true,
-            ..Facts::default()
-        });
-        assert_eq!(status.label, "Workspace paused · send a message to resume");
-        assert_eq!(status.art, Art::Warning);
-        assert_eq!(status.action, Action::None);
-        assert!(status.can_send);
-        assert!(!status.can_stop);
-        assert!(!status.can_respond);
-        // A submitted message replaces the paused hint with delivery progress.
-        let sending = ConversationStatus::derive(Facts {
-            delivery: Delivery::Submitting,
-            connection: Connection::Dormant,
-            turn: Turn::Idle,
-            cloud_paused: true,
-            cloud_accepts_message: true,
-            ..Facts::default()
-        });
-        assert_eq!(sending.label, "Sending message…");
-    }
-
-    #[test]
-    fn resuming_cloud_workspace_waits_for_the_stale_worker_to_stop() {
-        let status = ConversationStatus::derive(Facts {
-            connection: Connection::Dormant,
-            transcript: Transcript::Cached,
-            turn: Turn::Idle,
-            execution_invalidated: true,
-            cloud_resuming: true,
-            ..Facts::default()
-        });
-        assert_eq!(status.label, "Reconnecting cloud workspace…");
-        assert_eq!(status.art, Art::Connecting);
-        assert_eq!(status.action, Action::None);
         assert!(!status.can_send);
-    }
-
-    #[test]
-    fn waking_checkpoint_and_idle_worker_accept_messages_without_a_socket() {
-        let waking = ConversationStatus::derive(Facts {
-            connection: Connection::Connecting,
-            turn: Turn::Preparing,
-            preparation: Some("Waiting for a cloud computer…".into()),
-            cancellable_preparation: true,
-            cloud_accepts_message: true,
-            ..Facts::default()
+        assert!(!status.show_requests);
+        assert_eq!(status.action, Action::Reconnect);
+        assert_eq!(Action::Retry.label(), Some("Dismiss"));
+        assert_eq!(Action::RetryConnection.label(), Some("Reconnect"));
+        assert_eq!(Action::CheckDelivery.label(), Some("Check delivery"));
+        // A notification error does not establish that live execution has stopped.
+        let notification_error = ConversationStatus::derive(Facts {
+            attention: Attention::Error,
+            ..working()
         });
-        assert_eq!(waking.label, "Waiting for a cloud computer…");
-        assert!(waking.can_send);
-        let idle_disconnected = ConversationStatus::derive(Facts {
-            connection: Connection::Disconnected,
-            transcript: Transcript::Cached,
-            turn: Turn::Finished,
-            cloud_accepts_message: true,
-            ..Facts::default()
-        });
-        assert!(idle_disconnected.can_send);
-        assert_eq!(idle_disconnected.action, Action::RetryConnection);
-        let preparing_fresh = ConversationStatus::derive(Facts {
-            connection: Connection::Connecting,
-            turn: Turn::Preparing,
-            ..Facts::default()
-        });
-        assert!(!preparing_fresh.can_send);
+        assert!(notification_error.can_stop);
+        assert!(notification_error.can_send);
     }
-
-    #[test]
-    fn cloud_recovery_follows_the_worker_state() {
-        use crate::cloud::tests::fixtures::task;
-        fn worker(state: &str) -> vitre_contracts::CloudWorker {
-            serde_json::from_value(serde_json::json!({
-                "cpu": 2, "diskGiB": 10, "memoryGiB": 4,
-                "environmentId": "environment", "id": "worker", "sandboxId": null,
-                "state": state, "stoppedAt": null
-            }))
-            .unwrap()
-        }
-        let mut interrupted = task("t", CloudTaskState::Interrupted, false);
-        let paused = cloud_recovery(&interrupted);
-        assert!(paused.paused && paused.accepts_message && !paused.resuming);
-        interrupted.worker = Some(worker("stopped"));
-        assert!(cloud_recovery(&interrupted).paused);
-        interrupted.worker = Some(worker("ready"));
-        let resuming = cloud_recovery(&interrupted);
-        assert!(resuming.resuming && !resuming.paused && !resuming.accepts_message);
-
-        let mut idle = task("t", CloudTaskState::Running, false);
-        idle.idle = Some(true);
-        idle.worker = Some(worker("ready"));
-        assert!(cloud_recovery(&idle).accepts_message);
-        idle.idle = Some(false);
-        assert!(!cloud_recovery(&idle).accepts_message);
-
-        let mut waking = task("t", CloudTaskState::Queued, false);
-        waking.wake_only = Some(true);
-        assert!(cloud_recovery(&waking).accepts_message);
-        waking.wake_only = None;
-        assert!(!cloud_recovery(&waking).accepts_message);
-
-        let mut failed = task("t", CloudTaskState::Failed, false);
-        assert!(cloud_recovery(&failed).editable_after_failure);
-        failed.worker = Some(worker("ready"));
-        assert!(!cloud_recovery(&failed).editable_after_failure);
-    }
-
     #[test]
     fn sidebar_keeps_user_questions_distinct_from_warnings_and_errors() {
         let input = ConversationStatus::derive(Facts {
@@ -2332,7 +1171,7 @@ mod tests {
             ..working()
         });
         assert_eq!(input.sidebar(), Some(ThreadStatus::AwaitingInput));
-        for attention in [Attention::Auth, Attention::Limit, Attention::Error] {
+        for attention in [Attention::Auth, Attention::Error] {
             let status = ConversationStatus::derive(Facts {
                 attention,
                 ..working()
@@ -2340,42 +1179,6 @@ mod tests {
             assert_eq!(status.sidebar(), Some(ThreadStatus::NeedsAttention));
             assert!(!status.busy());
         }
-    }
-    #[test]
-    fn authoritative_interruption_fences_actions_even_with_a_stale_live_approval() {
-        for attention in [Attention::Interrupted, Attention::Auth, Attention::Limit] {
-            let status = ConversationStatus::derive(Facts {
-                attention,
-                turn: Turn::Approval,
-                ..working()
-            });
-            assert!(!status.can_respond);
-            assert!(!status.can_stop);
-            assert!(!status.can_send);
-            assert!(!status.show_requests);
-        }
-        for state in [
-            CloudTaskState::Failed,
-            CloudTaskState::Interrupted,
-            CloudTaskState::NeedsAuth,
-            CloudTaskState::UsageLimited,
-        ] {
-            let status = ConversationStatus::derive(Facts {
-                attention: task_attention(&state),
-                execution_invalidated: task_execution_invalidated(&state),
-                turn: Turn::Approval,
-                ..working()
-            });
-            assert!(!status.can_respond);
-            assert!(!status.can_stop);
-            assert!(!status.show_requests);
-        }
-        // A notification error does not establish that live execution has stopped.
-        let notification_error = ConversationStatus::derive(Facts {
-            attention: Attention::Error,
-            ..working()
-        });
-        assert!(notification_error.can_stop);
     }
     #[test]
     fn uncertain_delivery_is_preserved_and_does_not_offer_a_new_send() {
@@ -2426,51 +1229,6 @@ mod tests {
         assert!(!settled.busy());
     }
     #[test]
-    fn transfer_cancel_and_wait_states_follow_typed_journal_fields() {
-        let mut operation: vitre_contracts::CloudHandoffOperation =
-            serde_json::from_value(serde_json::json!({
-                "id":"move-1", "conversationId":"conversation", "generation":1,
-                "from":"cloud-local", "to":"local", "phase":"waiting", "error":null,
-                "checkpoint":null, "waitReason":"active-turn"
-            }))
-            .unwrap();
-        assert_eq!(transfer_state(&operation, false), Transfer::WaitingForTurn);
-        assert!(transfer_can_cancel(&operation));
-        operation.wait_reason =
-            Some(vitre_contracts::CloudHandoffOperationWaitReason::OwnershipConfirmation);
-        assert!(!transfer_can_cancel(&operation));
-        operation.revision = Some(1);
-        assert!(transfer_can_cancel(&operation));
-        operation.cancel_requested = Some(true);
-        assert_eq!(transfer_state(&operation, false), Transfer::Cancelling);
-        assert!(!transfer_can_cancel(&operation));
-        operation.phase = CloudHandoffPhase::Cancelled;
-        assert_eq!(transfer_state(&operation, false), Transfer::None);
-        operation.phase = CloudHandoffPhase::Failed;
-        assert_eq!(transfer_state(&operation, false), Transfer::Recovering);
-        operation.error_disposition =
-            Some(vitre_contracts::CloudHandoffOperationErrorDisposition::Terminal);
-        assert_eq!(transfer_state(&operation, false), Transfer::Failed);
-    }
-    #[test]
-    fn conflict_and_unknown_ownership_are_static_and_fenced() {
-        for (transfer, action) in [
-            (Transfer::Conflict, Action::Conflicts),
-            (Transfer::Recovering, Action::None),
-            (Transfer::Failed, Action::RetryTransfer),
-        ] {
-            let status = ConversationStatus::derive(Facts {
-                transfer,
-                ownership_fenced: true,
-                ..working()
-            });
-            assert_eq!(status.action, action);
-            assert!(!status.busy());
-            assert!(!status.can_send);
-            assert!(!status.can_stop);
-        }
-    }
-    #[test]
     fn busy_art_starts_at_150ms_but_state_and_actions_are_immediate() {
         let mut motion = StatusMotion::default();
         let now = Instant::now();
@@ -2519,40 +1277,6 @@ mod tests {
         ] {
             assert!(!infrastructure_activity(kind));
         }
-    }
-    #[test]
-    fn creation_progress_is_typed_and_percent_requires_a_real_total() {
-        let progress = |phase: &str, completed: Option<i64>, total: Option<i64>| {
-            serde_json::from_value::<vitre_contracts::CloudStartProgress>(serde_json::json!({
-                "message": "arbitrary diagnostic text", "requestId": "request", "phase": phase,
-                "completedBytes": completed, "totalBytes": total
-            }))
-            .unwrap()
-        };
-        let unknown = creation_status(Some(&progress("unknown", None, None)), true, "request");
-        assert_eq!(unknown.label, "Checking workspace creation…");
-        assert!(!unknown.busy());
-        let upload = creation_status(
-            Some(&progress("upload", Some(50), Some(200))),
-            true,
-            "request",
-        );
-        assert_eq!(upload.label, "Uploading workspace… 25%");
-        assert_eq!(upload.action, Action::CancelCreation);
-        assert_eq!(
-            creation_status(Some(&progress("upload", Some(50), None)), true, "request").label,
-            "Uploading workspace…"
-        );
-        assert!(
-            creation_status(
-                Some(&progress("upload", Some(50), Some(200))),
-                false,
-                "request"
-            )
-            .label
-            .is_empty()
-        );
-        assert!(!creation_status(Some(&progress("failed", None, None)), false, "request").busy());
     }
 
     struct StatusProbe {

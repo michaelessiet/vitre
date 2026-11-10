@@ -1,6 +1,6 @@
 //! VCS decoration propagation for the file tree.
 //!
-//! Port of `apps/web/src/components/files/fileTreeGitStatus.ts`
+//! Port of T3 Code's `apps/web/src/components/files/fileTreeGitStatus.ts`
 //! (`buildFileTreeGitDecorations`): projects `vcs.getFileStatuses` entries
 //! onto per-row tree decorations — a status for every reported file plus an
 //! aggregated status for every ancestor directory, so a change buried deep in

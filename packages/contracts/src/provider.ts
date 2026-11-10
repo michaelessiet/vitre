@@ -132,5 +132,15 @@ export const ProviderEvent = Schema.Struct({
   requestKind: Schema.optional(ProviderRequestKind),
   textDelta: Schema.optional(Schema.String),
   payload: Schema.optional(Schema.Unknown),
+  /**
+   * Set when a subagent's own conversation produced this event: the
+   * subagent's provider thread, and the tool call that spawned it.
+   */
+  subagent: Schema.optional(
+    Schema.Struct({
+      threadId: TrimmedNonEmptyString,
+      toolCallId: Schema.optional(TrimmedNonEmptyString),
+    }),
+  ),
 });
 export type ProviderEvent = typeof ProviderEvent.Type;

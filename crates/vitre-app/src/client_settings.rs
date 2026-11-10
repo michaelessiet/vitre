@@ -41,7 +41,7 @@ pub const DEFAULT_GLASS_OPACITY: u32 = 80;
 /// Which palette the window paints with.
 ///
 /// Electron keeps this out of `ClientSettings` entirely — it is a raw
-/// `"t3code:theme"` string in `localStorage` (`apps/web/src/hooks/useTheme.ts`)
+/// `"t3code:theme"` string in `localStorage` (T3 Code's `apps/web/src/hooks/useTheme.ts`)
 /// mirrored to the shell — but the values and the `system` default are its
 /// values, and one file is friendlier than two.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -101,7 +101,6 @@ pub struct StoredSettings {
     pub auto_save_on_focus_change: bool,
     pub show_message_timestamps: bool,
     pub editor_font_size: u32,
-    pub cloud_method_by_project: std::collections::HashMap<String, String>,
     pub default_model: Option<vitre_contracts::ModelSelection>,
     pub favorite_editor: Option<vitre_contracts::EditorId>,
     pub project_tabs_enabled: bool,
@@ -131,7 +130,6 @@ impl Default for StoredSettings {
             auto_save_on_focus_change: false,
             show_message_timestamps: true,
             editor_font_size: 14,
-            cloud_method_by_project: Default::default(),
             default_model: None,
             favorite_editor: None,
             project_tabs_enabled: false,

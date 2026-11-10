@@ -48,6 +48,21 @@ import { ServerSettingsService } from "../../serverSettings.ts";
 const providerTurnKey = (threadId: ThreadId, turnId: TurnId) => `${threadId}:${turnId}`;
 const providerTaskKey = (threadId: ThreadId, taskId: string) => `${threadId}:${taskId}`;
 
+/** Fields that let a client place any task activity without its start event. */
+function taskIdentityPayload(payload: {
+  readonly taskId: string;
+  readonly toolUseId?: string | undefined;
+  readonly agentType?: string | undefined;
+  readonly background?: boolean | undefined;
+}) {
+  return {
+    taskId: payload.taskId,
+    ...(payload.toolUseId ? { toolUseId: payload.toolUseId } : {}),
+    ...(payload.agentType ? { agentType: payload.agentType } : {}),
+    ...(payload.background !== undefined ? { background: payload.background } : {}),
+  };
+}
+
 // Fallback when the in-memory description cache no longer has the task name
 // (server restart, session-exit sweep, TTL/capacity eviction): earlier
 // task.started/task.progress activities for the task are persisted with it.
@@ -517,12 +532,16 @@ export function runtimeEventToActivities(
           summary:
             event.payload.taskType === "plan"
               ? "Plan task started"
-              : event.payload.taskType
-                ? `${event.payload.taskType} task started`
-                : "Task started",
+              : event.payload.agentType
+                ? `${event.payload.agentType} agent started`
+                : event.payload.taskType
+                  ? `${event.payload.taskType} task started`
+                  : "Task started",
           payload: {
-            taskId: event.payload.taskId,
+            ...taskIdentityPayload(event.payload),
             ...(event.payload.taskType ? { taskType: event.payload.taskType } : {}),
+            ...(event.payload.prompt ? { prompt: event.payload.prompt } : {}),
+            ...(event.payload.model ? { model: event.payload.model } : {}),
             ...(event.payload.description
               ? { detail: truncateDetail(event.payload.description) }
               : {}),
@@ -545,7 +564,7 @@ export function runtimeEventToActivities(
               ? truncateDetail(event.payload.description, 120)
               : "Reasoning update",
           payload: {
-            taskId: event.payload.taskId,
+            ...taskIdentityPayload(event.payload),
             ...(event.payload.description.trim().length > 0
               ? { title: truncateDetail(event.payload.description, 120) }
               : {}),
@@ -554,6 +573,57 @@ export function runtimeEventToActivities(
             ...(event.payload.lastToolName ? { lastToolName: event.payload.lastToolName } : {}),
             ...(event.payload.usage !== undefined ? { usage: event.payload.usage } : {}),
           },
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
+    case "task.updated": {
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: event.payload.status === "failed" ? "error" : "info",
+          kind: "task.updated",
+          summary: event.payload.background
+            ? "Agent moved to the background"
+            : event.payload.status
+              ? `Agent ${event.payload.status}`
+              : "Agent updated",
+          payload: {
+            ...taskIdentityPayload(event.payload),
+            ...(event.payload.status ? { status: event.payload.status } : {}),
+            ...(event.payload.description
+              ? { title: truncateDetail(event.payload.description, 120) }
+              : {}),
+            ...(event.payload.error ? { detail: truncateDetail(event.payload.error) } : {}),
+          },
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
+    case "task.transcript": {
+      const { entry } = event.payload;
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: entry.kind === "tool_result" && entry.isError ? "error" : "info",
+          kind: "task.transcript",
+          summary:
+            entry.kind === "tool"
+              ? entry.toolName
+              : entry.kind === "tool_result"
+                ? entry.isError
+                  ? "Tool failed"
+                  : "Tool result"
+                : entry.kind === "reasoning"
+                  ? "Reasoning"
+                  : "Message",
+          payload: { ...taskIdentityPayload(event.payload), entry },
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
         },
@@ -574,7 +644,7 @@ export function runtimeEventToActivities(
                 ? "Task stopped"
                 : "Task completed",
           payload: {
-            taskId: event.payload.taskId,
+            ...taskIdentityPayload(event.payload),
             status: event.payload.status,
             ...(taskTitle ? { title: truncateDetail(taskTitle, 120) } : {}),
             // summary + detail mirror task.progress: clients label the row from
@@ -648,6 +718,8 @@ export function runtimeEventToActivities(
           summary: event.payload.title ?? "Tool updated",
           payload: {
             itemType: event.payload.itemType,
+            // The provider's tool call id: subagent cards attach to this row by it.
+            ...(event.itemId ? { itemId: event.itemId } : {}),
             ...(event.payload.status ? { status: event.payload.status } : {}),
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
             ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
@@ -671,6 +743,8 @@ export function runtimeEventToActivities(
           summary: event.payload.title ?? "Tool",
           payload: {
             itemType: event.payload.itemType,
+            // The provider's tool call id: subagent cards attach to this row by it.
+            ...(event.itemId ? { itemId: event.itemId } : {}),
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
             ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
           },
@@ -693,6 +767,8 @@ export function runtimeEventToActivities(
           summary: `${event.payload.title ?? "Tool"} started`,
           payload: {
             itemType: event.payload.itemType,
+            // The provider's tool call id: subagent cards attach to this row by it.
+            ...(event.itemId ? { itemId: event.itemId } : {}),
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
           },
           turnId: toTurnId(event.turnId) ?? null,
@@ -1873,7 +1949,11 @@ const make = Effect.gen(function* () {
         }
       }
 
-      if (event.type === "task.started" || event.type === "task.progress") {
+      if (
+        event.type === "task.started" ||
+        event.type === "task.progress" ||
+        event.type === "task.updated"
+      ) {
         const description = event.payload.description?.trim();
         if (description) {
           yield* rememberTaskDescription(thread.id, event.payload.taskId, description);

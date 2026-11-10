@@ -23,6 +23,8 @@ import {
   buildCommitMessagePrompt,
   buildPrContentPrompt,
   buildThreadTitlePrompt,
+  buildSubagentSummaryPrompt,
+  sanitizeSubagentSummary,
 } from "./TextGenerationPrompts.ts";
 import * as TextGeneration from "./TextGeneration.ts";
 import {
@@ -39,6 +41,7 @@ const OpenCodeTextGenerationOperation = Schema.Literals([
   "generatePrContent",
   "generateBranchName",
   "generateThreadTitle",
+  "generateSubagentSummary",
 ]);
 
 type OpenCodeTextGenerationOperation = typeof OpenCodeTextGenerationOperation.Type;
@@ -253,7 +256,8 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle";
+      | "generateThreadTitle"
+      | "generateSubagentSummary";
   }) =>
     sharedServerMutex.withPermit(
       Effect.gen(function* () {
@@ -611,10 +615,27 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
       };
     });
 
+  const generateSubagentSummary: TextGeneration.TextGeneration["Service"]["generateSubagentSummary"] =
+    Effect.fn("OpenCodeTextGeneration.generateSubagentSummary")(function* (input) {
+      const { prompt, outputSchema } = buildSubagentSummaryPrompt({
+        task: input.task,
+        transcript: input.transcript,
+      });
+      const generated = yield* runOpenCodeJson({
+        operation: "generateSubagentSummary",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson: outputSchema,
+        modelSelection: input.modelSelection,
+      });
+      return { summary: sanitizeSubagentSummary(generated.summary) };
+    });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    generateSubagentSummary,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

@@ -21,6 +21,7 @@ import type {
   ProviderSession,
   ProviderSessionStartInput,
   ProviderStopSessionInput,
+  RuntimeTaskId,
   ThreadId,
   ProviderTurnStartResult,
 } from "@t3tools/contracts";
@@ -57,6 +58,15 @@ export interface ProviderServiceShape {
   readonly interruptTurn: (
     input: ProviderInterruptTurnInput,
   ) => Effect.Effect<void, ProviderServiceError>;
+
+  /**
+   * Stop one provider task (a subagent or background task). Succeeds with
+   * `false` when the thread's provider cannot stop a task on its own.
+   */
+  readonly stopTask: (input: {
+    readonly threadId: ThreadId;
+    readonly taskId: RuntimeTaskId;
+  }) => Effect.Effect<boolean, ProviderServiceError>;
 
   /**
    * Respond to a provider approval request.

@@ -103,6 +103,7 @@ function createProviderServiceHarness() {
     startSession: () => unsupported(),
     sendTurn: () => unsupported(),
     interruptTurn: () => unsupported(),
+    stopTask: () => unsupported(),
     respondToRequest: () => unsupported(),
     respondToUserInput: () => unsupported(),
     stopSession: () => unsupported(),
@@ -3333,6 +3334,67 @@ describe("ProviderRuntimeIngestion", () => {
         (entry: ProviderRuntimeTestProposedPlan) => entry.id === "plan:thread-1:turn:turn-task-1",
       )?.planMarkdown,
     ).toBe("# Plan title");
+  });
+
+  it("keeps subagent identity, updates and transcript entries on task activities", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    const base = {
+      provider: ProviderDriverKind.make("claudeAgent"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-agent-1"),
+    };
+    const identity = { taskId: "task-agent-1", toolUseId: "toolu_agent", agentType: "Explore" };
+
+    harness.emit({
+      ...base,
+      type: "task.started",
+      eventId: asEventId("evt-agent-started"),
+      payload: { ...identity, description: "Find the reducers", prompt: "Look in crates/" },
+    });
+    harness.emit({
+      ...base,
+      type: "task.transcript",
+      eventId: asEventId("evt-agent-tool"),
+      payload: {
+        ...identity,
+        entry: { kind: "tool", toolUseId: "toolu_grep", toolName: "Grep", detail: "reduce" },
+      },
+    });
+    harness.emit({
+      ...base,
+      type: "task.updated",
+      eventId: asEventId("evt-agent-backgrounded"),
+      payload: { ...identity, background: true, status: "running" },
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-agent-backgrounded",
+      ),
+    );
+    const byId = (id: string) =>
+      thread.activities.find((activity: ProviderRuntimeTestActivity) => activity.id === id);
+
+    const started = byId("evt-agent-started");
+    expect(started?.summary).toBe("Explore agent started");
+    expect(started?.payload).toMatchObject({
+      ...identity,
+      detail: "Find the reducers",
+      prompt: "Look in crates/",
+    });
+    const tool = byId("evt-agent-tool");
+    expect(tool?.kind).toBe("task.transcript");
+    expect(tool?.summary).toBe("Grep");
+    expect(tool?.payload).toMatchObject({
+      ...identity,
+      entry: { kind: "tool", toolName: "Grep", detail: "reduce" },
+    });
+    const updated = byId("evt-agent-backgrounded");
+    expect(updated?.kind).toBe("task.updated");
+    expect(updated?.summary).toBe("Agent moved to the background");
+    expect(updated?.payload).toMatchObject({ ...identity, background: true, status: "running" });
   });
 
   it("titles task activities with the task description, including on completion", async () => {

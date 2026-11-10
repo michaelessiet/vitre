@@ -65,6 +65,7 @@ import {
   type CodexSessionRuntimeOptions,
   type CodexSessionRuntimeShape,
 } from "./CodexSessionRuntime.ts";
+import { codexCollabTaskEvents, codexSubagentRuntimeEvents } from "./CodexSubagents.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import { resolveCodexLaunchArgs } from "./codexLaunchArgs.ts";
 const isCodexAppServerProcessExitedError = Schema.is(CodexErrors.CodexAppServerProcessExitedError);
@@ -520,6 +521,13 @@ function mapToRuntimeEvents(
     ];
   }
 
+  // A subagent's own items belong to its task transcript, never the parent
+  // conversation. Its requests (approvals) and their resolutions still flow
+  // through, since the person must answer them.
+  if (event.kind === "notification" && event.subagent && event.method.startsWith("item/")) {
+    return codexSubagentRuntimeEvents(event, runtimeEventBase(event, canonicalThreadId));
+  }
+
   if (event.kind === "request") {
     if (event.method === "item/tool/requestUserInput") {
       const payload =
@@ -841,7 +849,10 @@ function mapToRuntimeEvents(
 
   if (event.method === "item/started") {
     const started = mapItemLifecycle(event, canonicalThreadId, "item.started");
-    return started ? [started] : [];
+    return [
+      ...(started ? [started] : []),
+      ...codexCollabTaskEvents(event, runtimeEventBase(event, canonicalThreadId)),
+    ];
   }
 
   if (event.method === "item/completed") {
@@ -867,7 +878,10 @@ function mapToRuntimeEvents(
       ];
     }
     const completed = mapItemLifecycle(event, canonicalThreadId, "item.completed");
-    return completed ? [completed] : [];
+    return [
+      ...(completed ? [completed] : []),
+      ...codexCollabTaskEvents(event, runtimeEventBase(event, canonicalThreadId)),
+    ];
   }
 
   if (
@@ -1619,6 +1633,18 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       ),
     );
 
+  const stopTask: NonNullable<CodexAdapterShape["stopTask"]> = (threadId, taskId) =>
+    requireSession(threadId).pipe(
+      // A Codex subagent's task id is its thread id; stopping interrupts its turn.
+      Effect.flatMap((session) => session.runtime.interruptSubagent(taskId)),
+      Effect.asVoid,
+      Effect.mapError((cause) =>
+        cause._tag === "ProviderAdapterSessionNotFoundError"
+          ? cause
+          : mapCodexRuntimeError(threadId, "turn/interrupt", cause),
+      ),
+    );
+
   const readThread: CodexAdapterShape["readThread"] = (threadId) =>
     requireSession(threadId).pipe(
       Effect.flatMap((session) => session.runtime.readThread),
@@ -1746,6 +1772,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     startSession,
     sendTurn,
     interruptTurn,
+    stopTask,
     readThread,
     rollbackThread,
     respondToRequest,

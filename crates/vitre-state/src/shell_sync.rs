@@ -1,5 +1,5 @@
 //! Pure shell-projection state machine: the data half of
-//! `packages/client-runtime/src/state/shell.ts` (`makeEnvironmentShellState`).
+//! T3 Code's `packages/client-runtime/src/state/shell.ts` (`makeEnvironmentShellState`).
 //!
 //! The IO layer re-fetches the HTTP shell snapshot on every (re)subscription
 //! and feeds it through [`ShellProjection::apply_snapshot`]; the resulting

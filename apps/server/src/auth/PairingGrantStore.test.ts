@@ -13,12 +13,7 @@ import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import * as PairingGrantStore from "./PairingGrantStore.ts";
 
 const makeServerConfigLayer = (
-  overrides?: Partial<
-    Pick<
-      ServerConfig.ServerConfig["Service"],
-      "desktopBootstrapToken" | "residentCloudBootstrap" | "mode"
-    >
-  >,
+  overrides?: Partial<Pick<ServerConfig.ServerConfig["Service"], "desktopBootstrapToken" | "mode">>,
 ) =>
   Layer.effect(
     ServerConfig.ServerConfig,
@@ -34,12 +29,7 @@ const makeServerConfigLayer = (
   );
 
 const makePairingGrantStoreLayer = (
-  overrides?: Partial<
-    Pick<
-      ServerConfig.ServerConfig["Service"],
-      "desktopBootstrapToken" | "residentCloudBootstrap" | "mode"
-    >
-  >,
+  overrides?: Partial<Pick<ServerConfig.ServerConfig["Service"], "desktopBootstrapToken" | "mode">>,
 ) =>
   PairingGrantStore.layer.pipe(
     Layer.provide(SqlitePersistenceMemory),
@@ -228,90 +218,6 @@ it.layer(NodeServices.layer)("PairingGrantStore.layer", (it) => {
       expect(revokedConsume.message).toContain("no longer available");
       expect(revokedConsume._tag).toBe("UnavailableBootstrapCredentialError");
     }).pipe(Effect.provide(makePairingGrantStoreLayer())),
-  );
-
-  it.effect("keeps only the resident cloud seed reusable for the managed process lifetime", () =>
-    Effect.gen(function* () {
-      const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
-      const first = yield* bootstrapCredentials.consume("resident-bootstrap-token");
-      yield* TestClock.adjust(Duration.days(31));
-      const later = yield* bootstrapCredentials.consume("resident-bootstrap-token");
-      yield* TestClock.adjust(Duration.days(31));
-      const again = yield* bootstrapCredentials.consume("resident-bootstrap-token");
-      const unknown = yield* Effect.flip(bootstrapCredentials.consume("another-token"));
-
-      expect(later).toEqual(first);
-      expect(again).toEqual(first);
-      expect(first.expiresAt).toBeUndefined();
-      expect(first.subject).toBe("resident-cloud-bootstrap");
-      expect(first.scopes).toEqual([
-        "orchestration:read",
-        "orchestration:operate",
-        "terminal:operate",
-        "review:write",
-        "relay:read",
-      ]);
-      expect(unknown._tag).toBe("UnknownBootstrapCredentialError");
-    }).pipe(
-      Effect.provide(
-        makePairingGrantStoreLayer({
-          mode: "desktop",
-          desktopBootstrapToken: "resident-bootstrap-token",
-          residentCloudBootstrap: true,
-        }),
-      ),
-    ),
-  );
-
-  it.effect("preserves single use and five-minute expiry for resident cloud pairing links", () =>
-    Effect.gen(function* () {
-      const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
-      const consumed = yield* bootstrapCredentials.issueOneTimeToken();
-      yield* bootstrapCredentials.consume(consumed.credential);
-      const reused = yield* Effect.flip(bootstrapCredentials.consume(consumed.credential));
-      const expiring = yield* bootstrapCredentials.issueOneTimeToken();
-      yield* TestClock.adjust(Duration.minutes(5));
-      const expired = yield* Effect.flip(bootstrapCredentials.consume(expiring.credential));
-
-      expect(reused._tag).toBe("UnknownBootstrapCredentialError");
-      expect(expired._tag).toBe("ExpiredBootstrapCredentialError");
-      yield* bootstrapCredentials.consume("resident-bootstrap-token");
-    }).pipe(
-      Effect.provide(
-        makePairingGrantStoreLayer({
-          mode: "desktop",
-          desktopBootstrapToken: "resident-bootstrap-token",
-          residentCloudBootstrap: true,
-        }),
-      ),
-    ),
-  );
-
-  it.effect("does not enable the resident policy in web mode", () =>
-    Effect.gen(function* () {
-      const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
-      yield* TestClock.adjust(Duration.hours(24));
-      const expired = yield* Effect.flip(bootstrapCredentials.consume("desktop-bootstrap-token"));
-      expect(expired._tag).toBe("ExpiredBootstrapCredentialError");
-    }).pipe(
-      Effect.provide(
-        makePairingGrantStoreLayer({
-          mode: "web",
-          desktopBootstrapToken: "desktop-bootstrap-token",
-          residentCloudBootstrap: true,
-        }),
-      ),
-    ),
-  );
-
-  it.effect("cannot create a resident grant without a configured seed", () =>
-    Effect.gen(function* () {
-      const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
-      const unknown = yield* Effect.flip(bootstrapCredentials.consume("resident-bootstrap-token"));
-      expect(unknown._tag).toBe("UnknownBootstrapCredentialError");
-    }).pipe(
-      Effect.provide(makePairingGrantStoreLayer({ mode: "desktop", residentCloudBootstrap: true })),
-    ),
   );
 
   it.effect("identifies consume-available failures and preserves their cause", () => {

@@ -11,6 +11,8 @@
 | Edit settings or submit a form         | Shared input/form controls in the existing settings/dialog layout | [settings/forms.rs](../../crates/vitre-app/src/settings/forms.rs)                                                              |
 | Explain an action or report its result | Shared tooltip or notification                                    | [polish.rs](../../crates/vitre-app/src/chat/polish.rs)                                                                         |
 | Keep work alongside chat               | Dock surface with the shared tab strip                            | [right_panel.rs](../../crates/vitre-app/src/chat/right_panel.rs)                                                               |
+| See plan limits                        | Usage dock surface (limit bars)                                   | [usage_ui.rs](../../crates/vitre-app/src/chat/usage_ui.rs)                                                                     |
+| Follow a subagent or background task   | Agent card (inline and in the Agents dock surface)                | [subagents_ui.rs](../../crates/vitre-app/src/chat/subagents_ui.rs)                                                             |
 
 ## Searchable picker
 
@@ -85,35 +87,57 @@ The chat composer owns typing whenever it is focused. Embedded native views must
 release keyboard focus when a picker or text input is selected. Verify this in
 the native application because a static image cannot establish input routing.
 
-## Lens overview and inline visuals
+## Agent cards
 
-[Native Lens](../../crates/vitre-app/src/lens.rs) keeps account-wide review work
-outside project conversations. Its Overview uses a constrained reading column,
-unboxed headline metrics, compact activity bars, a short summary, and quiet rows
-for attention and cleanup. Keep the chat transcript in its own tab. The review
-action stays available in either tab and does not depend on scheduling being on.
+A subagent or background task is one card, drawn in place of the tool call
+that launched it and again in the dock's **Agents** surface. State comes from
+`vitre_state::subagents`.
 
-Use the shared searchable command picker for model selection on desktop. Mobile
-uses left-aligned search rows with model, provider, and a selected checkmark. An
-explicit model can be chosen before the user has used it in a conversation.
+**Anatomy:** outline icon (`Bot` for an agent, terminal for a background
+task) → title (`Type · task`) over a muted meta line (status glyph, status,
+elapsed, tools, tokens) → trailing extra-small ghost **Stop** while active →
+chevron. One muted live line sits under the header: the small-model summary
+while running, the result once finished. Several agents launched by one call
+stack under a quiet `Running N of M agents` label.
 
-[Inline visuals](../../crates/vitre-app/src/visuals.rs) follow the same content
-hierarchy: a small title and provenance, large headline figures, quiet view tabs,
-a compact chart, and an overflow menu for data/source/copy/reset. Avoid boxing
-every visual in a contrasting card or filling a toolbar with utility actions.
-Use theme accents sparingly and retain an equivalent data view.
+**Expanded:** the task prompt, then the transcript on the work-row guide line
+(`border-l`, `ml_6`): text and reasoning as short labelled paragraphs, tool
+calls as icon + name + mono detail + result glyph. Only the latest steps show;
+`Show N earlier steps` reveals the rest.
 
-Long names wrap; long reasons have a details action. Cleanup always has a separate
-confirmation describing its scope, with visible Cancel and action buttons. A
-model response or chart interaction cannot approve cleanup.
+**States:** Stop changes to a disabled **Stopping…** until the provider
+reports the end; a failed stop request restores the button and reports the
+error. The Agents surface splits **Running** from **Finished** and has an empty
+state. Colors are semantic: primary while running, warning when queued or
+paused, success, danger, and muted when stopped.
+
+## Usage limits
+
+The dock's **Usage** surface follows Claude Code's `/usage`: per provider, a
+semibold `Provider · Plan` heading with a quiet "Updated N ago" and an
+external-link ghost button to the provider's own usage page; then one block
+per limit window: the window label, an 8 px rounded bar with `N% used`
+right-aligned beside it, and a muted `Resets 3:40pm (in 2h 10m)` line.
+
+Bars use primary below 80%, warning from 80% (or when the provider says so),
+and danger when the limit is reached. A provider that reports no windows
+shows a short muted note instead, plus a danger line when a turn failed on a
+limit. Warnings are notifications, each threshold (80%, 95%, reached) once
+per window and reset period; limits restored at launch never alert.
+
+## Inline visuals
+
+Assistant messages can include a `vitre-visual` JSON fence. The shared
+`visual_check` MCP tool validates its data before display, and the desktop
+renders it with native components; there is no HTML, JavaScript, network
+access, or command execution inside a visual.
+
+[Inline visuals](../../crates/vitre-app/src/visuals.rs) use a small title and
+provenance, large headline figures, quiet view tabs, a compact chart, and an
+overflow menu for data/source/copy/reset. Avoid boxing every visual in a
+contrasting card or filling a toolbar with utility actions. Use theme accents
+sparingly and retain an equivalent data view.
 
 Virtualize growing histories. Reuse the stable Markdown extension registry and
 cached parsed message state; registering a fresh plugin each frame invalidates
-Markdown and makes scrolling expensive. Preserve scroll and visual selections
-when an unchanged poll arrives.
-
-![Lens overview](images/lens-desktop-overview.png)
-
-![Native inline visualization](images/lens-desktop-visual.png)
-
-![Mobile Lens overview](images/lens-mobile-overview.jpg)
+Markdown and makes scrolling expensive.

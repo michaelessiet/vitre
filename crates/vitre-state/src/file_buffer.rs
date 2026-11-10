@@ -1,7 +1,7 @@
 //! Open-file save/conflict lifecycle for editable buffers.
 //!
 //! Port of the semantics of
-//! `apps/web/src/components/files/fileSaveCoordinator.ts` (save coalescing),
+//! T3 Code's `apps/web/src/components/files/fileSaveCoordinator.ts` (save coalescing),
 //! `fileSaveState.ts` (base + self-written revision bookkeeping), and
 //! `fileBufferConflict.ts` (conflict detection). Pure decision core: the UI
 //! layer owns the autosave debounce clock and the `projects.readFile` /

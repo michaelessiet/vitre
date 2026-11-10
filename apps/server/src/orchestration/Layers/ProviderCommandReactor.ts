@@ -59,6 +59,7 @@ type ProviderIntentEvent = Extract<
       | "thread.runtime-mode-set"
       | "thread.turn-start-requested"
       | "thread.turn-interrupt-requested"
+      | "thread.task-stop-requested"
       | "thread.approval-response-requested"
       | "thread.user-input-response-requested"
       | "thread.session-stop-requested";
@@ -284,6 +285,7 @@ const make = Effect.gen(function* () {
       | "provider.turn.interrupt.failed"
       | "provider.approval.respond.failed"
       | "provider.user-input.respond.failed"
+      | "provider.task.stop.failed"
       | "provider.session.stop.failed";
     readonly summary: string;
     readonly detail: string;
@@ -1118,6 +1120,36 @@ const make = Effect.gen(function* () {
     yield* providerService.interruptTurn({ threadId: event.payload.threadId });
   });
 
+  const processTaskStopRequested = Effect.fn("processTaskStopRequested")(function* (
+    event: Extract<ProviderIntentEvent, { type: "thread.task-stop-requested" }>,
+  ) {
+    const thread = yield* resolveThread(event.payload.threadId);
+    if (!thread) {
+      return;
+    }
+    const fail = (detail: string) =>
+      appendProviderFailureActivity({
+        threadId: event.payload.threadId,
+        kind: "provider.task.stop.failed",
+        summary: "Could not stop the agent",
+        detail,
+        turnId: null,
+        createdAt: event.payload.createdAt,
+      });
+    if (!thread.session || thread.session.status === "stopped") {
+      return yield* fail("No active provider session is bound to this thread.");
+    }
+    const stopped = yield* providerService.stopTask({
+      threadId: event.payload.threadId,
+      taskId: event.payload.taskId,
+    });
+    if (!stopped) {
+      return yield* fail(
+        "This provider cannot stop an agent on its own. Interrupt the turn instead.",
+      );
+    }
+  });
+
   const processApprovalResponseRequested = Effect.fn("processApprovalResponseRequested")(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.approval-response-requested" }>,
   ) {
@@ -1268,6 +1300,9 @@ const make = Effect.gen(function* () {
       case "thread.turn-interrupt-requested":
         yield* processTurnInterruptRequested(event);
         return;
+      case "thread.task-stop-requested":
+        yield* processTaskStopRequested(event);
+        return;
       case "thread.approval-response-requested":
         yield* processApprovalResponseRequested(event);
         return;
@@ -1301,6 +1336,7 @@ const make = Effect.gen(function* () {
         event.type === "thread.runtime-mode-set" ||
         event.type === "thread.turn-start-requested" ||
         event.type === "thread.turn-interrupt-requested" ||
+        event.type === "thread.task-stop-requested" ||
         event.type === "thread.approval-response-requested" ||
         event.type === "thread.user-input-response-requested" ||
         event.type === "thread.session-stop-requested"

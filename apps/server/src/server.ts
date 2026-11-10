@@ -59,8 +59,9 @@ import { layer as AssistantStreamBusLayer } from "./orchestration/AssistantStrea
 import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRuntimeIngestion.ts";
 import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderCommandReactor.ts";
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor.ts";
+import * as UsageLimits from "./usage/UsageLimits.ts";
+import { SubagentSummaryReactorLive } from "./orchestration/Layers/SubagentSummaryReactor.ts";
 import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletionReactor.ts";
-import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
@@ -88,7 +89,6 @@ import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import { authHttpApiLayer, environmentAuthenticatedAuthLayer } from "./auth/http.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
-import { connectHttpApiLayer } from "./connectUnavailable.ts";
 import * as ServerSelfUpdate from "./serverSelfUpdate.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as EventLoopDelayMonitor from "./diagnostics/EventLoopDelayMonitor.ts";
@@ -174,7 +174,9 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(ProviderCommandReactorLive),
   Layer.provideMerge(CheckpointReactorLive),
   Layer.provideMerge(ThreadDeletionReactorLive),
-  Layer.provideMerge(AgentAwarenessRelay.layer.pipe(Layer.provide(ServerSecretStore.layer))),
+  Layer.provideMerge(SubagentSummaryReactorLive),
+  // Plan limits for the dock's Usage surface, streamed over subscribeServerConfig.
+  Layer.provideMerge(UsageLimits.layer),
   Layer.provideMerge(RuntimeReceiptBusLive),
   // Shared by ProviderRuntimeIngestion (publisher) and the websocket thread
   // subscriptions (subscribers); provided once so both see the same PubSub.
@@ -414,7 +416,6 @@ export const makeRoutesLayer = Layer.mergeAll(
   Layer.mergeAll(
     HttpApiBuilder.layer(EnvironmentHttpApi).pipe(
       Layer.provide(authHttpApiLayer),
-      Layer.provide(connectHttpApiLayer),
       Layer.provide(orchestrationHttpApiLayer),
       Layer.provide(serverEnvironmentHttpApiLayer),
       Layer.provide(environmentAuthenticatedAuthLayer),

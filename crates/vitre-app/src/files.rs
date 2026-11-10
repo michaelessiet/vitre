@@ -80,7 +80,7 @@ use crate::vim::{self, ToggleVimMode, VimKeystroke, VimSession};
 const RESUBSCRIBE_AFTER_COMPLETION: Duration = Duration::from_secs(2);
 
 /// codemirror-vim's `.cm-fat-cursor` default, which is what Electron paints:
-/// T3 never overrides it (`apps/web/src/components/files/codemirror/theme.ts`
+/// T3 never overrides it (T3 Code's `apps/web/src/components/files/codemirror/theme.ts`
 /// restyles `.cm-cursor` only). Deliberately not a theme token — a modal caret
 /// that borrows the foreground or selection colour is exactly the caret that
 /// disappears into a visual selection.
@@ -304,9 +304,6 @@ pub struct FilesPanel {
     filter_query: String,
     markdown_preview: bool,
     client: Arc<EnvironmentClient>,
-    remote: bool,
-    asset_thread_id: Option<vitre_contracts::ThreadId>,
-    transfer_locked: bool,
     cwd: String,
     tree: Option<FileTreeModel>,
     /// Recomputed only after a listing/expansion change, not on scroll or hover.
@@ -492,9 +489,6 @@ impl FilesPanel {
             filter_query: String::new(),
             markdown_preview: false,
             client,
-            remote: false,
-            asset_thread_id: None,
-            transfer_locked: false,
             cwd,
             tree: None,
             tree_truncated: false,
@@ -536,18 +530,6 @@ impl FilesPanel {
         panel.spawn_watch_loop(window, cx);
         panel.spawn_diagnostics_loop(cx);
         panel
-    }
-
-    /// Which workspace this panel browses (ChatApp recreates on change).
-    pub fn set_asset_thread(&mut self, thread_id: Option<vitre_contracts::ThreadId>) {
-        self.asset_thread_id = thread_id;
-    }
-    pub fn set_remote(&mut self, remote: bool) {
-        self.remote = remote;
-    }
-    pub fn set_transfer_locked(&mut self, locked: bool, cx: &mut Context<Self>) {
-        self.transfer_locked = locked;
-        cx.notify();
     }
 
     pub fn uses_client(&self, client: &Arc<EnvironmentClient>) -> bool {
@@ -3094,7 +3076,7 @@ impl FilesPanel {
                 div().flex_1().min_h_0().child(
                     Editor::new(&self.editor)
                         .text_size(px(ClientSettings::get(cx).editor_font_size as f32))
-                        .readonly(truncated || self.refactor_busy || self.transfer_locked)
+                        .readonly(truncated || self.refactor_busy)
                         .context_menu(move |menu, _, _| {
                             menu.menu("Go to Definition", Box::new(GoToDefinition))
                                 .menu("Find References", Box::new(FindReferences))

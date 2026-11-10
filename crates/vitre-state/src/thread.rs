@@ -1,4 +1,4 @@
-//! Port of `packages/client-runtime/src/state/threadReducer.ts`.
+//! Port of T3 Code's `packages/client-runtime/src/state/threadReducer.ts`.
 
 use std::cmp::Ordering;
 use std::collections::HashSet;
@@ -48,6 +48,7 @@ pub fn event_sequence(event: &OrchestrationEvent) -> Option<NonNegativeInt> {
         | ThreadMessageSent { sequence, .. }
         | ThreadTurnStartRequested { sequence, .. }
         | ThreadTurnInterruptRequested { sequence, .. }
+        | ThreadTaskStopRequested { sequence, .. }
         | ThreadApprovalResponseRequested { sequence, .. }
         | ThreadUserInputResponseRequested { sequence, .. }
         | ThreadCheckpointRevertRequested { sequence, .. }
@@ -83,6 +84,7 @@ pub fn event_thread_id(event: &OrchestrationEvent) -> Option<&ThreadId> {
         ThreadMessageSent { payload, .. } => Some(&payload.thread_id),
         ThreadTurnStartRequested { payload, .. } => Some(&payload.thread_id),
         ThreadTurnInterruptRequested { payload, .. } => Some(&payload.thread_id),
+        ThreadTaskStopRequested { payload, .. } => Some(&payload.thread_id),
         ThreadApprovalResponseRequested { payload, .. } => Some(&payload.thread_id),
         ThreadUserInputResponseRequested { payload, .. } => Some(&payload.thread_id),
         ThreadCheckpointRevertRequested { payload, .. } => Some(&payload.thread_id),
@@ -294,6 +296,9 @@ pub fn apply_thread_detail_event(
             t.updated_at = occurred_at.clone();
             Updated(Box::new(t))
         }
+
+        // A stop request changes nothing until the provider reports the task's end.
+        OrchestrationEvent::ThreadTaskStopRequested { .. } => Unchanged,
 
         OrchestrationEvent::ThreadTurnInterruptRequested {
             payload,

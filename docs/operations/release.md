@@ -29,15 +29,15 @@ always validate both TypeScript and native code.
 Node and pnpm versions come from `package.json`; Vite+ resolves from the package
 manifest/catalog. The shared setup action explicitly installs pnpm and installs
 workspace dependencies with `--frozen-lockfile`. Native builds use the pinned Rust
-toolchain and locked dependency graph. Superseded PR runs are canceled, while
-main runs cannot cancel an active production deployment.
+toolchain and locked dependency graph. Superseded PR runs are canceled; main
+runs are never canceled.
 
 ## Downloading a development build
 
 A relevant push to `main` produces a DMG after validation passes. Pull requests
 validate code without producing DMGs. To build another ref, manually run **Vitre
 CI** with `build_artifact=true` (the default). Setting it to false runs validation
-only. Manual runs never deploy the relay.
+only.
 
 Open the successful run's artifacts and download:
 

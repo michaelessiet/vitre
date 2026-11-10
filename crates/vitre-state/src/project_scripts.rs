@@ -1,7 +1,7 @@
 //! Project scripts ("actions"): id allocation, primary selection, list edits,
 //! t3.json import parsing.
 //!
-//! Ports `apps/web/src/projectScripts.ts`, the script-list edit rules from
+//! Ports T3 Code's `apps/web/src/projectScripts.ts`, the script-list edit rules from
 //! `ChatView.tsx` (`saveProjectScript`/`updateProjectScript`), the importable
 //! filter from `ProjectScriptsControl.tsx`, and the `T3ProjectFile` decode
 //! from `packages/contracts/src/t3ProjectFile.ts` +

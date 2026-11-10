@@ -16,11 +16,6 @@ export interface ChangeRequestTerminology {
   readonly singular: string;
 }
 
-export const DEFAULT_CHANGE_REQUEST_TERMINOLOGY: ChangeRequestTerminology = {
-  shortLabel: "PR",
-  singular: "pull request",
-};
-
 const GITHUB_CHANGE_REQUEST_PRESENTATION: ChangeRequestPresentation = {
   icon: "github",
   providerName: "GitHub",
@@ -96,31 +91,6 @@ export function resolveChangeRequestPresentationForKind(
   kind: SourceControlProviderKind,
 ): ChangeRequestPresentation {
   return resolveChangeRequestPresentation({ kind, name: "", baseUrl: "" });
-}
-
-export function formatChangeRequestAction(
-  verb: "View" | "Create",
-  presentation: ChangeRequestPresentation,
-): string {
-  return `${verb} ${presentation.shortName}`;
-}
-
-export function formatCreateChangeRequestPhrase(presentation: ChangeRequestPresentation): string {
-  return `create ${presentation.shortName}`;
-}
-
-export function getChangeRequestTerminology(
-  provider: SourceControlProviderInfo | null | undefined,
-): ChangeRequestTerminology {
-  if (!provider) {
-    return DEFAULT_CHANGE_REQUEST_TERMINOLOGY;
-  }
-
-  const presentation = resolveChangeRequestPresentation(provider);
-  return {
-    shortLabel: presentation.shortName,
-    singular: presentation.longName,
-  };
 }
 
 export function getChangeRequestTerminologyForKind(

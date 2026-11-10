@@ -365,6 +365,7 @@ function createTextGeneration(
             }),
         ),
       ),
+    generateSubagentSummary: () => Effect.die("generateSubagentSummary is not used by git"),
   };
 }
 

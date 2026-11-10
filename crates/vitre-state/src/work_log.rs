@@ -1,12 +1,12 @@
 //! Work-log and chat-timeline derivations over raw thread activities.
 //!
 //! Port of the Electron chat timeline's activity pipeline:
-//! - `apps/web/src/session-logic.ts` — `deriveWorkLogEntries` and its
+//! - T3 Code's `apps/web/src/session-logic.ts` — `deriveWorkLogEntries` and its
 //!   extraction/collapse helpers, the tool status predicates, and
 //!   `formatDuration` / `deriveTimelineEntries`.
-//! - `apps/web/src/components/chat/MessagesTimeline.logic.ts` —
+//! - T3 Code's `apps/web/src/components/chat/MessagesTimeline.logic.ts` —
 //!   `deriveMessagesTimelineRows` (turn folds + work-run grouping).
-//! - `apps/web/src/components/chat/MessagesTimeline.tsx` — row rendering
+//! - T3 Code's `apps/web/src/components/chat/MessagesTimeline.tsx` — row rendering
 //!   helpers (icon name, preview, heading, expanded body).
 //!
 //! Deviations from the TS sources (all deliberate):
@@ -162,7 +162,7 @@ fn as_finite_number(value: &Value) -> Option<f64> {
 
 /// `compareActivitiesByOrder`: sequence first (present sorts after absent),
 /// then createdAt, then lifecycle rank, then id.
-fn compare_activities_by_order(
+pub(crate) fn compare_activities_by_order(
     left: &OrchestrationThreadActivity,
     right: &OrchestrationThreadActivity,
 ) -> std::cmp::Ordering {
@@ -259,10 +259,15 @@ pub fn derive_work_log_entries(activities: &[OrchestrationThreadActivity]) -> Ve
     let mut ordered: Vec<&OrchestrationThreadActivity> = activities.iter().collect();
     ordered.sort_by(|a, b| compare_activities_by_order(a, b));
 
+    let subagent_ids = crate::subagents::subagent_task_ids(activities);
     let mut entries: Vec<DerivedEntry> = Vec::new();
     for activity in ordered {
         let kind = activity.kind.0.as_str();
         if kind == "tool.started" || kind == "task.started" || kind == "context-window.updated" {
+            continue;
+        }
+        // Subagents and background tasks render as cards (see `subagents`), not rows.
+        if crate::subagents::is_subagent_task_activity(activity, &subagent_ids) {
             continue;
         }
         if activity.summary.0 == "Checkpoint captured" {
@@ -756,6 +761,8 @@ fn extract_tool_call_id(payload: Option<&Map<String, Value>>) -> Option<String> 
     as_trimmed_string(
         as_record(payload.and_then(|p| p.get("data"))).and_then(|data| data.get("toolCallId")),
     )
+    // Claude and Codex tool rows carry the provider call id as `itemId`.
+    .or_else(|| as_trimmed_string(payload.and_then(|p| p.get("itemId"))))
 }
 
 // ---------------------------------------------------------------------------
@@ -1866,8 +1873,8 @@ pub fn work_entry_icon_name(entry: &WorkLogEntry) -> &'static str {
 }
 
 // ---------------------------------------------------------------------------
-// Workspace-relative paths (apps/web/src/filePathDisplay.ts +
-// apps/web/src/terminal-links.ts `splitPathAndPosition`)
+// Workspace-relative paths (T3 Code's apps/web/src/filePathDisplay.ts +
+// T3 Code's apps/web/src/terminal-links.ts `splitPathAndPosition`)
 // ---------------------------------------------------------------------------
 
 struct PathPosition<'a> {

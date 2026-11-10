@@ -1,5 +1,5 @@
 //! Pure thread-projection state machine: the data half of
-//! `packages/client-runtime/src/state/threads.ts` (`makeEnvironmentThreadState`).
+//! T3 Code's `packages/client-runtime/src/state/threads.ts` (`makeEnvironmentThreadState`).
 //!
 //! Owns the un-overlaid persisted thread (the reducer's source of truth), the
 //! ephemeral streaming-text overlays, and the `afterSequence` resume cursor.

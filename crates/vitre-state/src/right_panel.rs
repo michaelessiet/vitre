@@ -1,5 +1,5 @@
 //! Right-panel dock state: a line-for-line port of the Electron app's
-//! `apps/web/src/rightPanelStore.ts` (persisted-state version 10).
+//! T3 Code's `apps/web/src/rightPanelStore.ts` (persisted-state version 10).
 //!
 //! The dock keeps one `{isOpen, activeSurfaceId, surfaces[]}` record per
 //! thread, keyed by `${environmentId}:${threadId}`. Three invariants carry
@@ -38,7 +38,6 @@ pub const PERSISTED_VERSION: u64 = 10;
 pub enum SurfaceKind {
     Plan,
     Diff,
-    Tests,
     Files,
     File,
     Preview,
@@ -46,6 +45,10 @@ pub enum SurfaceKind {
     Search,
     Graph,
     Devices,
+    /// The thread's subagents and background tasks.
+    Agents,
+    /// Provider plan limits.
+    Usage,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -70,9 +73,6 @@ pub enum RightPanelSurface {
     Diff {
         id: String,
     },
-    Tests {
-        id: String,
-    },
     Files {
         id: String,
     },
@@ -83,6 +83,12 @@ pub enum RightPanelSurface {
         id: String,
     },
     Devices {
+        id: String,
+    },
+    Agents {
+        id: String,
+    },
+    Usage {
         id: String,
     },
     /// A browser tab. `resource_id` is the preview session's tab id; `None`
@@ -120,12 +126,13 @@ impl RightPanelSurface {
     pub fn id(&self) -> &str {
         match self {
             Self::Plan { id }
-            | Self::Tests { id }
             | Self::Diff { id }
             | Self::Files { id }
             | Self::Search { id }
             | Self::Graph { id }
-            | Self::Devices { id } => id,
+            | Self::Devices { id }
+            | Self::Agents { id }
+            | Self::Usage { id } => id,
             Self::Preview { id, .. } | Self::Terminal { id, .. } | Self::File { id, .. } => id,
         }
     }
@@ -134,11 +141,12 @@ impl RightPanelSurface {
         match self {
             Self::Plan { .. } => SurfaceKind::Plan,
             Self::Diff { .. } => SurfaceKind::Diff,
-            Self::Tests { .. } => SurfaceKind::Tests,
             Self::Files { .. } => SurfaceKind::Files,
             Self::Search { .. } => SurfaceKind::Search,
             Self::Graph { .. } => SurfaceKind::Graph,
             Self::Devices { .. } => SurfaceKind::Devices,
+            Self::Agents { .. } => SurfaceKind::Agents,
+            Self::Usage { .. } => SurfaceKind::Usage,
             Self::Preview { .. } => SurfaceKind::Preview,
             Self::Terminal { .. } => SurfaceKind::Terminal,
             Self::File { .. } => SurfaceKind::File,
@@ -149,21 +157,23 @@ impl RightPanelSurface {
         let id = match kind {
             SurfaceKind::Plan => "plan",
             SurfaceKind::Diff => "diff",
-            SurfaceKind::Tests => "tests",
             SurfaceKind::Files => "files",
             SurfaceKind::Search => "search",
             SurfaceKind::Graph => "graph",
             SurfaceKind::Devices => "devices",
+            SurfaceKind::Agents => "agents",
+            SurfaceKind::Usage => "usage",
             _ => return None,
         };
         Some(match kind {
             SurfaceKind::Plan => Self::Plan { id: id.into() },
             SurfaceKind::Diff => Self::Diff { id: id.into() },
-            SurfaceKind::Tests => Self::Tests { id: id.into() },
             SurfaceKind::Files => Self::Files { id: id.into() },
             SurfaceKind::Search => Self::Search { id: id.into() },
             SurfaceKind::Graph => Self::Graph { id: id.into() },
             SurfaceKind::Devices => Self::Devices { id: id.into() },
+            SurfaceKind::Agents => Self::Agents { id: id.into() },
+            SurfaceKind::Usage => Self::Usage { id: id.into() },
             _ => unreachable!(),
         })
     }
@@ -882,27 +892,6 @@ mod tests {
         assert_eq!(restored.thread(KEY).surfaces.len(), 1);
         restored.close_surface(KEY, "devices");
         assert!(restored.thread(KEY).surfaces.is_empty());
-    }
-
-    #[test]
-    fn cloud_tests_surface_is_singleton_and_round_trips() {
-        let mut map = RightPanelMap::default();
-        map.open("cloud:task-1", SurfaceKind::Tests);
-        map.open("cloud:task-1", SurfaceKind::Tests);
-        assert_eq!(map.active_kind("cloud:task-1"), Some(SurfaceKind::Tests));
-        let surface = RightPanelSurface::Tests { id: "tests".into() };
-        let json = serde_json::to_string(&surface).unwrap();
-        assert!(json.contains("\"kind\":\"tests\""));
-        assert_eq!(
-            serde_json::from_str::<RightPanelSurface>(&json).unwrap(),
-            surface
-        );
-        assert_eq!(surface.id(), "tests");
-        let restored = RightPanelMap::from_persisted(&map.to_persisted());
-        assert_eq!(
-            restored.active_kind("cloud:task-1"),
-            Some(SurfaceKind::Tests)
-        );
     }
 
     #[test]

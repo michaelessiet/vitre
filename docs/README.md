@@ -1,19 +1,28 @@
 # Documentation
 
-- [Getting started](./getting-started/quick-start.md)
+- [Getting started](./getting-started/quick-start.md) and [Codex prerequisites](./getting-started/codex-prerequisites.md)
 - [Vitre design language](./design-language/README.md)
 - Architecture
   - [Overview](./architecture/overview.md)
-  - [Connection runtime](./architecture/connection-runtime.md)
-  - [Remote environments](./architecture/remote.md)
-  - [Server updates](./architecture/server-updates.md)
+  - [Runtime modes](./architecture/runtime-modes.md)
 - User guides
-  - [Background service](./user/background-service.md)
-  - [Remote access](./user/remote-access.md)
-  - [Keeping T3 Code in sync](./user/server-updates.md)
   - [Keybindings](./user/keybindings.md)
-- [T3 Connect](./cloud/t3-connect-clerk.md)
+  - [Native mobile devices](./mobile-devices.md)
+  - [Editor tools](./vitre-editor-tools.md)
+- Providers
+  - [Codex](./providers/codex.md)
+  - [Claude](./providers/claude.md)
 - [Integrations](./integrations/source-control-providers.md)
-- [Operations](./operations/ci.md)
-- [Providers](./providers/codex.md)
-- [Reference](./reference/encyclopedia.md)
+- Operations
+  - [CI](./operations/ci.md)
+  - [Builds and releases](./operations/release.md)
+  - [Observability](./operations/observability.md)
+  - [Performance](./operations/vitre-performance.md)
+- Reference
+  - [Encyclopedia](./reference/encyclopedia.md)
+  - [Scripts](./reference/scripts.md)
+  - [Workspace layout](./reference/workspace-layout.md)
+- Project history
+  - [Vitre handover](./vitre-handover.md)
+  - [Parity matrix](./vitre-parity.md)
+  - [Phase 5 worklog](./vitre-phase5-worklog.md)

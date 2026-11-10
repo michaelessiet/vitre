@@ -1,9 +1,6 @@
 .git
 .repos
-.alchemy
-**/.alchemy
 .t3
-.plans
 .reference
 release
 **/node_modules

@@ -6,12 +6,9 @@ use serde::{Deserialize, Serialize};
 #[serde(default)]
 pub(super) struct ComposerDraft {
     text: String,
-    work_location: WorkLocation,
-    cloud: CloudDraft,
     model: Option<ModelSelection>,
     mode: Option<ProviderInteractionMode>,
     runtime_mode: Option<RuntimeMode>,
-    pending_cloud: Option<cloud_thread::CloudPendingSend>,
     pub(super) pending_local: Option<local_delivery::LocalPendingSend>,
     ask_mode: bool,
     attachments: Vec<PendingAttachment>,
@@ -159,74 +156,6 @@ impl DraftStore {
                 ComposerDraft::default()
             }
         }
-    }
-    #[cfg(test)]
-    pub fn clear_text(&self, id: &str) -> std::io::Result<()> {
-        let mut draft = self.load(id);
-        draft.text.clear();
-        self.save(id, &draft)
-    }
-    pub fn copy_preferences(&self, source: &str, destination: &str) -> std::io::Result<()> {
-        let mut draft = self.load(source);
-        draft.text.clear();
-        draft.attachments.clear();
-        draft.review_comments.clear();
-        draft.terminal_contexts.clear();
-        draft.cloud.request_key = None;
-        draft.cloud.request_identity = None;
-        draft.cloud.prompt_recovery = None;
-        draft.pending_cloud = None;
-        draft.cloud.pending_start = None;
-        draft.pending_local = None;
-        self.save(destination, &draft)
-    }
-
-    pub(super) fn finish_cloud_start(
-        &self,
-        id: &str,
-        request: &str,
-        outcome: &crate::cloud::store::CreationOutcome,
-        fallback: Option<cloud_thread::CloudPendingStart>,
-    ) -> Option<ComposerDraft> {
-        let mut draft = self.load(id);
-        if draft.cloud.pending_start.is_none() {
-            draft.cloud.pending_start = fallback;
-        }
-        let pending = draft
-            .cloud
-            .pending_start
-            .as_ref()
-            .filter(|pending| pending.input.idempotency_key == request)?;
-        match outcome {
-            crate::cloud::store::CreationOutcome::Unknown(error) => {
-                let pending = draft.cloud.pending_start.as_mut().unwrap();
-                pending.delivery = cloud_thread::CloudDeliveryState::Unknown;
-                pending.error = Some(error.clone());
-            }
-            crate::cloud::store::CreationOutcome::Rejected(_) => {
-                let pending = pending.clone();
-                draft.text = if draft.text.is_empty() {
-                    pending.raw_prompt
-                } else {
-                    format!("{}\n{}", pending.raw_prompt, draft.text)
-                };
-                draft.attachments.splice(0..0, pending.attachments);
-                draft.review_comments.splice(0..0, pending.review_comments);
-                draft
-                    .terminal_contexts
-                    .splice(0..0, pending.terminal_contexts);
-                draft.cloud.pending_start = None;
-                draft.cloud.request_key = None;
-                draft.cloud.request_identity = None;
-            }
-            crate::cloud::store::CreationOutcome::Accepted(_) => {
-                draft.cloud.pending_start = None;
-                draft.cloud.request_key = None;
-                draft.cloud.request_identity = None;
-            }
-        }
-        let _ = self.save(id, &draft);
-        Some(draft)
     }
 
     pub fn save(&self, id: &str, draft: &ComposerDraft) -> std::io::Result<()> {
@@ -469,10 +398,7 @@ impl ChatApp {
             && let Some(project) = self
                 .shell_threads()
                 .into_iter()
-                .filter(|t| {
-                    self.sidebar.thread_last_visited(&t.id.0).is_some()
-                        && !t.project_id.0.starts_with("cloud:")
-                })
+                .filter(|t| self.sidebar.thread_last_visited(&t.id.0).is_some())
                 .max_by(|a, b| {
                     self.sidebar
                         .thread_last_visited(&a.id.0)
@@ -498,7 +424,6 @@ impl ChatApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.lens_open = false;
         if self.draft_creating {
             return;
         }
@@ -509,8 +434,7 @@ impl ChatApp {
                     .and_then(|t| self.shell_thread(&t.id))
                     .map(|t| t.project_id.clone())
             })
-            .or_else(|| self.draft_project.clone())
-            .filter(|p| !p.0.starts_with("cloud:"));
+            .or_else(|| self.draft_project.clone());
         self.save_composer_draft(cx);
         self.close_open_thread(cx);
         self.draft_project = project;
@@ -634,7 +558,6 @@ impl ChatApp {
             window.viewport_size().width < px(1100.),
             cx,
         );
-        let location = self.render_location_switch(cx);
         let send = Button::new("draft-send")
             .primary()
             .small()
@@ -642,8 +565,6 @@ impl ChatApp {
             .tooltip("Send message")
             .disabled(
                 self.draft_creating
-                    || (self.draft_work_location.is_cloud()
-                        && self.cloud_start_blocker(cx).is_some())
                     || self.draft_project.is_none()
                     || (self.composer.read(cx).value().trim().is_empty()
                         && self.pending_attachments.is_empty()),
@@ -653,7 +574,6 @@ impl ChatApp {
         let controls = self.render_composer_controls(
             model_menu.into_any_element(),
             reasoning,
-            location,
             mode,
             runtime,
             None,
@@ -667,7 +587,6 @@ impl ChatApp {
                 .when(!compact, |body| body.child(v_flex().gap_2().child(div().text_2xl().font_semibold().child("What would you like to build?"))
                     .child(div().text_sm().text_color(cx.theme().muted_foreground).child("Draft your next conversation. It stays here until you send it."))))
                 .when(selected.is_none(),|hero|hero.child(h_flex().child(Button::new("draft-open-folder").primary().label("Open a project folder…").on_click(cx.listener(|app,_,w,cx|app.open_add_project(w,cx))))))
-                .when(self.draft_work_location.is_cloud(), |body| body.child(div().id("draft-onboarding").when(compact, |notice| notice.max_h(px(80.)).overflow_y_scroll()).child(self.render_cloud_onboarding(window, cx))))
                 .child(h_flex().child(Button::new("draft-project").ghost().small().icon(IconName::Folder).label(name).disabled(self.draft_creating).dropdown_menu(move |menu, _, _| {
                     let mut menu = menu;
                     for project in &projects { let owner = owner.clone(); let id = project.id.clone(); menu = menu.item(PopupMenuItem::new(project.title.0.clone()).on_click(move |_, w, cx| {let _ = owner.update(cx, |app, cx| app.new_thread(Some(id.clone()), w, cx));})); } menu
@@ -697,19 +616,9 @@ impl ChatApp {
     pub(super) fn capture_composer_draft(&self, cx: &Context<Self>) -> ComposerDraft {
         let draft = ComposerDraft {
             text: self.composer.read(cx).value().to_string(),
-            work_location: self.draft_work_location,
-            cloud: CloudDraft {
-                base_branch: Some(self.cloud_branch.read(cx).value().to_string()),
-                issue_number: self.cloud_issue.read(cx).value().trim().parse().ok(),
-                ..self.cloud_draft.clone()
-            },
             model: self.draft_model.clone(),
             mode: self.draft_mode.clone(),
             runtime_mode: Some(self.draft_runtime_mode.clone()),
-            pending_cloud: self
-                .cloud_pending_send
-                .clone()
-                .filter(|pending| self.open_cloud_task_id().as_deref() == Some(&pending.task_id)),
             pending_local: self
                 .thread
                 .as_ref()
@@ -732,7 +641,6 @@ impl ChatApp {
         if self
             .workspace_client()
             .is_none_or(|client| !Arc::ptr_eq(&client, &context.client))
-            || self.is_cloud_thread() && !self.workspace_roots().contains(&context.cwd)
         {
             return;
         }
@@ -802,61 +710,15 @@ impl ChatApp {
             return;
         };
         let draft = self.capture_composer_draft(cx);
-        if let Some(pending) = draft.cloud.pending_start.as_ref()
-            && let Some(project) = pending.input.project_id.as_ref()
-        {
-            self.cloud_pending_starts
-                .insert(project.clone(), pending.clone());
-        }
-        if let Some(pending) = draft.pending_cloud.as_ref() {
-            self.cloud_pending_sends
-                .insert(pending.task_id.clone(), pending.clone());
-        }
         if let Err(e) = self.drafts.save(&id, &draft) {
             self.runtime_notice =
                 Some(format!("Could not save the conversation draft: {e}").into());
         }
     }
     pub(super) fn restore_composer_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(mut draft) = self.draft_restore.take() else {
-            self.reconcile_restored_cloud_prompt(window, cx);
+        let Some(draft) = self.draft_restore.take() else {
             return;
         };
-        // Older builds persisted the exact Ask wrapper as retry text. Only
-        // migrate text proven to be that request, never arbitrary user drafts.
-        if draft.cloud.prompt_recovery.is_none()
-            && let Some(task_id) = self.open_cloud_task_id()
-            && let Some(request_key) = draft.cloud.request_key.clone()
-            && let Some(input) = draft.cloud.request_identity.as_ref().and_then(|json| {
-                serde_json::from_str::<vitre_contracts::CloudContinueConversationInput>(json).ok()
-            })
-            && input.task_id == task_id
-            && draft.text == input.prompt
-            && let Some(raw_prompt) = draft.text.strip_prefix(&ask_mode_prompt(true, ""))
-        {
-            draft.cloud.prompt_recovery = Some(cloud_thread::CloudPromptRecovery {
-                request_key,
-                prompt: input.prompt,
-                raw_prompt: raw_prompt.to_string(),
-            });
-            draft.text = raw_prompt.to_string();
-        }
-        if self.thread.is_none() {
-            if let Some(project) = self.draft_project.as_ref()
-                && let Some(pending) = self.cloud_pending_starts.get(&project.0)
-            {
-                draft.cloud.pending_start = Some(pending.clone());
-            }
-            if let Some(pending) = draft.cloud.pending_start.as_mut() {
-                if pending.delivery == cloud_thread::CloudDeliveryState::Submitting {
-                    pending.delivery = cloud_thread::CloudDeliveryState::Unknown;
-                }
-                if let Some(project) = pending.input.project_id.as_ref() {
-                    self.cloud_pending_starts
-                        .insert(project.clone(), pending.clone());
-                }
-            }
-        }
         self.composer
             .update(cx, |s, cx| s.set_value(draft.text, window, cx));
         self.pending_attachments = draft.attachments;
@@ -865,99 +727,17 @@ impl ChatApp {
         self.draft_model = draft.model;
         self.draft_mode = draft.mode;
         self.draft_runtime_mode = draft.runtime_mode.unwrap_or(RuntimeMode::FullAccess);
-        self.cloud_pending_send = draft
-            .pending_cloud
-            .filter(|pending| self.open_cloud_task_id().as_deref() == Some(&pending.task_id));
-        if let Some(pending) = self.cloud_pending_send.as_mut() {
-            if pending.delivery == cloud_thread::CloudDeliveryState::Submitting {
-                pending.delivery = cloud_thread::CloudDeliveryState::Unknown;
-            }
-            self.cloud_pending_sends
-                .insert(pending.task_id.clone(), pending.clone());
-        }
-        self.restore_cloud_outbox_message(cx);
         let pending_local = draft.pending_local;
         self.ask_mode = draft.ask_mode;
-        self.draft_work_location = draft.work_location;
-        self.cloud_draft = draft.cloud;
-        self.cloud_branch.update(cx, |s, cx| {
-            s.set_value(
-                self.cloud_draft.base_branch.clone().unwrap_or_default(),
-                window,
-                cx,
-            )
-        });
-        self.cloud_issue.update(cx, |s, cx| {
-            s.set_value(
-                self.cloud_draft
-                    .issue_number
-                    .map(|n| n.to_string())
-                    .unwrap_or_default(),
-                window,
-                cx,
-            )
-        });
         self.restore_local_outbox(pending_local, window, cx);
         self.sync_composer_menu(cx);
         self.sync_mention(cx);
-        self.reconcile_restored_cloud_prompt(window, cx);
-    }
-
-    fn reconcile_restored_cloud_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(recovery) = self.cloud_draft.prompt_recovery.as_ref() else {
-            return;
-        };
-        if !self.is_cloud_thread() {
-            return;
-        }
-        // A user may start a different draft before history arrives. That draft
-        // belongs to them even if the previous request is later acknowledged.
-        let unchanged = self.composer.read(cx).value().as_ref() == recovery.raw_prompt;
-        let acknowledged = self
-            .thread
-            .as_ref()
-            .and_then(|open| open.state.view.as_ref())
-            .is_some_and(|view| {
-                view.messages.iter().any(|message| {
-                    message.role == OrchestrationMessageRole::User
-                        && message.id.0 == format!("{}-message", recovery.request_key)
-                        && cloud_thread::cloud_message_matches_prompt(
-                            &message.text.0,
-                            &recovery.prompt,
-                        )
-                })
-            });
-        if !unchanged || acknowledged {
-            self.cloud_draft.prompt_recovery = None;
-            if acknowledged {
-                self.cloud_draft.request_key = None;
-                self.cloud_draft.request_identity = None;
-                if unchanged {
-                    self.composer
-                        .update(cx, |s, cx| s.set_value("", window, cx));
-                }
-            }
-            self.save_composer_draft(cx);
-        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn pending_creation() -> cloud_thread::CloudPendingStart {
-        cloud_thread::CloudPendingStart {
-            input: serde_json::from_value(serde_json::json!({
-                "idempotencyKey":"immutable-first-send", "projectId":"project-a", "roots":[{"id":"primary","path":"/tmp/repository"}],
-                "target":"cloud-local", "prompt":"original prompt", "provider":"codex", "model":"gpt-6-sol",
-                "runtimeMode":"approval-required", "attachments":[]
-            })).unwrap(),
-            raw_prompt: "original prompt".into(), attachments: vec![], review_comments: vec![], terminal_contexts: vec![],
-            delivery: cloud_thread::CloudDeliveryState::Submitting, error: None,
-            requested_at: "2026-10-16T15:00:00Z".into(), account_identity: Some("relay|account-a".into()),
-        }
-    }
-
     #[test]
     fn unreadable_draft_is_reported_and_never_overwritten_by_autosave() {
         let home = std::env::temp_dir().join(fresh_id("vitre-draft-corrupt"));
@@ -1009,98 +789,6 @@ mod tests {
     }
 
     #[test]
-    fn initial_cloud_outbox_survives_restart_and_uncertainty_with_exact_payload() {
-        let home = std::env::temp_dir().join(fresh_id("vitre-first-send"));
-        let store = DraftStore::new(&home);
-        let pending = pending_creation();
-        let draft = ComposerDraft {
-            text: "typed afterward".into(),
-            cloud: CloudDraft {
-                pending_start: Some(pending.clone()),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        futures::executor::block_on(store.save_confirmed("project:project-a", &draft))
-            .unwrap()
-            .unwrap();
-        let original = serde_json::to_value(&pending.input).unwrap();
-        let restored = DraftStore::new(&home);
-        let loaded = restored.load("project:project-a");
-        assert_eq!(
-            serde_json::to_value(&loaded.cloud.pending_start.as_ref().unwrap().input).unwrap(),
-            original
-        );
-        let result = restored
-            .finish_cloud_start(
-                "project:project-a",
-                "immutable-first-send",
-                &crate::cloud::store::CreationOutcome::Unknown("reply lost".into()),
-                None,
-            )
-            .unwrap();
-        assert_eq!(result.text, "typed afterward");
-        let saved = result.cloud.pending_start.unwrap();
-        assert_eq!(saved.delivery, cloud_thread::CloudDeliveryState::Unknown);
-        assert_eq!(serde_json::to_value(&saved.input).unwrap(), original);
-        assert!(
-            restored
-                .finish_cloud_start(
-                    "project:project-a",
-                    "other-key",
-                    &crate::cloud::store::CreationOutcome::Rejected("old response".into()),
-                    None
-                )
-                .is_none()
-        );
-        restored.flush();
-        std::fs::remove_dir_all(home).unwrap();
-    }
-
-    #[test]
-    fn initial_cloud_rejection_restores_once_and_acceptance_preserves_new_input() {
-        for accepted in [false, true] {
-            let home = std::env::temp_dir().join(fresh_id("vitre-first-result"));
-            let store = DraftStore::new(&home);
-            let draft = ComposerDraft {
-                text: "new typing".into(),
-                cloud: CloudDraft {
-                    pending_start: Some(pending_creation()),
-                    ..Default::default()
-                },
-                ..Default::default()
-            };
-            futures::executor::block_on(store.save_confirmed("project:project-a", &draft))
-                .unwrap()
-                .unwrap();
-            let outcome = if accepted {
-                crate::cloud::store::CreationOutcome::Accepted("task-created".into())
-            } else {
-                crate::cloud::store::CreationOutcome::Rejected("definite rejection".into())
-            };
-            let result = store
-                .finish_cloud_start("project:project-a", "immutable-first-send", &outcome, None)
-                .unwrap();
-            assert_eq!(
-                result.text,
-                if accepted {
-                    "new typing"
-                } else {
-                    "original prompt\nnew typing"
-                }
-            );
-            assert!(result.cloud.pending_start.is_none());
-            assert!(
-                store
-                    .finish_cloud_start("project:project-a", "immutable-first-send", &outcome, None)
-                    .is_none()
-            );
-            store.flush();
-            std::fs::remove_dir_all(home).unwrap();
-        }
-    }
-
-    #[test]
     fn independent_threads_restore_text_and_context_after_restart() {
         let dir = std::env::temp_dir().join(fresh_id("vitre-draft-test"));
         let store = DraftStore::new(&dir);
@@ -1131,14 +819,6 @@ mod tests {
             )
             .unwrap();
         store.flush();
-        store
-            .copy_preferences("env/thread/one", "cloud-new")
-            .unwrap();
-        store.flush();
-        let preferences = store.load("cloud-new");
-        assert!(preferences.ask_mode);
-        assert!(preferences.text.is_empty());
-        assert!(preferences.attachments.is_empty());
         let restored = DraftStore::new(&dir);
         assert_eq!(restored.load("env/thread/one").text, "keep café\n");
         assert!(restored.load("env/thread/one").ask_mode);

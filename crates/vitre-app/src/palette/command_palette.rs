@@ -1,4 +1,4 @@
-//! The ⇧⌘P command palette, ported from `apps/web/src/components/CommandPalette.tsx`.
+//! The ⇧⌘P command palette, ported from T3 Code's `apps/web/src/components/CommandPalette.tsx`.
 //!
 //! Like [`super::quick_search`], the surface itself is gpui-component's
 //! [`Command`] inside a [`Dialog`](gpui_component::dialog::Dialog); what is

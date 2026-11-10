@@ -1,9 +1,0 @@
-{
-  "encoded": {
-    "expectedTurnRequestId": "request-fixture",
-    "idempotencyKey": "stop-fixture",
-    "taskId": "task-fixture",
-    "type": "task.cancel"
-  },
-  "schema": "CloudCommand"
-}

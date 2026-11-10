@@ -8,10 +8,10 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 import { CheckpointReactor } from "../Services/CheckpointReactor.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
+import { SubagentSummaryReactor } from "../Services/SubagentSummaryReactor.ts";
 import { ThreadDeletionReactor } from "../Services/ThreadDeletionReactor.ts";
 import { OrchestrationReactor } from "../Services/OrchestrationReactor.ts";
 import { makeOrchestrationReactor } from "./OrchestrationReactor.ts";
-import * as AgentAwarenessRelay from "../../relay/AgentAwarenessRelay.ts";
 
 describe("OrchestrationReactor", () => {
   let runtime: ManagedRuntime.ManagedRuntime<OrchestrationReactor, never> | null = null;
@@ -65,12 +65,12 @@ describe("OrchestrationReactor", () => {
           }),
         ),
         Layer.provideMerge(
-          Layer.succeed(AgentAwarenessRelay.AgentAwarenessRelay, {
-            publishThread: () => Effect.void,
+          Layer.succeed(SubagentSummaryReactor, {
             start: () => {
-              started.push("agent-awareness-relay");
+              started.push("subagent-summary-reactor");
               return Effect.void;
             },
+            drain: Effect.void,
           }),
         ),
       ),
@@ -85,7 +85,7 @@ describe("OrchestrationReactor", () => {
       "provider-command-reactor",
       "checkpoint-reactor",
       "thread-deletion-reactor",
-      "agent-awareness-relay",
+      "subagent-summary-reactor",
     ]);
 
     await Effect.runPromise(Scope.close(scope, Exit.void));

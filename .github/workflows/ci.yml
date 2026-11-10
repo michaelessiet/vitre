@@ -14,7 +14,7 @@ on:
 permissions:
   contents: read
 
-# Only PR runs share a cancelable group. Main runs must not cancel deployments.
+# Only PR runs share a cancelable group. Main runs are never canceled.
 concurrency:
   group: vitre-ci-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -65,6 +65,8 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/setup-tools
       - run: vp run test
+      - name: Native dev runner tests
+        run: node --test apps/vitre/*.test.mjs
 
   native:
     name: Native validation

@@ -10,7 +10,6 @@ import { authCommand } from "./cli/auth.ts";
 import { sharedServerCommandFlags } from "./cli/config.ts";
 import { projectCommand } from "./cli/project.ts";
 import { runServerCommand, serveCommand, startCommand } from "./cli/server.ts";
-import { serviceCommand } from "./cli/service.ts";
 
 const CliRuntimeLayer = Layer.mergeAll(NodeServices.layer, NetService.layer);
 
@@ -18,13 +17,7 @@ export const makeCli = () =>
   Command.make("t3", { ...sharedServerCommandFlags }).pipe(
     Command.withDescription("Run the Vitre server."),
     Command.withHandler((flags) => runServerCommand(flags)),
-    Command.withSubcommands([
-      startCommand,
-      serveCommand,
-      authCommand,
-      projectCommand,
-      serviceCommand,
-    ]),
+    Command.withSubcommands([startCommand, serveCommand, authCommand, projectCommand]),
   );
 
 export const cli = makeCli();
