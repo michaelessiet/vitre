@@ -162,7 +162,7 @@ fn as_finite_number(value: &Value) -> Option<f64> {
 
 /// `compareActivitiesByOrder`: sequence first (present sorts after absent),
 /// then createdAt, then lifecycle rank, then id.
-fn compare_activities_by_order(
+pub(crate) fn compare_activities_by_order(
     left: &OrchestrationThreadActivity,
     right: &OrchestrationThreadActivity,
 ) -> std::cmp::Ordering {
@@ -259,10 +259,15 @@ pub fn derive_work_log_entries(activities: &[OrchestrationThreadActivity]) -> Ve
     let mut ordered: Vec<&OrchestrationThreadActivity> = activities.iter().collect();
     ordered.sort_by(|a, b| compare_activities_by_order(a, b));
 
+    let subagent_ids = crate::subagents::subagent_task_ids(activities);
     let mut entries: Vec<DerivedEntry> = Vec::new();
     for activity in ordered {
         let kind = activity.kind.0.as_str();
         if kind == "tool.started" || kind == "task.started" || kind == "context-window.updated" {
+            continue;
+        }
+        // Subagents and background tasks render as cards (see `subagents`), not rows.
+        if crate::subagents::is_subagent_task_activity(activity, &subagent_ids) {
             continue;
         }
         if activity.summary.0 == "Checkpoint captured" {
