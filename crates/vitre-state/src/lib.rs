@@ -49,6 +49,7 @@ pub mod terminal_ui;
 pub mod thread;
 pub mod thread_sync;
 pub mod turn_diff_tree;
+pub mod usage_limits;
 pub mod vcs_tree_status;
 pub mod vim;
 pub mod wire_opt;

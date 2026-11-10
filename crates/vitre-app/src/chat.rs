@@ -58,6 +58,7 @@ mod terminal_links;
 mod terminal_view;
 mod text;
 mod thread_feed;
+mod usage_ui;
 use thread_feed::ThreadFeed;
 #[cfg(debug_assertions)]
 mod text_verification;
@@ -331,6 +332,11 @@ pub struct ChatApp {
     expanded_dock_agents: HashSet<String>,
     /// Task ids with a stop request in flight.
     stopping_subagents: HashSet<String>,
+    /// Plan limits per provider instance, for the dock's Usage surface.
+    usage_limits: Vec<vitre_contracts::generated::ProviderUsageLimits>,
+    /// Which limit warnings were shown; warnings waiting for a window to show in.
+    usage_alerts: vitre_state::usage_limits::UsageAlertTracker,
+    pending_usage_alerts: Vec<vitre_state::usage_limits::UsageAlert>,
     /// Side tables for the non-`Copy` timeline row kinds.
     work_toggles: Vec<WorkToggleData>,
     turn_folds: Vec<TurnFoldData>,
@@ -2446,6 +2452,9 @@ impl ChatApp {
             subagents: Vec::new(),
             expanded_dock_agents: HashSet::new(),
             stopping_subagents: HashSet::new(),
+            usage_limits: Vec::new(),
+            usage_alerts: Default::default(),
+            pending_usage_alerts: Vec::new(),
             work_toggles: Vec::new(),
             turn_folds: Vec::new(),
             expanded_turn_ids: HashSet::new(),
@@ -2669,6 +2678,12 @@ impl ChatApp {
                                         ServerConfigStreamEvent::ServerConfigStreamProviderStatusesEvent(event) => {
                                             let _ = this.update(cx, |app, cx| {
                                                 app.set_provider_snapshots(event.payload.providers, cx)
+                                            });
+                                            continue;
+                                        },
+                                        ServerConfigStreamEvent::ServerConfigStreamUsageLimitsEvent(event) => {
+                                            let _ = this.update(cx, |app, cx| {
+                                                app.set_usage_limits(event.payload.limits, cx)
                                             });
                                             continue;
                                         },
@@ -7964,6 +7979,7 @@ impl Render for ChatApp {
         if let Some(message) = self.runtime_notice.take() {
             window.push_notification(Notification::info(message), cx);
         }
+        self.flush_usage_alerts(window, cx);
         if self.slow_requests != self.last_slow_notice {
             self.last_slow_notice = self.slow_requests.clone();
             if let Some(message) = self.slow_requests.clone() {

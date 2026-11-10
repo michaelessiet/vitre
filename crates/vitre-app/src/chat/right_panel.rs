@@ -732,7 +732,7 @@ impl ChatApp {
                 self.right_panel.map.open(&key, SurfaceKind::Diff);
                 self.after_dock_change(false, window, cx);
             }
-            SurfaceKind::Search | SurfaceKind::Graph | SurfaceKind::Agents => {
+            SurfaceKind::Search | SurfaceKind::Graph | SurfaceKind::Agents | SurfaceKind::Usage => {
                 let Some(key) = self.dock_thread_key() else {
                     return;
                 };
@@ -1211,6 +1211,13 @@ impl ChatApp {
                 disabled: (!project_open).then(|| "Open a project to explore its graph.".into()),
             },
             SurfaceOffer {
+                kind: SurfaceKind::Usage,
+                label: "Usage",
+                description: "See how much of each plan limit is left.",
+                icon: || Icon::new(IconName::ChartPie),
+                disabled: None,
+            },
+            SurfaceOffer {
                 kind: SurfaceKind::Diff,
                 label: "Diff",
                 description: "Review changes in this thread.",
@@ -1554,6 +1561,7 @@ impl ChatApp {
             },
             SurfaceKind::Plan => self.render_dock_plan(cx),
             SurfaceKind::Agents => self.render_dock_agents(cx),
+            SurfaceKind::Usage => self.render_dock_usage(cx),
         }
     }
 
@@ -1755,6 +1763,7 @@ fn surface_title(surface: &RightPanelSurface) -> SharedString {
         RightPanelSurface::Graph { .. } => "Graph".into(),
         RightPanelSurface::Devices { .. } => "Devices".into(),
         RightPanelSurface::Agents { .. } => "Agents".into(),
+        RightPanelSurface::Usage { .. } => "Usage".into(),
         RightPanelSurface::Preview { .. } => "Browser".into(),
         RightPanelSurface::Terminal {
             active_terminal_id, ..
@@ -1777,6 +1786,7 @@ fn surface_icon(surface: &RightPanelSurface) -> Icon {
         SurfaceKind::Graph => Icon::new(IconName::Network),
         SurfaceKind::Devices => Icon::new(IconName::Globe),
         SurfaceKind::Agents => Icon::new(IconName::Bot),
+        SurfaceKind::Usage => Icon::new(IconName::ChartPie),
         SurfaceKind::Preview => Icon::new(IconName::Globe),
         SurfaceKind::Terminal => Icon::new(IconName::SquareTerminal),
         SurfaceKind::File => Icon::new(IconName::File),

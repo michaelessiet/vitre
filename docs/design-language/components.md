@@ -11,6 +11,7 @@
 | Edit settings or submit a form         | Shared input/form controls in the existing settings/dialog layout | [settings/forms.rs](../../crates/vitre-app/src/settings/forms.rs)                                                              |
 | Explain an action or report its result | Shared tooltip or notification                                    | [polish.rs](../../crates/vitre-app/src/chat/polish.rs)                                                                         |
 | Keep work alongside chat               | Dock surface with the shared tab strip                            | [right_panel.rs](../../crates/vitre-app/src/chat/right_panel.rs)                                                               |
+| See plan limits                        | Usage dock surface (limit bars)                                   | [usage_ui.rs](../../crates/vitre-app/src/chat/usage_ui.rs)                                                                     |
 | Follow a subagent or background task   | Agent card (inline and in the Agents dock surface)                | [subagents_ui.rs](../../crates/vitre-app/src/chat/subagents_ui.rs)                                                             |
 
 ## Searchable picker
@@ -109,6 +110,20 @@ reports the end; a failed stop request restores the button and reports the
 error. The Agents surface splits **Running** from **Finished** and has an empty
 state. Colors are semantic: primary while running, warning when queued or
 paused, success, danger, and muted when stopped.
+
+## Usage limits
+
+The dock's **Usage** surface follows Claude Code's `/usage`: per provider, a
+semibold `Provider · Plan` heading with a quiet "Updated N ago" and an
+external-link ghost button to the provider's own usage page; then one block
+per limit window: the window label, an 8 px rounded bar with `N% used`
+right-aligned beside it, and a muted `Resets 3:40pm (in 2h 10m)` line.
+
+Bars use primary below 80%, warning from 80% (or when the provider says so),
+and danger when the limit is reached. A provider that reports no windows
+shows a short muted note instead, plus a danger line when a turn failed on a
+limit. Warnings are notifications, each threshold (80%, 95%, reached) once
+per window and reset period; limits restored at launch never alert.
 
 ## Inline visuals
 
