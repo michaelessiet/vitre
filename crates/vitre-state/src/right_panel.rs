@@ -38,7 +38,6 @@ pub const PERSISTED_VERSION: u64 = 10;
 pub enum SurfaceKind {
     Plan,
     Diff,
-    Tests,
     Files,
     File,
     Preview,
@@ -68,9 +67,6 @@ pub enum RightPanelSurface {
         id: String,
     },
     Diff {
-        id: String,
-    },
-    Tests {
         id: String,
     },
     Files {
@@ -120,7 +116,6 @@ impl RightPanelSurface {
     pub fn id(&self) -> &str {
         match self {
             Self::Plan { id }
-            | Self::Tests { id }
             | Self::Diff { id }
             | Self::Files { id }
             | Self::Search { id }
@@ -134,7 +129,6 @@ impl RightPanelSurface {
         match self {
             Self::Plan { .. } => SurfaceKind::Plan,
             Self::Diff { .. } => SurfaceKind::Diff,
-            Self::Tests { .. } => SurfaceKind::Tests,
             Self::Files { .. } => SurfaceKind::Files,
             Self::Search { .. } => SurfaceKind::Search,
             Self::Graph { .. } => SurfaceKind::Graph,
@@ -149,7 +143,6 @@ impl RightPanelSurface {
         let id = match kind {
             SurfaceKind::Plan => "plan",
             SurfaceKind::Diff => "diff",
-            SurfaceKind::Tests => "tests",
             SurfaceKind::Files => "files",
             SurfaceKind::Search => "search",
             SurfaceKind::Graph => "graph",
@@ -159,7 +152,6 @@ impl RightPanelSurface {
         Some(match kind {
             SurfaceKind::Plan => Self::Plan { id: id.into() },
             SurfaceKind::Diff => Self::Diff { id: id.into() },
-            SurfaceKind::Tests => Self::Tests { id: id.into() },
             SurfaceKind::Files => Self::Files { id: id.into() },
             SurfaceKind::Search => Self::Search { id: id.into() },
             SurfaceKind::Graph => Self::Graph { id: id.into() },
@@ -882,27 +874,6 @@ mod tests {
         assert_eq!(restored.thread(KEY).surfaces.len(), 1);
         restored.close_surface(KEY, "devices");
         assert!(restored.thread(KEY).surfaces.is_empty());
-    }
-
-    #[test]
-    fn cloud_tests_surface_is_singleton_and_round_trips() {
-        let mut map = RightPanelMap::default();
-        map.open("cloud:task-1", SurfaceKind::Tests);
-        map.open("cloud:task-1", SurfaceKind::Tests);
-        assert_eq!(map.active_kind("cloud:task-1"), Some(SurfaceKind::Tests));
-        let surface = RightPanelSurface::Tests { id: "tests".into() };
-        let json = serde_json::to_string(&surface).unwrap();
-        assert!(json.contains("\"kind\":\"tests\""));
-        assert_eq!(
-            serde_json::from_str::<RightPanelSurface>(&json).unwrap(),
-            surface
-        );
-        assert_eq!(surface.id(), "tests");
-        let restored = RightPanelMap::from_persisted(&map.to_persisted());
-        assert_eq!(
-            restored.active_kind("cloud:task-1"),
-            Some(SurfaceKind::Tests)
-        );
     }
 
     #[test]

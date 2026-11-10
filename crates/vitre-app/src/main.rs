@@ -4,8 +4,6 @@
 mod assets;
 mod chat;
 mod client_settings;
-#[allow(dead_code)] // Cloud screens are no longer opened from the desktop.
-mod cloud;
 mod desktop;
 mod files;
 mod git_gutter;
@@ -14,7 +12,6 @@ mod graph;
 mod icons;
 mod image_render;
 mod keymap;
-mod lens;
 mod lsp;
 mod mobile;
 mod palette;

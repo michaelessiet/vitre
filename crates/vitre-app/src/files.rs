@@ -304,9 +304,6 @@ pub struct FilesPanel {
     filter_query: String,
     markdown_preview: bool,
     client: Arc<EnvironmentClient>,
-    remote: bool,
-    asset_thread_id: Option<vitre_contracts::ThreadId>,
-    transfer_locked: bool,
     cwd: String,
     tree: Option<FileTreeModel>,
     /// Recomputed only after a listing/expansion change, not on scroll or hover.
@@ -492,9 +489,6 @@ impl FilesPanel {
             filter_query: String::new(),
             markdown_preview: false,
             client,
-            remote: false,
-            asset_thread_id: None,
-            transfer_locked: false,
             cwd,
             tree: None,
             tree_truncated: false,
@@ -539,16 +533,6 @@ impl FilesPanel {
     }
 
     /// Which workspace this panel browses (ChatApp recreates on change).
-    pub fn set_asset_thread(&mut self, thread_id: Option<vitre_contracts::ThreadId>) {
-        self.asset_thread_id = thread_id;
-    }
-    pub fn set_remote(&mut self, remote: bool) {
-        self.remote = remote;
-    }
-    pub fn set_transfer_locked(&mut self, locked: bool, cx: &mut Context<Self>) {
-        self.transfer_locked = locked;
-        cx.notify();
-    }
 
     pub fn uses_client(&self, client: &Arc<EnvironmentClient>) -> bool {
         Arc::ptr_eq(&self.client, client)
@@ -3094,7 +3078,7 @@ impl FilesPanel {
                 div().flex_1().min_h_0().child(
                     Editor::new(&self.editor)
                         .text_size(px(ClientSettings::get(cx).editor_font_size as f32))
-                        .readonly(truncated || self.refactor_busy || self.transfer_locked)
+                        .readonly(truncated || self.refactor_busy)
                         .context_menu(move |menu, _, _| {
                             menu.menu("Go to Definition", Box::new(GoToDefinition))
                                 .menu("Find References", Box::new(FindReferences))

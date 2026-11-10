@@ -18,13 +18,6 @@ impl ChatApp {
         let Some(thread) = self.dock_thread_key() else {
             return;
         };
-        if self.is_cloud_thread() {
-            window.push_notification(
-                Notification::info("Devices requires a local project thread."),
-                cx,
-            );
-            return;
-        }
         self.mobile_opening = true;
         cx.notify();
         let job = gpui_tokio::Tokio::spawn_result(cx, crate::mobile::devices());

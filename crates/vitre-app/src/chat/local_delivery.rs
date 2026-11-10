@@ -268,11 +268,7 @@ impl ChatApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(open) = self
-            .thread
-            .as_ref()
-            .filter(|open| matches!(open.feed, ThreadFeed::Local { .. }))
-        else {
+        let Some(open) = self.thread.as_ref() else {
             return;
         };
         let thread_id = open.id.clone();
@@ -678,7 +674,7 @@ mod tests {
             serde_json::to_value(&restored.command).unwrap(),
             serde_json::to_value(&original.command).unwrap()
         );
-        let mut view = crate::cloud::tests::fixtures::thread();
+        let mut view = super::super::thread_feed::thread_fixture();
         assert!(!restored.acknowledged(&view));
         let mut unrelated = restored.optimistic.clone();
         unrelated.id = MessageId("another-request".into());
@@ -694,7 +690,7 @@ mod tests {
     #[test]
     fn new_plan_persists_creation_and_turn_intent_with_original_keys() {
         let original = pending("plan-command");
-        let mut view = crate::cloud::tests::fixtures::thread();
+        let mut view = super::super::thread_feed::thread_fixture();
         view.id = original.thread_id.clone();
         let create = ClientOrchestrationCommand::ThreadCreate {
             additional_roots: None,
@@ -723,7 +719,7 @@ mod tests {
     #[test]
     fn matching_message_accepts_delivery_but_does_not_end_the_startup_fence() {
         let pending = pending("starting");
-        let mut view = crate::cloud::tests::fixtures::thread();
+        let mut view = super::super::thread_feed::thread_fixture();
         view.messages.push(pending.optimistic.clone());
         assert!(pending.acknowledged(&view));
         assert!(!pending.execution_observed(&view));
@@ -736,7 +732,7 @@ mod tests {
     #[test]
     fn steering_acknowledges_the_exact_message_without_a_new_turn() {
         let mut pending = pending("steering");
-        let mut view = crate::cloud::tests::fixtures::thread();
+        let mut view = super::super::thread_feed::thread_fixture();
         view.latest_turn = Some(
             serde_json::from_value(serde_json::json!({
                 "turnId":"same-turn", "state":"running", "requestedAt":"2026-10-16T10:00:00Z",
@@ -853,17 +849,9 @@ mod tests {
             );
             app.thread = Some(OpenThread {
                 id: first.thread_id.clone(),
-                feed: ThreadFeed::Cloud(cloud_thread::CloudThreadFeed {
-                    task_id: "fixture".into(),
-                    source: cloud_thread::CloudSource::Mirror,
-                    live: None,
-                    live_task: None,
-                    connect_seq: 0,
-                    connection_identity: None,
-                    connection_phase: SyncPhase::Disconnected,
-                }),
+                _feed: ThreadFeed::detached(),
                 state: ThreadState {
-                    view: Some(Arc::new(crate::cloud::tests::fixtures::thread())),
+                    view: Some(Arc::new(super::super::thread_feed::thread_fixture())),
                     ..Default::default()
                 },
             });

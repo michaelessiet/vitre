@@ -99,13 +99,6 @@ impl ChatApp {
                                     thread.title.0.clone().into(),
                                     cx,
                                 ))
-                                .when(self.thread_location(&thread.id).is_cloud(), |row| {
-                                    row.child(
-                                        Icon::new(IconName::Globe)
-                                            .size_3()
-                                            .text_color(cx.theme().muted_foreground),
-                                    )
-                                })
                                 .child(
                                     Button::new(SharedString::from(format!(
                                         "beta-menu-{}",
@@ -143,28 +136,26 @@ impl ChatApp {
                     );
                 }
                 let id = thread.id.clone();
-                card = card.when(!self.thread_location(&thread.id).is_cloud(), |card| {
-                    card.child(
-                        Button::new("settle-thread")
-                            .label(if settled { "Resume" } else { "Settle" })
-                            .ghost()
-                            .xsmall()
-                            .disabled(matches!(
-                                status,
-                                Some(
-                                    ThreadStatus::Working
-                                        | ThreadStatus::Connecting
-                                        | ThreadStatus::PendingApproval
-                                        | ThreadStatus::AwaitingInput
-                                        | ThreadStatus::NeedsAttention
-                                )
-                            ))
-                            .on_click(cx.listener(move |p, _, _, cx| {
-                                cx.stop_propagation();
-                                p.set_thread_settled(id.clone(), !settled, cx);
-                            })),
-                    )
-                });
+                card = card.child(
+                    Button::new("settle-thread")
+                        .label(if settled { "Resume" } else { "Settle" })
+                        .ghost()
+                        .xsmall()
+                        .disabled(matches!(
+                            status,
+                            Some(
+                                ThreadStatus::Working
+                                    | ThreadStatus::Connecting
+                                    | ThreadStatus::PendingApproval
+                                    | ThreadStatus::AwaitingInput
+                                    | ThreadStatus::NeedsAttention
+                            )
+                        ))
+                        .on_click(cx.listener(move |p, _, _, cx| {
+                            cx.stop_propagation();
+                            p.set_thread_settled(id.clone(), !settled, cx);
+                        })),
+                );
                 let owner = cx.entity().downgrade();
                 let target = self.thread_menu_target(&thread.id);
                 if self.is_thread_renaming(&thread.id) {
@@ -191,9 +182,6 @@ impl ChatApp {
         settle: bool,
         cx: &mut Context<Self>,
     ) {
-        if self.thread_location(&id).is_cloud() {
-            return;
-        }
         let Some(client) = self.client.clone() else {
             return;
         };

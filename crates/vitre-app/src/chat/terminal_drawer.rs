@@ -181,10 +181,6 @@ impl ChatApp {
     /// dock there is no `:home` pseudo-thread — Electron's drawer only exists
     /// inside a thread view.
     pub(super) fn terminal_thread_key(&self) -> Option<String> {
-        if self.is_cloud_thread() {
-            self.workspace_client()?;
-            return self.dock_thread_key();
-        }
         let client = self.workspace_client()?;
         let session = client.sessions().borrow().clone()?;
         let environment = session.config.environment.environment_id.0.clone();
@@ -194,17 +190,6 @@ impl ChatApp {
 
     pub(super) fn thread_launch_defaults(&self) -> Option<ThreadLaunchDefaults> {
         let open = self.thread.as_ref()?;
-        if self.is_cloud_thread() {
-            let cwd = self
-                .selected_workspace_root()
-                .or_else(|| self.open_project_root())?;
-            return Some(ThreadLaunchDefaults {
-                thread_id: self.execution_thread_id()?.0,
-                cwd: cwd.clone(),
-                worktree: None,
-                env: BTreeMap::from([("T3CODE_PROJECT_ROOT".into(), cwd)]),
-            });
-        }
         let shell_thread = self.shell_thread(&open.id)?;
         let worktree = shell_thread
             .worktree_path

@@ -6,15 +6,9 @@
 //! the thread shell (the TS client's `mergeEnvironmentThread` split).
 
 mod branch_toolbar;
-pub(crate) mod cloud_thread;
-use cloud_thread::{CloudDraft, ThreadFeed, ThreadLocation, WorkLocation};
 #[cfg(debug_assertions)]
 mod capabilities_verification;
 mod changed_files;
-#[cfg(test)]
-mod cloud_thread_tests;
-#[cfg(debug_assertions)]
-mod cloud_thread_verification;
 mod conversation_status;
 mod diff_panel;
 mod drafts;
@@ -43,7 +37,6 @@ mod preview;
 mod preview_automation;
 mod preview_capture;
 mod preview_recording;
-mod preview_tunnel;
 #[cfg(debug_assertions)]
 mod preview_verification;
 mod project_actions;
@@ -63,6 +56,8 @@ mod terminal_drawer;
 mod terminal_links;
 mod terminal_view;
 mod text;
+mod thread_feed;
+use thread_feed::ThreadFeed;
 #[cfg(debug_assertions)]
 mod text_verification;
 mod thread_actions;
@@ -240,7 +235,6 @@ pub struct ChatApp {
     status_motion: conversation_status::StatusMotion,
     status_art_timer: Option<Task<()>>,
     status_surface_visible: bool,
-    status_debug_key: Option<String>,
     local_stops: HashMap<ThreadId, conversation_status::LocalStop>,
     pending_terminal_link: Option<terminal_links::TerminalLink>,
     dock_presentation_key: Option<String>,
@@ -479,33 +473,6 @@ pub struct ChatApp {
     settings: Option<Entity<crate::settings::SettingsPanel>>,
     /// Live while `settings` is: closes the surface when it asks to leave.
     settings_subscription: Option<Subscription>,
-    lens_open: bool,
-    lens_panel: Option<Entity<crate::lens::LensPanel>>,
-    lens_subscription: Option<Subscription>,
-    cloud_store: Entity<crate::cloud::CloudStore>,
-    cloud_shells: Vec<OrchestrationThreadShell>,
-    cloud_shell_index: HashMap<ThreadId, usize>,
-    cloud_project_for_task: HashMap<String, ProjectId>,
-    cloud_tasks: HashMap<String, vitre_contracts::CloudTask>,
-    cloud_bindings: HashMap<ThreadId, vitre_contracts::CloudConversationBinding>,
-    cloud_switch: Option<vitre_contracts::CloudSwitchStatus>,
-    cloud_switch_task: Option<Task<()>>,
-    cloud_switch_saving: bool,
-    cloud_switch_selection: Option<WorkLocation>,
-    cloud_pending_send: Option<cloud_thread::CloudPendingSend>,
-    cloud_pending_sends: HashMap<String, cloud_thread::CloudPendingSend>,
-    cloud_stops: HashMap<String, cloud_thread::CloudStopState>,
-    /// `task:attempt` keys already woken automatically after a lost heartbeat.
-    cloud_wake_attempts: HashSet<String>,
-    cloud_transfer_generation: u64,
-    cloud_creating_project: Option<ProjectId>,
-    cloud_pending_starts: HashMap<String, cloud_thread::CloudPendingStart>,
-    cloud_diff_cache: Option<(String, Vec<vitre_state::diff_patch::PatchFile>)>,
-    draft_work_location: WorkLocation,
-    cloud_draft: CloudDraft,
-    cloud_sheet: Option<crate::cloud::Sheet>,
-    cloud_branch: Entity<gpui_component::input::InputState>,
-    cloud_issue: Entity<gpui_component::input::InputState>,
     /// The shell's own focus. Actions dispatch along the focus path, and with
     /// nothing focused gpui falls back to the window's root node — which is
     /// above this view, so the palette shortcuts would reach no handler.
@@ -636,7 +603,8 @@ enum ComposerTriggerKind {
 struct OpenThread {
     id: ThreadId,
     /// Keeps the sync task alive; dropped (aborted) on reselection.
-    feed: ThreadFeed,
+    /// Held only to keep the thread subscription alive.
+    _feed: ThreadFeed,
     state: ThreadState,
 }
 
@@ -1550,6 +1518,8 @@ pub(crate) fn displayed_user_prompt(prompt: &str) -> &str {
         };
         prompt = unwrapped;
     }
+    // Conversations moved from the former Vitre Cloud carry this trailing
+    // context block in their stored history.
     if prompt.ends_with("\n</vitre_cloud_context>") {
         prompt
             .split_once("\n\n<vitre_cloud_context>\n")
@@ -2248,81 +2218,6 @@ impl ChatApp {
             },
         ));
 
-        let cloud_store = crate::cloud::CloudStore::global(cx);
-        subscriptions.push(cx.subscribe_in(
-            &cloud_store,
-            window,
-            |app, _, event: &crate::cloud::store::CloudEvent, window, cx| {
-                app.rebuild_cloud_shells(cx);
-                app.rebuild_sidebar();
-                app.sync_cloud_thread(cx);
-                app.sync_cloud_draft(window, cx);
-                app.reconcile_cloud_send(window, cx);
-                app.reconcile_cloud_start(window, cx);
-                match event {
-                    #[cfg(test)]
-                    crate::cloud::store::CloudEvent::TaskCreated(id) => {
-                        let origin = app.cloud_creating_project.take();
-                        let still_here =
-                            app.thread.is_none() && origin.is_some() && app.draft_project == origin;
-                        app.draft_creating = false;
-                        if let Some(project) = origin {
-                            if let Err(error) = app.drafts.copy_preferences(
-                                &format!("project:{}", project.0),
-                                &cloud_thread::cloud_thread_id(id).0,
-                            ) {
-                                app.runtime_notice = Some(
-                                    format!("Could not retain composer preferences: {error}")
-                                        .into(),
-                                );
-                            }
-                            if let Err(error) =
-                                app.drafts.clear_text(&format!("project:{}", project.0))
-                            {
-                                app.runtime_notice =
-                                    Some(format!("Could not clear cloud draft: {error}").into());
-                            }
-                        }
-                        if still_here {
-                            app.pending_attachments.clear();
-                            app.composer.update(cx, |s, cx| s.set_value("", window, cx));
-                            app.save_composer_draft(cx);
-                            app.select_thread(cloud_thread::cloud_thread_id(id), cx);
-                        }
-                    }
-                    crate::cloud::store::CloudEvent::Changed => {
-                        let preview = cfg!(debug_assertions)
-                            && std::env::var("VITRE_LENS_PREVIEW").as_deref() == Ok("1");
-                        if !preview
-                            && matches!(
-                                app.cloud_store.read(cx).session,
-                                crate::cloud::store::SessionState::SignedOut
-                                    | crate::cloud::store::SessionState::Disabled
-                            )
-                        {
-                            app.lens_open = false;
-                            app.lens_panel = None;
-                            app.lens_subscription = None;
-                        }
-                    }
-                }
-                cx.notify();
-            },
-        ));
-        subscriptions.push(cx.observe(&cloud_store, |_, _, cx| cx.notify()));
-        let cloud_branch =
-            cx.new(|cx| gpui_component::input::InputState::new(window, cx).placeholder("branch"));
-        let cloud_issue =
-            cx.new(|cx| gpui_component::input::InputState::new(window, cx).placeholder("Issue #"));
-
-        for input in [&cloud_branch, &cloud_issue] {
-            subscriptions.push(cx.subscribe(input, |app, _, event: &InputEvent, cx| {
-                if matches!(event, InputEvent::Change) {
-                    app.schedule_draft_save(cx);
-                    cx.notify();
-                }
-            }));
-        }
         // Sidecar status line for the footer.
         cx.spawn({
             let mut status_rx = status_rx.clone();
@@ -2378,15 +2273,6 @@ impl ChatApp {
                             settings
                                 .update(cx, |panel, cx| panel.attach_client(client.clone(), cx));
                         }
-                        if let Some(lens) = app.lens_panel.clone() {
-                            lens.update(cx, |panel, cx| panel.attach(client.clone(), cx));
-                        }
-                        // The cloud store probes the saved session as soon as the
-                        // sidecar is up, so cloud conversations appear in the
-                        // shared sidebar before anyone opens them.
-                        let store = crate::cloud::CloudStore::global(cx);
-                        cx.observe(&store, |_, _, cx| cx.notify()).detach();
-                        store.update(cx, |store, cx| store.attach(client, cx));
                         app.spawn_terminal_metadata_loop(cx);
                         app.spawn_server_keymap_loop(cx);
                         cx.notify();
@@ -2400,7 +2286,6 @@ impl ChatApp {
                     if this
                         .update(cx, |app, cx| {
                             app.shell = state;
-                            app.rebuild_cloud_shells(cx);
                             if let Some((thread_id, pending)) = &app.pending_interaction_mode
                                 && app.shell_thread(thread_id).is_some_and(|thread| {
                                     thread
@@ -2415,7 +2300,7 @@ impl ChatApp {
                             // The open thread's row keeps its "seen" stamp current
                             // so a turn finishing under your eyes doesn't light up
                             // as unread.
-                            app.sync_thread_visit(cx);
+                            app.sync_thread_visit();
                             app.rebuild_sidebar();
                             app.maybe_open_debug_thread(cx);
                             cx.notify();
@@ -2487,7 +2372,6 @@ impl ChatApp {
             status_motion: conversation_status::StatusMotion::default(),
             status_art_timer: None,
             status_surface_visible: false,
-            status_debug_key: None,
             local_stops: HashMap::new(),
             pending_terminal_link: None,
             dock_presentation_key: None,
@@ -2604,32 +2488,6 @@ impl ChatApp {
             command_palette: None,
             settings: None,
             settings_subscription: None,
-            lens_open: false,
-            lens_panel: None,
-            lens_subscription: None,
-            cloud_store,
-            cloud_pending_send: None,
-            cloud_pending_sends: HashMap::new(),
-            cloud_stops: HashMap::new(),
-            cloud_wake_attempts: HashSet::new(),
-            cloud_transfer_generation: 0,
-            cloud_creating_project: None,
-            cloud_pending_starts: HashMap::new(),
-            cloud_diff_cache: None,
-            cloud_shells: Vec::new(),
-            cloud_shell_index: HashMap::new(),
-            cloud_project_for_task: HashMap::new(),
-            cloud_tasks: HashMap::new(),
-            cloud_bindings: HashMap::new(),
-            cloud_switch: None,
-            cloud_switch_task: None,
-            cloud_switch_saving: false,
-            cloud_switch_selection: None,
-            draft_work_location: WorkLocation::Local,
-            cloud_draft: CloudDraft::default(),
-            cloud_sheet: None,
-            cloud_branch,
-            cloud_issue,
             focus_handle,
             _subscriptions: subscriptions,
         }
@@ -3095,16 +2953,7 @@ impl ChatApp {
         let Some(cwd) = self.file_viewer_root() else {
             return;
         };
-        let resolving = self
-            .cloud_switch
-            .as_ref()
-            .and_then(|status| status.conflict_roots.as_ref())
-            .is_some_and(|roots| roots.iter().any(|root| root.path == cwd));
-        let Some(client) = (if resolving {
-            self.client.clone()
-        } else {
-            self.workspace_client()
-        }) else {
+        let Some(client) = self.workspace_client() else {
             return;
         };
         if self
@@ -3142,15 +2991,6 @@ impl ChatApp {
             }
             None => cx.new(|cx| FilesPanel::new(client, cwd, window, cx)),
         };
-        panel.update(cx, |panel, cx| {
-            panel.set_remote(self.is_cloud_thread() && !resolving);
-            panel.set_asset_thread(if resolving {
-                None
-            } else {
-                self.execution_thread_id()
-            });
-            panel.set_transfer_locked(self.location_switch_blocks_turn() && !resolving, cx);
-        });
         self.files_review_subscription = Some(cx.subscribe_in(
             &panel,
             window,
@@ -3237,7 +3077,6 @@ impl ChatApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.lens_open = false;
         let Some(client) = self.client.clone() else {
             return;
         };
@@ -3460,73 +3299,12 @@ impl ChatApp {
         cx.notify();
     }
 
-    fn open_lens(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.settings = None;
-        if self.lens_panel.is_none() {
-            let panel = cx.new(|cx| crate::lens::LensPanel::new(self.client.clone(), window, cx));
-            self.lens_subscription = Some(cx.subscribe_in(
-                &panel,
-                window,
-                |app, _, target: &crate::lens::LensOpenTarget, window, cx| {
-                    if cfg!(debug_assertions) && target.source == "qa:devices" {
-                        app.lens_open = false;
-                        app.open_devices(window, cx);
-                        return;
-                    }
-                    if target.source == "cloud" {
-                        app.select_thread(ThreadId(format!("cloud-{}", target.target)), cx);
-                    } else if app
-                        .client
-                        .as_ref()
-                        .and_then(|client| {
-                            client.sessions().borrow().as_ref().map(|session| {
-                                format!("local:{}", session.config.environment.environment_id.0)
-                            })
-                        })
-                        .as_deref()
-                        == Some(target.source.as_str())
-                    {
-                        app.select_thread(ThreadId(target.target.clone()), cx);
-                    } else {
-                        window.push_notification(
-                            Notification::info("Open this conversation on its original desktop."),
-                            cx,
-                        );
-                    }
-                },
-            ));
-            self.lens_panel = Some(panel);
-        }
-        self.lens_open = true;
-        cx.notify();
-    }
-
     fn select_thread(&mut self, id: ThreadId, cx: &mut Context<Self>) {
-        self.lens_open = false;
         cx.notify();
-        let id = self
-            .cloud_bindings
-            .get(&id)
-            .map(|binding| ThreadId(binding.local_thread_id.clone()))
-            .unwrap_or(id);
-        let location = self.thread_location(&id);
-        if self.thread.as_ref().is_some_and(|open| open.id == id)
-            && self.open_location() == location
-        {
+        if self.thread.as_ref().is_some_and(|open| open.id == id) || self.client.is_none() {
             return;
-        }
-        let cloud = location.is_cloud();
-        if !cloud && self.client.is_none() {
-            return;
-        }
-        if self.is_cloud_thread() {
-            self.cloud_store
-                .update(cx, |store, cx| store.watch(None, cx));
         }
         self.save_composer_draft(cx);
-        self.cloud_switch = None;
-        self.cloud_switch_selection = None;
-        self.watch_location_switch(id.clone(), cx);
         self.draft_project = None;
         self.draft_restore = Some(self.drafts.load(&id.0));
         self.input_draft = None;
@@ -3543,7 +3321,6 @@ impl ChatApp {
         self.smoothed_assistant_text.clear();
         self.smoothing_tick = None;
         self.pending_send = None;
-        self.cloud_pending_send = None;
         self.pending_revert = None;
         self.pending_interaction_mode = None;
         self.pending_timeline_anchor = None;
@@ -3567,27 +3344,18 @@ impl ChatApp {
         self.terminal_views.clear();
         self.terminal_view_subs.clear();
         self.terminal_drag = None;
-        if cloud {
-            self.open_cloud_thread(id, cx);
-            self.sync_thread_visit(cx);
-            self.rebuild_sidebar();
-            self.sync_git_status(cx);
-            self.sync_branch_toolbar(cx);
-            cx.notify();
-            return;
-        }
         self.local_feed_generation = self.local_feed_generation.wrapping_add(1);
         let feed_generation = self.local_feed_generation;
         let handle = self.client.as_ref().unwrap().open_thread(id.clone());
         let mut state_rx = handle.state();
         self.thread = Some(OpenThread {
             id: id.clone(),
-            feed: ThreadFeed::Local { _handle: handle },
+            _feed: ThreadFeed::live(handle),
             state: ThreadState::default(),
         });
         // Opening a thread clears its unread completion and re-pins it in its
         // project's preview window.
-        self.sync_thread_visit(cx);
+        self.sync_thread_visit();
         self.rebuild_sidebar();
         // Terminals the server already has for this thread appear as tabs.
         self.reconcile_drawer_terminals(cx);
@@ -3601,9 +3369,7 @@ impl ChatApp {
                 let stop = this
                     .update(cx, |app, cx| {
                         if app.local_feed_generation != feed_generation
-                            || app.thread.as_ref().is_none_or(|open| {
-                                open.id != id || !matches!(open.feed, ThreadFeed::Local { .. })
-                            })
+                            || app.thread.as_ref().is_none_or(|open| open.id != id)
                         {
                             return true;
                         }
@@ -3629,9 +3395,6 @@ impl ChatApp {
     }
 
     fn sync_source_plan_thread(&mut self, cx: &mut Context<Self>) {
-        if self.is_cloud_thread() {
-            return;
-        }
         let source = self
             .thread
             .as_ref()
@@ -3743,14 +3506,6 @@ impl ChatApp {
     /// navigate-to-`/` after deleting the last thread of a project. The same
     /// per-thread teardown as `select_thread`, with nothing opened after.
     fn close_open_thread(&mut self, cx: &mut Context<Self>) {
-        self.cloud_switch_task = None;
-        self.cloud_switch = None;
-        self.cloud_switch_selection = None;
-        self.cloud_switch_saving = false;
-        if self.is_cloud_thread() {
-            self.cloud_store
-                .update(cx, |store, cx| store.watch(None, cx));
-        }
         if self.thread.is_none() {
             return;
         }
@@ -3770,7 +3525,6 @@ impl ChatApp {
         self.smoothed_assistant_text.clear();
         self.smoothing_tick = None;
         self.pending_send = None;
-        self.cloud_pending_send = None;
         self.pending_revert = None;
         self.pending_timeline_anchor = None;
         self.expanded_user_messages.clear();
@@ -3795,19 +3549,6 @@ impl ChatApp {
     }
 
     fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.location_switch_blocks_turn() {
-            self.last_error = Some("This conversation is moving. Your draft is saved.".into());
-            cx.notify();
-            return;
-        }
-        if self.is_cloud_thread() {
-            self.send_cloud(window, cx);
-            return;
-        }
-        if self.thread.is_none() && self.draft_work_location.is_cloud() {
-            self.create_cloud_task(window, cx);
-            return;
-        }
         if self.thread.is_none() {
             if !self.composer.read(cx).value().trim().is_empty()
                 || !self.pending_attachments.is_empty()
@@ -4035,10 +3776,6 @@ impl ChatApp {
     }
 
     fn stop_turn(&mut self, cx: &mut Context<Self>) {
-        if self.is_cloud_thread() {
-            self.cancel_cloud_task(cx);
-            return;
-        }
         let Some(client) = self.workspace_client() else {
             return;
         };
@@ -4154,12 +3891,6 @@ impl ChatApp {
             return;
         };
         if !self.conversation_status(cx).can_respond {
-            return;
-        }
-        if let Some(task_id) = self.open_cloud_task_id() {
-            self.cloud_store.update(cx, |store, cx| {
-                store.respond_approval(task_id, request_id, decision, cx)
-            });
             return;
         }
         let command = ClientOrchestrationCommand::ThreadApprovalRespond {
@@ -4286,12 +4017,6 @@ impl ChatApp {
         if !self.conversation_status(cx).can_respond {
             return;
         }
-        if let Some(task_id) = self.open_cloud_task_id() {
-            self.cloud_store.update(cx, |store, cx| {
-                store.respond_user_input(task_id, pending.request_id, answers, cx)
-            });
-            return;
-        }
         let command = ClientOrchestrationCommand::ThreadUserInputRespond {
             answers,
             command_id: CommandId(fresh_id("vitre-cmd")),
@@ -4331,9 +4056,6 @@ impl ChatApp {
         turn_count: i64,
         cx: &mut Context<Self>,
     ) {
-        if self.location_switch_pending() {
-            return;
-        }
         if self.reverting {
             return;
         }
@@ -4393,13 +4115,6 @@ impl ChatApp {
             .iter()
             .flat_map(|snapshot| snapshot.threads.iter())
             .filter(|thread| {
-                !self.cloud_shell_index.contains_key(&thread.id)
-                    && !self.cloud_bindings.get(&thread.id).is_some_and(|binding| {
-                        binding.target != vitre_contracts::CloudExecutionTarget::Local
-                    })
-            })
-            .chain(self.cloud_shells.iter())
-            .filter(|thread| {
                 // archived_at: triple Option — only Some(Some(Some(_))) is set.
                 !matches!(&thread.archived_at, Some(Some(Some(_))))
             })
@@ -4412,22 +4127,10 @@ impl ChatApp {
     /// The SHELL's copy of a thread — canonical for title/meta (meta events
     /// are shell-scoped, so the detail projection never sees them).
     fn shell_thread(&self, id: &ThreadId) -> Option<&OrchestrationThreadShell> {
-        if let Some(shell) = self
-            .cloud_shell_index
-            .get(id)
-            .and_then(|i| self.cloud_shells.get(*i))
-        {
-            return Some(shell);
-        }
         self.shell
             .snapshot
             .as_ref()
             .and_then(|snapshot| snapshot.threads.iter().find(|thread| thread.id == *id))
-            .or_else(|| {
-                self.cloud_shell_index
-                    .get(id)
-                    .and_then(|i| self.cloud_shells.get(*i))
-            })
     }
 
     /// Canonical title comes from the SHELL (meta events are shell-scoped).
@@ -4441,9 +4144,6 @@ impl ChatApp {
     /// lazily on next turn start; persisting immediately is equivalent for the
     /// thread's stored selection and keeps the picker stateless.
     fn set_model(&mut self, selection: ModelSelection, cx: &mut Context<Self>) {
-        if self.location_switch_blocks_turn() {
-            return;
-        }
         if self.thread.is_none() {
             self.draft_model = Some(selection);
             if self.composer_menu.is_some() {
@@ -4498,16 +4198,6 @@ impl ChatApp {
             cx.notify();
             return;
         }
-        if self.is_cloud_thread()
-            && current
-                .and_then(model_selection_identity)
-                .map(|value| value.0)
-                != model_selection_identity(&selection).map(|value| value.0)
-        {
-            self.last_error = Some("Changing provider requires a new conversation.".into());
-            cx.notify();
-            return;
-        }
         let command = ClientOrchestrationCommand::ThreadMetaUpdate {
             additional_roots: None,
             branch: None,
@@ -4539,9 +4229,6 @@ impl ChatApp {
         value: serde_json::Value,
         cx: &mut Context<Self>,
     ) {
-        if self.location_switch_blocks_turn() {
-            return;
-        }
         let selection = if let Some(open) = &self.thread {
             self.shell_thread(&open.id)
                 .map(|thread| thread.model_selection.clone())
@@ -4593,9 +4280,6 @@ impl ChatApp {
     }
 
     fn open_model_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.location_switch_blocks_turn() {
-            return;
-        }
         if self.model_picker.take().is_some() {
             self.composer.focus_handle(cx).focus(window, cx);
             cx.notify();
@@ -4689,9 +4373,6 @@ impl ChatApp {
         interaction_mode: ProviderInteractionMode,
         cx: &mut Context<Self>,
     ) {
-        if self.location_switch_blocks_turn() {
-            return;
-        }
         self.ask_mode = false;
         self.schedule_draft_save(cx);
         cx.notify();
@@ -4743,9 +4424,6 @@ impl ChatApp {
     }
 
     fn set_ask_mode(&mut self, cx: &mut Context<Self>) {
-        if self.location_switch_blocks_turn() {
-            return;
-        }
         self.set_interaction_mode(ProviderInteractionMode::Default, cx);
         self.ask_mode = true;
         self.schedule_draft_save(cx);
@@ -4757,9 +4435,6 @@ impl ChatApp {
             self.draft_runtime_mode = runtime_mode;
             self.schedule_draft_save(cx);
             cx.notify();
-            return;
-        }
-        if self.location_switch_blocks_turn() {
             return;
         }
         let (Some(client), Some(open)) = (self.workspace_client(), self.thread.as_ref()) else {
@@ -4800,9 +4475,6 @@ impl ChatApp {
     /// project's workspace root. This is the thread-scoped cwd: the composer's
     /// `@`-mention search runs here, as Electron's does.
     fn open_project_root(&self) -> Option<String> {
-        if self.is_cloud_thread() {
-            return self.remote_workspace_roots().into_iter().next();
-        }
         let open = self.thread.as_ref()?;
         let thread = self.shell_thread(&open.id)?;
         // A worktree thread searches its checkout, not the project's main
@@ -4832,11 +4504,6 @@ impl ChatApp {
     /// files from the home view, where no thread is selected. Without the
     /// last step the file corpus is silently empty there.
     fn search_root(&self) -> Option<String> {
-        if self.is_cloud_thread() {
-            return self
-                .selected_workspace_root()
-                .or_else(|| self.open_project_root());
-        }
         self.selected_workspace_root()
             .or_else(|| self.open_project_root())
             .or_else(|| {
@@ -4923,10 +4590,6 @@ impl ChatApp {
     }
 
     fn sync_composer_menu(&mut self, cx: &mut Context<Self>) {
-        if self.is_cloud_thread() || self.thread.is_none() && self.draft_work_location.is_cloud() {
-            self.composer_menu = None;
-            return;
-        }
         let (value, cursor) = {
             let state = self.composer.read(cx);
             (state.value(), state.cursor())
@@ -5358,9 +5021,6 @@ impl ChatApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if self.is_cloud_thread() || self.thread.is_none() && self.draft_work_location.is_cloud() {
-            return false;
-        }
         if matches!(
             clipboard.entries().first(),
             Some(ClipboardEntry::String(_)) | None
@@ -6340,11 +6000,7 @@ impl ChatApp {
                 }
             }
         }
-        self.revert_turn_counts = if self.is_cloud_thread() && self.workspace_client().is_none() {
-            HashMap::new()
-        } else {
-            counts
-        };
+        self.revert_turn_counts = counts;
 
         // The changed-files card's auto-expand decision is made once per turn,
         // at the web component's mount ≙ the checkpoint's first appearance.
@@ -7409,17 +7065,11 @@ impl ChatApp {
         header_inset: gpui::Pixels,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let cloud = self.is_cloud_thread();
-        let cloud_task = self.cloud_task(cx);
         // Header controls (Electron: `ProjectScriptsControl` then
         // `GitActionsControl` at the far right of the chat header, before the
         // panel toggle).
         let script_controls = self.render_project_scripts(cx);
-        let git_controls = if cloud && self.workspace_client().is_none() {
-            self.render_cloud_publish_actions(cx)
-        } else {
-            self.render_git_actions(cx)
-        };
+        let git_controls = self.render_git_actions(cx);
         let workspace_controls = self.render_workspace_roots(cx);
         h_flex()
             .h(px(crate::ui::CHROME_HEIGHT))
@@ -7451,16 +7101,7 @@ impl ChatApp {
                             })
                             .child(title),
                     )
-                    .children(cloud_task.as_ref().map(|task| {
-                        div()
-                            .max_w(px(200.))
-                            .min_w_0()
-                            .truncate()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(crate::cloud::repo_label(task))
-                    }))
-                    .children(project.filter(|_| !cloud).map(|(name, _)| {
+                    .children(project.map(|(name, _)| {
                         div()
                             .max_w(px(160.))
                             .min_w_0()
@@ -7471,13 +7112,11 @@ impl ChatApp {
                     })),
             )
             .children(script_controls)
-            .when(!cloud, |row| {
-                row.child(
-                    div()
-                        .debug_selector(|| "local-workspace-controls".into())
-                        .child(workspace_controls),
-                )
-            })
+            .child(
+                div()
+                    .debug_selector(|| "local-workspace-controls".into())
+                    .child(workspace_controls),
+            )
             .children(git_controls)
             .child(
                 Button::new("toggle-right-panel")
@@ -7549,7 +7188,6 @@ impl ChatApp {
             })
             .map(|project| (project.title.0.clone(), project.workspace_root.0.clone()));
         let view = open.state.view.as_ref();
-        let cloud = self.is_cloud_thread();
         let presentation = self.conversation_status(cx);
         let running = view.is_some_and(|view| {
             view.session
@@ -7641,7 +7279,6 @@ impl ChatApp {
             None
         };
         let can_send = presentation.can_send
-            && (!cloud || self.cloud_send_blocker(cx).is_none())
             && active_approval.is_none()
             && active_input.is_none()
             && (!self.composer.read(cx).value().trim().is_empty()
@@ -7865,11 +7502,9 @@ impl ChatApp {
         let footer = if let Some(approval) = &active_approval {
             self.render_approval_actions(approval, cx)
         } else {
-            let location = self.render_location_switch(cx);
             self.render_composer_controls(
                 model_picker,
                 traits_picker,
-                location,
                 interaction_toggle,
                 runtime_picker,
                 context_meter,
@@ -8007,7 +7642,7 @@ impl ChatApp {
             .px_5()
             .pb_4()
             .gap_2()
-            .when(!cloud, |column| column.children(self.lifecycle_banner(cx)))
+            .children(self.lifecycle_banner(cx))
             .child(self.render_conversation_status(window, cx))
             .child(
                 v_flex()
@@ -8219,9 +7854,7 @@ impl ChatApp {
         )
         .children(self.render_branch_toolbar(cx))
         .child(composer)
-        .when(!cloud, |column| {
-            column.children(self.render_terminal_drawer(window, cx))
-        })
+        .children(self.render_terminal_drawer(window, cx))
         .into_any_element()
     }
 }
@@ -8258,8 +7891,6 @@ impl Render for ChatApp {
         self.sync_project_icons(cx);
         #[cfg(debug_assertions)]
         self.verify_polish_if_requested(window, cx);
-        #[cfg(debug_assertions)]
-        self.verify_cloud_threads_if_requested(window, cx);
         #[cfg(debug_assertions)]
         self.verify_icons_if_requested(window, cx);
         if let Some(message) = self.runtime_notice.take() {
@@ -8316,7 +7947,6 @@ impl Render for ChatApp {
                     let requests: Vec<_> = client
                         .slow_requests(std::time::Duration::from_secs(5))
                         .into_iter()
-                        .filter(|method| method != "cloud.startConversation")
                         .collect();
                     let message = (!requests.is_empty()).then(|| {
                         SharedString::from(format!(
@@ -8379,9 +8009,6 @@ impl Render for ChatApp {
         let mut dock_panel = dock_key
             .as_deref()
             .map(|key| self.render_right_panel(key, cx));
-        if self.lens_open {
-            dock_panel = None;
-        }
         // Tab activation changes the dock's contents, not its presentation.
         // Retain the entrance animation while switching or closing tabs.
         let presentation = dock_key
@@ -8436,12 +8063,6 @@ impl Render for ChatApp {
             .bg(crate::glass::root(cx))
             .text_color(cx.theme().foreground)
             .track_focus(&self.focus_handle)
-            .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-                if event.keystroke.key == "escape" && this.cloud_sheet.take().is_some() {
-                    cx.stop_propagation();
-                    cx.notify();
-                }
-            }))
             .on_action(cx.listener(|this, _: &QuickSearchOpen, window, cx| {
                 this.toggle_quick_search(QuickSearchMode::Open, window, cx);
             }))
@@ -8524,12 +8145,6 @@ impl Render for ChatApp {
             .on_action(
                 cx.listener(|this, _: &crate::settings::SettingsOpen, window, cx| {
                     this.toggle_settings(window, cx);
-                }),
-            )
-            .on_action(
-                cx.listener(|this, _: &crate::cloud::NewCloudThread, window, cx| {
-                    this.close_settings(window, cx);
-                    this.new_thread(None, window, cx);
                 }),
             )
             .on_action(cx.listener(|this, _: &NewThread, window, cx| {
@@ -8656,21 +8271,21 @@ impl Render for ChatApp {
                                 .reveal(sidebar_reveal)
                                 .child(self.render_sidebar(cx).into_any_element()),
                         )
-                        .child(resizable_panel().child(if self.lens_open {
-                            self.lens_panel.as_ref().unwrap().clone().into_any_element()
-                        } else {
-                            v_flex()
-                                .size_full()
-                                .when(ClientSettings::get(cx).project_tabs_enabled, |view| {
-                                    view.child(self.render_project_tabs(header_inset, cx))
-                                })
-                                .child(div().flex_1().min_h_0().child(self.render_chat(
-                                    header_inset,
-                                    window,
-                                    cx,
-                                )))
-                                .into_any_element()
-                        }))
+                        .child(
+                            resizable_panel().child(
+                                v_flex()
+                                    .size_full()
+                                    .when(ClientSettings::get(cx).project_tabs_enabled, |view| {
+                                        view.child(self.render_project_tabs(header_inset, cx))
+                                    })
+                                    .child(div().flex_1().min_h_0().child(self.render_chat(
+                                        header_inset,
+                                        window,
+                                        cx,
+                                    )))
+                                    .into_any_element(),
+                            ),
+                        )
                         .child(
                             // Hidden (not unmounted) when the dock is
                             // closed: the state slot keeps the width,
@@ -8722,7 +8337,6 @@ impl Render for ChatApp {
                 }
             })
             .children(self.render_preview_mini(window, cx))
-            .children(self.render_cloud_sheet(cx))
             .children(sheet_layer)
             .children(dialog_layer)
             .children(notification_layer)

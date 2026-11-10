@@ -183,7 +183,6 @@ impl ChatApp {
                     thread.clone(),
                     Some(snapshot.tab_id.clone()),
                     Some(snapshot.clone()),
-                    self.is_cloud_thread(),
                     window,
                     cx,
                 )
