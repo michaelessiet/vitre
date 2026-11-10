@@ -312,6 +312,9 @@ pub struct ChatApp {
     /// Synchronous `/`, `#`, and `$` suggestions. Kept separate from path
     /// search because only `@` needs an RPC round-trip.
     composer_menu: Option<ComposerMenuState>,
+    /// Scroll position of the `/`, `#`, `$` suggestion list, so arrow-key
+    /// selection can keep the active row in view.
+    composer_menu_scroll: gpui::ScrollHandle,
     /// Monotonic mention-search counter; stale results are dropped.
     mention_generation: u64,
     /// Two-step revert confirm: the user message armed for revert.
@@ -2438,6 +2441,7 @@ impl ChatApp {
             pending_terminal_contexts: Vec::new(),
             mention: None,
             composer_menu: None,
+            composer_menu_scroll: gpui::ScrollHandle::new(),
             mention_generation: 0,
             pending_revert: None,
             changed_files: changed_files::ChangedFilesState::load(home),
@@ -4754,6 +4758,9 @@ impl ChatApp {
                 .map_or(0, |menu| menu.selected.min(items.len().saturating_sub(1))),
             items,
         });
+        if let Some(menu) = &self.composer_menu {
+            self.composer_menu_scroll.scroll_to_item(menu.selected);
+        }
         cx.notify();
     }
 
@@ -4930,6 +4937,7 @@ impl ChatApp {
             && !menu.items.is_empty()
         {
             menu.selected = moved(menu.selected, menu.items.len(), delta);
+            self.composer_menu_scroll.scroll_to_item(menu.selected);
             cx.notify();
             return true;
         }
@@ -7595,7 +7603,6 @@ impl ChatApp {
                 cx,
             )
         };
-        let (mention_list, command_list) = self.render_composer_suggestions(cx);
         // Staged attachment chips (name + size + remove), Electron's chip row
         // above the textarea.
         let attachment_chips: Option<gpui::AnyElement> = (!self.pending_attachments.is_empty())
@@ -7721,6 +7728,10 @@ impl ChatApp {
                 })
                 .into_any_element()
         });
+        // Suggestion popovers square off the shell's rounded top unless they
+        // are its first child.
+        let (mention_list, command_list) =
+            self.render_composer_suggestions(panel.is_none() && plan_followup_banner.is_none(), cx);
         let composer = v_flex()
             .px_5()
             .pb_4()
