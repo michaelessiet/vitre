@@ -4,7 +4,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/pingdotgg/t3code",
+    "url": "https://github.com/michaelessiet/vitre",
     "directory": "apps/server"
   },
   "bin": {
@@ -15,7 +15,7 @@
   ],
   "type": "module",
   "scripts": {
-    "dev": "node --watch src/bin.ts",
+    "dev": "node scripts/dev.ts",
     "build:bundle": "vp pack",
     "start": "node dist/bin.mjs",
     "typecheck": "tsgo --noEmit",

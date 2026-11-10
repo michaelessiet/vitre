@@ -12,6 +12,10 @@ import * as Schema from "effect/Schema";
 import * as ServerConfig from "./config.ts";
 import * as Keybindings from "./keybindings.ts";
 import { KeybindingsConfigError } from "@t3tools/contracts";
+import * as NodeOS from "node:os";
+
+// Root ignores file permissions, so chmod-based failure paths cannot occur.
+const runningAsRoot = NodeOS.userInfo().uid === 0;
 
 const KeybindingsConfigJson = Schema.fromJsonString(KeybindingsConfig);
 const encodeKeybindingsConfigJson = Schema.encodeEffect(KeybindingsConfigJson);
@@ -595,6 +599,7 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
 
   it.effect("fails when config directory is not writable", () =>
     Effect.gen(function* () {
+      if (runningAsRoot) return;
       const fs = yield* FileSystem.FileSystem;
       const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;
       const { dirname } = yield* Path.Path;

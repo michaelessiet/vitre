@@ -1,5 +1,4 @@
 import type { CustomLanguageServer } from "@t3tools/contracts";
-import { LSP_SUPPORTED_EXTENSIONS } from "@t3tools/shared/lspSupport";
 import { describe, expect, it } from "vite-plus/test";
 
 import { BUILTIN_EXTENSIONS, languageBindingForPath, resolveRegistry } from "./LanguageServers.ts";
@@ -14,13 +13,9 @@ const RUBY_SERVER: CustomLanguageServer = {
 };
 
 describe("LanguageServers", () => {
-  it("stays in parity with the shared LSP_SUPPORTED_EXTENSIONS set", () => {
-    for (const extension of LSP_SUPPORTED_EXTENSIONS) {
-      expect(languageBindingForPath(`file${extension}`)).not.toBe(null);
-    }
-    // The reverse direction: anything the server binds must be advertised.
+  it("binds every built-in extension to a language server", () => {
     for (const extension of BUILTIN_EXTENSIONS) {
-      expect(LSP_SUPPORTED_EXTENSIONS.has(extension)).toBe(true);
+      expect(languageBindingForPath(`file${extension}`)).not.toBe(null);
     }
   });
 

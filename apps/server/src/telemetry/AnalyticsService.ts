@@ -38,10 +38,9 @@ const PendingAnalyticsEvents = Schema.fromJsonString(Schema.Array(BufferedAnalyt
 const decodePendingAnalyticsEvents = Schema.decodeUnknownEffect(PendingAnalyticsEvents);
 const encodePendingAnalyticsEvents = Schema.encodeEffect(PendingAnalyticsEvents);
 
+// Telemetry is opt-in: nothing is sent unless a PostHog project key is configured.
 const TelemetryEnvConfig = Config.all({
-  posthogKey: Config.string("T3CODE_POSTHOG_KEY").pipe(
-    Config.withDefault("phc_XOWci4oZP4VvLiEyrFqkFjP4CZn55mjYYBMREK5Wd6m"),
-  ),
+  posthogKey: Config.string("T3CODE_POSTHOG_KEY").pipe(Config.withDefault("")),
   posthogHost: Config.string("T3CODE_POSTHOG_HOST").pipe(
     Config.withDefault("https://us.i.posthog.com"),
   ),
@@ -51,7 +50,12 @@ const TelemetryEnvConfig = Config.all({
     Config.withDefault(1_000),
   ),
   wslDistroName: Config.string("WSL_DISTRO_NAME").pipe(Config.option),
-});
+}).pipe(
+  Config.map((config) => ({
+    ...config,
+    enabled: config.enabled && config.posthogKey.trim().length > 0,
+  })),
+);
 
 export class AnalyticsService extends Context.Service<
   AnalyticsService,

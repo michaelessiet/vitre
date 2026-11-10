@@ -12,6 +12,7 @@ import * as NodeOS from "node:os";
 import * as NodeURL from "node:url";
 import { splitRunArguments, vitreExecutable } from "./cargo-artifact.mjs";
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
+import { resolveDevHome, takeHomeDirArgument } from "../../scripts/lib/worktree-home.ts";
 
 const repoRoot = NodePath.resolve(
   NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)),
@@ -31,7 +32,16 @@ if (rebuild || !NodeFS.existsSync(serverEntry)) {
   if (result.status !== 0) process.exit(result.status ?? 1);
 }
 
-const extra = process.argv.slice(2).filter((arg) => arg !== "--rebuild");
+const { homeDir, rest } = takeHomeDirArgument(process.argv.slice(2));
+const extra = rest.filter((arg) => arg !== "--rebuild");
+// Inside a linked worktree the app's data defaults to that worktree's gitignored
+// `.t3`, so feature work never touches the real ~/.vitre. `--home-dir` wins;
+// an existing VITRE_HOME is kept when no worktree or flag applies.
+const devHome = resolveDevHome(process.env.INIT_CWD ?? process.cwd(), homeDir);
+if (devHome) {
+  devEnv.VITRE_HOME = devHome;
+  console.log(`[dev:vitre] data directory: ${devHome}`);
+}
 const signingIdentity = devEnv.VITRE_SIGNING_IDENTITY;
 let command = "cargo";
 let args = ["run", "-p", "vitre-app", ...extra];

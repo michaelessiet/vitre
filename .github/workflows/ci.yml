@@ -65,6 +65,8 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/setup-tools
       - run: vp run test
+      - name: Native dev runner tests
+        run: node --test apps/vitre/*.test.mjs
 
   native:
     name: Native validation
