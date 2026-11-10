@@ -1910,53 +1910,50 @@ describe("ProviderCommandReactor", () => {
   it("routes thread.task.stop to the provider and reports providers that cannot stop a task", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
+    // The first stop reaches a provider that can stop tasks; the second one cannot.
+    harness.stopTask.mockImplementationOnce(() => Effect.succeed(true));
+    harness.stopTask.mockImplementationOnce(() => Effect.succeed(false));
 
     await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.make("cmd-session-set-task"),
-        threadId: ThreadId.make("thread-1"),
-        session: {
+      Effect.gen(function* () {
+        yield* harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.make("cmd-session-set-task"),
           threadId: ThreadId.make("thread-1"),
-          status: "running",
-          providerName: "claudeAgent",
-          runtimeMode: "approval-required",
-          activeTurnId: asTurnId("turn-1"),
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
+          session: {
+            threadId: ThreadId.make("thread-1"),
+            status: "running",
+            providerName: "claudeAgent",
+            runtimeMode: "approval-required",
+            activeTurnId: asTurnId("turn-1"),
+            lastError: null,
+            updatedAt: now,
+          },
+          createdAt: now,
+        });
+        for (const taskId of ["task-1", "task-2"]) {
+          yield* harness.engine.dispatch({
+            type: "thread.task.stop",
+            commandId: CommandId.make(`cmd-stop-${taskId}`),
+            threadId: ThreadId.make("thread-1"),
+            taskId: RuntimeTaskId.make(taskId),
+            createdAt: now,
+          });
+        }
       }),
     );
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.task.stop",
-        commandId: CommandId.make("cmd-task-stop"),
-        threadId: ThreadId.make("thread-1"),
-        taskId: RuntimeTaskId.make("task-1"),
-        createdAt: now,
-      }),
-    );
-    await waitFor(() => harness.stopTask.mock.calls.length === 1);
-    expect(harness.stopTask.mock.calls[0]?.[0]).toEqual({ threadId: "thread-1", taskId: "task-1" });
-
-    harness.stopTask.mockImplementation(() => Effect.succeed(false));
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.task.stop",
-        commandId: CommandId.make("cmd-task-stop-unsupported"),
-        threadId: ThreadId.make("thread-1"),
-        taskId: RuntimeTaskId.make("task-2"),
-        createdAt: now,
-      }),
-    );
+    await waitFor(() => harness.stopTask.mock.calls.length === 2);
+    expect(harness.stopTask.mock.calls.map((call) => call[0])).toEqual([
+      { threadId: "thread-1", taskId: "task-1" },
+      { threadId: "thread-1", taskId: "task-2" },
+    ]);
     await waitFor(async () => {
       const readModel = await harness.readModel();
       const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
       return (
-        thread?.activities.some((activity) => activity.kind === "provider.task.stop.failed") ??
-        false
+        thread?.activities.filter((activity) => activity.kind === "provider.task.stop.failed")
+          .length === 1
       );
     });
   });

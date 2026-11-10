@@ -43,7 +43,6 @@ import {
   type RuntimeContentStreamKind,
   RuntimeItemId,
   RuntimeRequestId,
-  RuntimeTaskId,
   ThreadId,
   TurnId,
   type UserInputQuestion,
