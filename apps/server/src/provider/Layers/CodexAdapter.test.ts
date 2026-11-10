@@ -8,6 +8,7 @@ import {
   CodexSettings,
   EventId,
   ProviderDriverKind,
+  RuntimeTaskId,
   ProviderInstanceId,
   ProviderItemId,
   type ProviderApprovalDecision,
@@ -134,6 +135,12 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
 
   interruptTurn(turnId?: TurnId) {
     return Effect.promise(() => this.interruptTurnImpl(turnId));
+  }
+
+  public readonly interruptSubagentCalls: string[] = [];
+  interruptSubagent(subagentThreadId: string) {
+    this.interruptSubagentCalls.push(subagentThreadId);
+    return Effect.succeed(true);
   }
 
   readThread = Effect.promise(() => this.readThreadImpl());
@@ -556,6 +563,74 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       NodeAssert.equal(firstEvent.value.itemId, "msg_1");
       NodeAssert.equal(firstEvent.value.turnId, "turn-1");
       NodeAssert.equal(firstEvent.value.payload.itemType, "assistant_message");
+    }),
+  );
+
+  it.effect("keeps a subagent's items in its task transcript and stops it by thread", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "task.started"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      const base = {
+        kind: "notification" as const,
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        method: "item/completed",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+      };
+
+      // The subagent's own message: transcript only.
+      yield* runtime.emit({
+        ...base,
+        id: asEventId("evt-child-msg"),
+        subagent: { threadId: "child-1", toolCallId: "call_spawn" },
+        payload: { item: { type: "agentMessage", id: "m1", text: "Found 3 reducers" } },
+      });
+      // The parent's spawn call: its tool item plus one started task per new thread.
+      yield* runtime.emit({
+        ...base,
+        id: asEventId("evt-spawn"),
+        method: "item/started",
+        payload: {
+          item: {
+            type: "collabAgentToolCall",
+            id: "call_spawn",
+            tool: "spawnAgent",
+            status: "inProgress",
+            senderThreadId: "thread-1",
+            receiverThreadIds: ["child-1"],
+            prompt: "Audit the reducers",
+            agentsStates: {},
+          },
+        },
+      });
+
+      const events = Array.from(yield* Fiber.join(eventsFiber)).filter((event) =>
+        event.type.startsWith("task."),
+      );
+      NodeAssert.deepEqual(
+        events.map((event) => event.type),
+        ["task.transcript", "task.started"],
+      );
+      NodeAssert.deepEqual(events[0]?.payload, {
+        taskId: "child-1",
+        toolUseId: "call_spawn",
+        entry: { kind: "text", text: "Found 3 reducers" },
+      });
+      NodeAssert.deepEqual(events[1]?.payload, {
+        taskId: "child-1",
+        toolUseId: "call_spawn",
+        agentType: "subagent",
+        description: "Audit the reducers",
+        prompt: "Audit the reducers",
+      });
+
+      yield* adapter.stopTask!(asThreadId("thread-1"), RuntimeTaskId.make("child-1"));
+      NodeAssert.deepEqual(runtime.interruptSubagentCalls, ["child-1"]);
     }),
   );
 
