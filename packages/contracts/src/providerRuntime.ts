@@ -177,6 +177,8 @@ const ProviderRuntimeEventType = Schema.Literals([
   "task.started",
   "task.progress",
   "task.completed",
+  "task.updated",
+  "task.transcript",
   "hook.started",
   "hook.progress",
   "hook.completed",
@@ -227,6 +229,8 @@ const UserInputResolvedType = Schema.Literal("user-input.resolved");
 const TaskStartedType = Schema.Literal("task.started");
 const TaskProgressType = Schema.Literal("task.progress");
 const TaskCompletedType = Schema.Literal("task.completed");
+const TaskUpdatedType = Schema.Literal("task.updated");
+const TaskTranscriptType = Schema.Literal("task.transcript");
 const HookStartedType = Schema.Literal("hook.started");
 const HookProgressType = Schema.Literal("hook.progress");
 const HookCompletedType = Schema.Literal("hook.completed");
@@ -459,15 +463,47 @@ const UserInputResolvedPayload = Schema.Struct({
 });
 export type UserInputResolvedPayload = typeof UserInputResolvedPayload.Type;
 
-const TaskStartedPayload = Schema.Struct({
+/**
+ * Lifecycle of a provider task: a subagent the model launched, or a background
+ * task such as a backgrounded shell command. `paused` and `pending` come from
+ * providers that queue or suspend tasks; `stopped` means it was cancelled.
+ */
+export const RuntimeTaskStatus = Schema.Literals([
+  "pending",
+  "running",
+  "paused",
+  "completed",
+  "failed",
+  "stopped",
+]);
+export type RuntimeTaskStatus = typeof RuntimeTaskStatus.Type;
+
+/**
+ * Fields every task event may carry so clients can place a task without
+ * replaying its start: the tool call that launched it, the agent type, and
+ * whether it runs in the background (detached from the turn).
+ */
+const TaskIdentityFields = {
   taskId: RuntimeTaskId,
+  /** The provider tool call that launched the task (Claude `Agent`/`Task`, Codex `spawnAgent`). */
+  toolUseId: Schema.optional(TrimmedNonEmptyStringSchema),
+  /** The subagent type, e.g. `Explore` or `general-purpose`. Absent for non-agent tasks. */
+  agentType: Schema.optional(TrimmedNonEmptyStringSchema),
+  background: Schema.optional(Schema.Boolean),
+};
+
+const TaskStartedPayload = Schema.Struct({
+  ...TaskIdentityFields,
   description: Schema.optional(TrimmedNonEmptyStringSchema),
   taskType: Schema.optional(TrimmedNonEmptyStringSchema),
+  /** The instructions the subagent received. */
+  prompt: Schema.optional(TrimmedNonEmptyStringSchema),
+  model: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type TaskStartedPayload = typeof TaskStartedPayload.Type;
 
 const TaskProgressPayload = Schema.Struct({
-  taskId: RuntimeTaskId,
+  ...TaskIdentityFields,
   description: TrimmedNonEmptyStringSchema,
   summary: Schema.optional(TrimmedNonEmptyStringSchema),
   usage: Schema.optional(Schema.Unknown),
@@ -476,12 +512,53 @@ const TaskProgressPayload = Schema.Struct({
 export type TaskProgressPayload = typeof TaskProgressPayload.Type;
 
 const TaskCompletedPayload = Schema.Struct({
-  taskId: RuntimeTaskId,
+  ...TaskIdentityFields,
   status: Schema.Literals(["completed", "failed", "stopped"]),
   summary: Schema.optional(TrimmedNonEmptyStringSchema),
   usage: Schema.optional(Schema.Unknown),
 });
 export type TaskCompletedPayload = typeof TaskCompletedPayload.Type;
+
+/** A partial update to a running task: status, backgrounding, or a renamed description. */
+const TaskUpdatedPayload = Schema.Struct({
+  ...TaskIdentityFields,
+  status: Schema.optional(RuntimeTaskStatus),
+  description: Schema.optional(TrimmedNonEmptyStringSchema),
+  error: Schema.optional(TrimmedNonEmptyStringSchema),
+});
+export type TaskUpdatedPayload = typeof TaskUpdatedPayload.Type;
+
+/** One entry of a subagent's own conversation, attributed to its task. */
+export const RuntimeTaskTranscriptEntry = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("text"),
+    text: TrimmedNonEmptyStringSchema,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("reasoning"),
+    text: TrimmedNonEmptyStringSchema,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("tool"),
+    toolUseId: TrimmedNonEmptyStringSchema,
+    toolName: TrimmedNonEmptyStringSchema,
+    /** A one-line rendering of the call's input, e.g. the command or path. */
+    detail: Schema.optional(TrimmedNonEmptyStringSchema),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("tool_result"),
+    toolUseId: TrimmedNonEmptyStringSchema,
+    isError: Schema.Boolean,
+    output: Schema.optional(TrimmedNonEmptyStringSchema),
+  }),
+]);
+export type RuntimeTaskTranscriptEntry = typeof RuntimeTaskTranscriptEntry.Type;
+
+const TaskTranscriptPayload = Schema.Struct({
+  ...TaskIdentityFields,
+  entry: RuntimeTaskTranscriptEntry,
+});
+export type TaskTranscriptPayload = typeof TaskTranscriptPayload.Type;
 
 const HookStartedPayload = Schema.Struct({
   hookId: TrimmedNonEmptyStringSchema,
@@ -842,6 +919,20 @@ const ProviderRuntimeTaskCompletedEvent = Schema.Struct({
 });
 export type ProviderRuntimeTaskCompletedEvent = typeof ProviderRuntimeTaskCompletedEvent.Type;
 
+const ProviderRuntimeTaskUpdatedEvent = Schema.Struct({
+  ...ProviderRuntimeEventBase.fields,
+  type: TaskUpdatedType,
+  payload: TaskUpdatedPayload,
+});
+export type ProviderRuntimeTaskUpdatedEvent = typeof ProviderRuntimeTaskUpdatedEvent.Type;
+
+const ProviderRuntimeTaskTranscriptEvent = Schema.Struct({
+  ...ProviderRuntimeEventBase.fields,
+  type: TaskTranscriptType,
+  payload: TaskTranscriptPayload,
+});
+export type ProviderRuntimeTaskTranscriptEvent = typeof ProviderRuntimeTaskTranscriptEvent.Type;
+
 const ProviderRuntimeHookStartedEvent = Schema.Struct({
   ...ProviderRuntimeEventBase.fields,
   type: HookStartedType,
@@ -996,6 +1087,8 @@ export const ProviderRuntimeEventV2 = Schema.Union([
   ProviderRuntimeTaskStartedEvent,
   ProviderRuntimeTaskProgressEvent,
   ProviderRuntimeTaskCompletedEvent,
+  ProviderRuntimeTaskUpdatedEvent,
+  ProviderRuntimeTaskTranscriptEvent,
   ProviderRuntimeHookStartedEvent,
   ProviderRuntimeHookProgressEvent,
   ProviderRuntimeHookCompletedEvent,

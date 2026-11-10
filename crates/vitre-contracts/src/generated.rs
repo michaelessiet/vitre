@@ -972,6 +972,17 @@ pub enum ClientOrchestrationCommand {
         turn_id: Option<Option<TurnId>>,
         r#type: ClientOrchestrationCommandThreadTurnInterruptType,
     },
+    ThreadTaskStop {
+        #[serde(rename = "commandId")]
+        command_id: CommandId,
+        #[serde(rename = "createdAt")]
+        created_at: TrimmedNonEmptyString,
+        #[serde(rename = "taskId")]
+        task_id: RuntimeTaskId,
+        #[serde(rename = "threadId")]
+        thread_id: ThreadId,
+        r#type: ClientOrchestrationCommandThreadTaskStopType,
+    },
     ThreadApprovalRespond {
         #[serde(rename = "commandId")]
         command_id: CommandId,
@@ -1234,6 +1245,13 @@ pub enum ClientOrchestrationCommandThreadTurnInterruptType {
     #[default]
     #[serde(rename = "thread.turn.interrupt")]
     ThreadTurnInterrupt,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum ClientOrchestrationCommandThreadTaskStopType {
+    #[default]
+    #[serde(rename = "thread.task.stop")]
+    ThreadTaskStop,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
@@ -3724,6 +3742,26 @@ pub enum OrchestrationEvent {
         payload: ThreadTurnInterruptRequestedPayload,
         sequence: NonNegativeInt,
     },
+    #[serde(rename = "thread.task-stop-requested")]
+    ThreadTaskStopRequested {
+        #[serde(rename = "aggregateId")]
+        aggregate_id: OrchestrationEventThreadTaskStopRequestedAggregateId,
+        #[serde(rename = "aggregateKind")]
+        aggregate_kind: OrchestrationAggregateKind,
+        #[serde(rename = "causationEventId")]
+        causation_event_id: Option<EventId>,
+        #[serde(rename = "commandId")]
+        command_id: Option<CommandId>,
+        #[serde(rename = "correlationId")]
+        correlation_id: Option<CommandId>,
+        #[serde(rename = "eventId")]
+        event_id: EventId,
+        metadata: OrchestrationEventMetadata,
+        #[serde(rename = "occurredAt")]
+        occurred_at: TrimmedNonEmptyString,
+        payload: ThreadTaskStopRequestedPayload,
+        sequence: NonNegativeInt,
+    },
     #[serde(rename = "thread.approval-response-requested")]
     ThreadApprovalResponseRequested {
         #[serde(rename = "aggregateId")]
@@ -4056,6 +4094,15 @@ pub enum OrchestrationEventThreadTurnStartRequestedAggregateId {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum OrchestrationEventThreadTurnInterruptRequestedAggregateId {
+    ProjectId(ProjectId),
+    ThreadId(ThreadId),
+    /// Forward compatibility: a member this build does not know.
+    Unknown(serde_json::Value),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum OrchestrationEventThreadTaskStopRequestedAggregateId {
     ProjectId(ProjectId),
     ThreadId(ThreadId),
     /// Forward compatibility: a member this build does not know.
@@ -7807,6 +7854,10 @@ pub enum RuntimeMode {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
+pub struct RuntimeTaskId(pub String);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct SCRIPTRUNCOMMANDPATTERN(pub String);
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -10931,6 +10982,16 @@ pub struct ThreadSnoozedPayload {
     pub thread_id: ThreadId,
     #[serde(rename = "updatedAt")]
     pub updated_at: TrimmedNonEmptyString,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ThreadTaskStopRequestedPayload {
+    #[serde(rename = "createdAt")]
+    pub created_at: TrimmedNonEmptyString,
+    #[serde(rename = "taskId")]
+    pub task_id: RuntimeTaskId,
+    #[serde(rename = "threadId")]
+    pub thread_id: ThreadId,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

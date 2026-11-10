@@ -1826,6 +1826,29 @@
             "createdAt": {
               "$ref": "#/$defs/TrimmedNonEmptyString"
             },
+            "taskId": {
+              "$ref": "#/$defs/RuntimeTaskId"
+            },
+            "threadId": {
+              "$ref": "#/$defs/ThreadId"
+            },
+            "type": {
+              "enum": ["thread.task.stop"],
+              "type": "string"
+            }
+          },
+          "required": ["type", "commandId", "threadId", "taskId", "createdAt"],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "commandId": {
+              "$ref": "#/$defs/CommandId"
+            },
+            "createdAt": {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            },
             "decision": {
               "$ref": "#/$defs/ProviderApprovalDecision"
             },
@@ -6693,6 +6716,87 @@
             },
             "type": {
               "enum": ["thread.turn-interrupt-requested"],
+              "type": "string"
+            }
+          },
+          "required": [
+            "sequence",
+            "eventId",
+            "aggregateKind",
+            "aggregateId",
+            "occurredAt",
+            "commandId",
+            "causationEventId",
+            "correlationId",
+            "metadata",
+            "type",
+            "payload"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "aggregateId": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ProjectId"
+                },
+                {
+                  "$ref": "#/$defs/ThreadId"
+                }
+              ]
+            },
+            "aggregateKind": {
+              "$ref": "#/$defs/OrchestrationAggregateKind"
+            },
+            "causationEventId": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/EventId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "commandId": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CommandId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "correlationId": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/CommandId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "eventId": {
+              "$ref": "#/$defs/EventId"
+            },
+            "metadata": {
+              "$ref": "#/$defs/OrchestrationEventMetadata"
+            },
+            "occurredAt": {
+              "$ref": "#/$defs/TrimmedNonEmptyString"
+            },
+            "payload": {
+              "$ref": "#/$defs/ThreadTaskStopRequestedPayload"
+            },
+            "sequence": {
+              "$ref": "#/$defs/NonNegativeInt"
+            },
+            "type": {
+              "enum": ["thread.task-stop-requested"],
               "type": "string"
             }
           },
@@ -13117,6 +13221,9 @@
       "enum": ["approval-required", "auto-accept-edits", "auto", "full-access"],
       "type": "string"
     },
+    "RuntimeTaskId": {
+      "type": "string"
+    },
     "SCRIPT_RUN_COMMAND_PATTERN": {
       "pattern": "^script\\.[\\s\\S]*?\\.run$",
       "type": "string"
@@ -19373,6 +19480,22 @@
         }
       },
       "required": ["threadId", "snoozedUntil", "snoozedAt", "updatedAt"],
+      "type": "object"
+    },
+    "ThreadTaskStopRequestedPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "createdAt": {
+          "$ref": "#/$defs/TrimmedNonEmptyString"
+        },
+        "taskId": {
+          "$ref": "#/$defs/RuntimeTaskId"
+        },
+        "threadId": {
+          "$ref": "#/$defs/ThreadId"
+        }
+      },
+      "required": ["threadId", "taskId", "createdAt"],
       "type": "object"
     },
     "ThreadTurnDiffCompletedPayload": {

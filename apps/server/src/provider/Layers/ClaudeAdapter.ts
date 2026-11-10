@@ -103,6 +103,12 @@ import {
 } from "../Errors.ts";
 import { type ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
+import {
+  ClaudeSubagentTasks,
+  claudeSubagentTranscriptEntries,
+  claudeTaskStartedPayload,
+  claudeTaskStatus,
+} from "./ClaudeSubagents.ts";
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.UnknownFromJsonString);
 const decodeUnknownJsonStringExit = Schema.decodeUnknownExit(Schema.UnknownFromJsonString);
 
@@ -208,6 +214,8 @@ interface ClaudeSessionContext {
   }>;
   readonly inFlightTools: Map<number, ToolInFlight>;
   readonly claudeTasks: Map<string, ClaudeTaskState>;
+  /** Subagent and background tasks, keyed for attributing subagent messages. */
+  readonly subagentTasks: ClaudeSubagentTasks;
   turnState: ClaudeTurnState | undefined;
   lastKnownContextWindow: number | undefined;
   lastKnownTokenUsage: ThreadTokenUsageSnapshot | undefined;
@@ -223,6 +231,7 @@ interface ClaudeQueryRuntime extends AsyncIterable<SDKMessage> {
   readonly setPermissionMode: (mode: PermissionMode) => Promise<void>;
   readonly setMaxThinkingTokens: (maxThinkingTokens: number | null) => Promise<void>;
   readonly getContextUsage?: () => Promise<SDKControlGetContextUsageResponse>;
+  readonly stopTask?: (taskId: string) => Promise<void>;
   readonly close: () => void;
 }
 
@@ -2660,6 +2669,44 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     yield* completeTurn(context, status, errorMessage, message);
   });
 
+  /**
+   * A subagent's own message. Its token usage is already counted by the
+   * parent's task_progress, and partial stream events are superseded by the
+   * complete message, so only the finished content becomes transcript.
+   */
+  const handleSubagentMessage = Effect.fn("handleSubagentMessage")(function* (
+    context: ClaudeSessionContext,
+    parentToolUseId: string,
+    message: SDKMessage,
+  ) {
+    if (message.type === "stream_event") {
+      return;
+    }
+    const identity = context.subagentTasks.identityForToolUse(parentToolUseId);
+    if (context.subagentTasks.isHidden(identity.taskId)) {
+      return;
+    }
+    for (const entry of claudeSubagentTranscriptEntries(message)) {
+      const stamp = yield* makeEventStamp();
+      yield* offerRuntimeEvent({
+        eventId: stamp.eventId,
+        provider: PROVIDER,
+        createdAt: stamp.createdAt,
+        threadId: context.session.threadId,
+        ...(context.turnState ? { turnId: asCanonicalTurnId(context.turnState.turnId) } : {}),
+        providerRefs: nativeProviderRefs(context),
+        type: "task.transcript",
+        payload: { ...identity, entry },
+        raw: {
+          source: "claude.sdk.message",
+          method: sdkNativeMethod(message),
+          messageType: message.type,
+          payload: message,
+        },
+      });
+    }
+  });
+
   const handleSystemMessage = Effect.fn("handleSystemMessage")(function* (
     context: ClaudeSessionContext,
     message: SDKMessage,
@@ -2775,17 +2822,18 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           },
         });
         return;
-      case "task_started":
+      case "task_started": {
+        const identity = context.subagentTasks.start(message);
+        if (!identity) {
+          return;
+        }
         yield* offerRuntimeEvent({
           ...base,
           type: "task.started",
-          payload: {
-            taskId: RuntimeTaskId.make(message.task_id),
-            description: message.description,
-            ...(message.task_type ? { taskType: message.task_type } : {}),
-          },
+          payload: claudeTaskStartedPayload(identity, message),
         });
         return;
+      }
       case "task_progress":
         yield* emitThreadTokenUsage(
           context,
@@ -2795,11 +2843,14 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
             rawPayload: message,
           },
         );
+        if (context.subagentTasks.isHidden(message.task_id)) {
+          return;
+        }
         yield* offerRuntimeEvent({
           ...base,
           type: "task.progress",
           payload: {
-            taskId: RuntimeTaskId.make(message.task_id),
+            ...context.subagentTasks.identity(message.task_id),
             description: message.description,
             ...(message.summary ? { summary: message.summary } : {}),
             ...(message.usage ? { usage: message.usage } : {}),
@@ -2807,12 +2858,34 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           },
         });
         return;
-      // Task state patch (status/backgrounded/end_time). No runtime mapping
-      // yet — the terminal task_notification reports the outcome — but it
-      // must not surface as an unknown-subtype warning row.
-      case "task_updated":
+      case "task_updated": {
+        if (context.subagentTasks.isHidden(message.task_id)) {
+          return;
+        }
+        const { patch } = message;
+        if (patch.is_backgrounded !== undefined) {
+          context.subagentTasks.setBackground(message.task_id, patch.is_backgrounded);
+        }
+        const status = claudeTaskStatus(patch.status);
+        // Terminal states are reported by task_notification with the result.
+        if (status === "completed" || status === "failed" || status === "stopped") {
+          if (patch.is_backgrounded === undefined && !patch.description && !patch.error) {
+            return;
+          }
+        }
+        yield* offerRuntimeEvent({
+          ...base,
+          type: "task.updated",
+          payload: {
+            ...context.subagentTasks.identity(message.task_id),
+            ...(status ? { status } : {}),
+            ...(patch.description?.trim() ? { description: patch.description } : {}),
+            ...(patch.error?.trim() ? { error: patch.error } : {}),
+          },
+        });
         return;
-      case "task_notification":
+      }
+      case "task_notification": {
         yield* emitThreadTokenUsage(
           context,
           normalizeClaudeTaskProgressTokenUsage(message.usage, context),
@@ -2821,17 +2894,24 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
             rawPayload: message,
           },
         );
+        const hidden = context.subagentTasks.isHidden(message.task_id);
+        const identity = context.subagentTasks.identity(message.task_id);
+        context.subagentTasks.forget(message.task_id);
+        if (hidden) {
+          return;
+        }
         yield* offerRuntimeEvent({
           ...base,
           type: "task.completed",
           payload: {
-            taskId: RuntimeTaskId.make(message.task_id),
+            ...identity,
             status: message.status,
             ...(message.summary ? { summary: message.summary } : {}),
             ...(message.usage ? { usage: message.usage } : {}),
           },
         });
         return;
+      }
       case "files_persisted":
         yield* offerRuntimeEvent({
           ...base,
@@ -3020,6 +3100,18 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   ) {
     yield* logNativeSdkMessage(context, message);
     yield* ensureThreadId(context, message);
+
+    const parentToolUseId =
+      "parent_tool_use_id" in message && typeof message.parent_tool_use_id === "string"
+        ? message.parent_tool_use_id
+        : undefined;
+    if (
+      parentToolUseId &&
+      (message.type === "stream_event" || message.type === "user" || message.type === "assistant")
+    ) {
+      yield* handleSubagentMessage(context, parentToolUseId, message);
+      return;
+    }
 
     switch (message.type) {
       case "stream_event":
@@ -3689,6 +3781,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...(existingResumeSessionId ? { resume: existingResumeSessionId } : {}),
         ...(newSessionId ? { sessionId: newSessionId } : {}),
         includePartialMessages: true,
+        // Subagents' own text arrives tagged with `parent_tool_use_id` and is
+        // kept as the subagent's transcript, never in the main conversation.
+        forwardSubagentText: true,
         canUseTool,
         env: claudeEnvironment,
         ...(additionalDirectories.length > 0 ? { additionalDirectories } : {}),
@@ -3781,6 +3876,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         turns: [],
         inFlightTools,
         claudeTasks,
+        subagentTasks: new ClaudeSubagentTasks(),
         turnState: undefined,
         lastKnownContextWindow: initialContextWindow,
         lastKnownTokenUsage: undefined,
@@ -3979,6 +4075,24 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     },
   );
 
+  const stopTask: NonNullable<ClaudeAdapterShape["stopTask"]> = Effect.fn("stopTask")(
+    function* (threadId, taskId) {
+      const context = yield* requireSession(threadId);
+      const stop = context.query.stopTask;
+      if (!stop) {
+        return yield* toRequestError(
+          threadId,
+          "task/stop",
+          new Error("Stopping a task is not supported."),
+        );
+      }
+      yield* Effect.tryPromise({
+        try: () => stop.call(context.query, taskId),
+        catch: (cause) => toRequestError(threadId, "task/stop", cause),
+      });
+    },
+  );
+
   const readThread: ClaudeAdapterShape["readThread"] = Effect.fn("readThread")(
     function* (threadId) {
       const context = yield* requireSession(threadId);
@@ -4083,6 +4197,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     startSession,
     sendTurn,
     interruptTurn,
+    stopTask,
     readThread,
     rollbackThread,
     respondToRequest,

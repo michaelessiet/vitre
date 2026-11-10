@@ -16,6 +16,7 @@ import type {
   ProviderSendTurnInput,
   ProviderSession,
   ProviderSessionStartInput,
+  RuntimeTaskId,
   ThreadId,
   ProviderTurnStartResult,
   TurnId,
@@ -75,6 +76,12 @@ export interface ProviderAdapterShape<TError> {
    * Interrupt an active turn.
    */
   readonly interruptTurn: (threadId: ThreadId, turnId?: TurnId) => Effect.Effect<void, TError>;
+
+  /**
+   * Stop one running task (a subagent or background task) and leave the turn
+   * running. Absent for providers that cannot stop a task on its own.
+   */
+  readonly stopTask?: (threadId: ThreadId, taskId: RuntimeTaskId) => Effect.Effect<void, TError>;
 
   /**
    * Respond to an interactive approval request.
