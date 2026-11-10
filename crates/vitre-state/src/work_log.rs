@@ -761,6 +761,8 @@ fn extract_tool_call_id(payload: Option<&Map<String, Value>>) -> Option<String> 
     as_trimmed_string(
         as_record(payload.and_then(|p| p.get("data"))).and_then(|data| data.get("toolCallId")),
     )
+    // Claude and Codex tool rows carry the provider call id as `itemId`.
+    .or_else(|| as_trimmed_string(payload.and_then(|p| p.get("itemId"))))
 }
 
 // ---------------------------------------------------------------------------

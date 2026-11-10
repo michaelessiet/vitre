@@ -584,6 +584,27 @@ mod tests {
     }
 
     #[test]
+    fn the_launching_tool_row_keeps_its_call_id_and_task_rows_leave_the_log() {
+        let entries = crate::work_log::derive_work_log_entries(&[
+            activity(
+                "tool",
+                "tool.completed",
+                "1",
+                json!({ "itemType": "collab_agent_tool_call", "itemId": "toolu_1" }),
+            ),
+            activity("a", "task.started", "2", with(json!({ "detail": "Audit" }))),
+            activity(
+                "b",
+                "task.completed",
+                "3",
+                json!({ "taskId": ID, "status": "completed" }),
+            ),
+        ]);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].tool_call_id.as_deref(), Some("toolu_1"));
+    }
+
+    #[test]
     fn leaves_plan_tasks_to_the_work_log_and_keeps_parallel_agents_apart() {
         let plan = activity(
             "p",
