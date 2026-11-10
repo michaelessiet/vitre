@@ -8,7 +8,6 @@
 // Run: node scripts/vitre/export-fixtures.ts (after export-contracts.ts)
 
 import * as contracts from "@t3tools/contracts";
-import * as cloud from "@t3tools/contracts/cloud";
 import * as Schema from "effect/Schema";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
@@ -26,7 +25,7 @@ const fixturesDir = NodePath.join(repoRoot, "crates", "vitre-contracts", "fixtur
 const contractsPath = NodePath.join(repoRoot, "crates", "vitre-contracts", "contracts.gen.json");
 
 // Same annotate pass as export-contracts.ts so def names line up.
-annotateContracts({ ...contracts, ...cloud } as unknown as AnyRecord);
+annotateContracts({ ...contracts } as unknown as AnyRecord);
 const generated = JSON.parse(NodeFS.readFileSync(contractsPath, "utf8")) as {
   $defs: Record<string, unknown>;
 };
@@ -173,106 +172,6 @@ fixture(c.OrchestrationGetTurnDiffInput, {
   threadId: "thread-fixture-01",
   fromTurnCount: 1,
   toTurnCount: 3,
-});
-
-fixture(
-  cloud.CloudCommand,
-  {
-    type: "task.cancel",
-    idempotencyKey: "stop-fixture",
-    taskId: "task-fixture",
-    expectedTurnRequestId: null,
-  },
-  "initial-stop",
-);
-fixture(
-  cloud.CloudCommand,
-  {
-    type: "task.cancel",
-    idempotencyKey: "stop-fixture",
-    taskId: "task-fixture",
-    expectedTurnRequestId: "request-fixture",
-  },
-  "fenced-stop",
-);
-
-// Cloud additions must remain readable by native clients alongside older peers.
-fixture(cloud.CloudStartProgress, { message: "Preparing" }, "legacy");
-fixture(
-  cloud.CloudStartProgress,
-  {
-    message: "Uploading workspace",
-    requestId: "request-fixture",
-    sequence: 3,
-    phase: "upload",
-    startedAt: "2026-10-16T00:00:00Z",
-    updatedAt: "2026-10-16T00:00:01Z",
-    completedBytes: 1024,
-    totalBytes: 2048,
-  },
-  "structured",
-);
-fixture(cloud.CloudDesktopAuthError, {
-  _tag: "CloudDesktopAuthError",
-  message: "Delivery could not be confirmed",
-  code: "connection_lost",
-  requestDisposition: "unknown",
-  retryable: true,
-});
-fixture(
-  cloud.CloudHandoffOperation,
-  {
-    id: "move-fixture",
-    conversationId: "thread-fixture",
-    from: "local",
-    to: "cloud-local",
-    generation: 0,
-    phase: "waiting",
-    checkpoint: null,
-    error: null,
-  },
-  "legacy",
-);
-fixture(
-  cloud.CloudHandoffOperation,
-  {
-    id: "move-fixture",
-    conversationId: "thread-fixture",
-    from: "local",
-    to: "cloud-local",
-    generation: 0,
-    revision: 4,
-    phase: "waiting",
-    checkpoint: null,
-    error: null,
-    startedAt: "2026-10-16T00:00:00Z",
-    updatedAt: "2026-10-16T00:00:01Z",
-    waitReason: "active-turn",
-    cancelRequested: true,
-  },
-  "structured",
-);
-fixture(cloud.CloudWorkerCallback, {
-  taskId: "task-fixture",
-  attemptId: "attempt-fixture",
-  generation: 1,
-  sequence: 4,
-  phase: "heartbeat",
-  detail: "",
-  preparation: {
-    attemptId: "attempt-fixture",
-    sequence: 4,
-    phase: "dependencies",
-    startedAt: "2026-10-16T00:00:00Z",
-    updatedAt: "2026-10-16T00:00:01Z",
-  },
-  dependencySetup: {
-    attemptId: "attempt-fixture",
-    sequence: 4,
-    outcome: "failed",
-    updatedAt: "2026-10-16T00:00:01Z",
-    detail: "Dependency setup failed",
-  },
 });
 
 console.log(`wrote ${count} fixtures to ${fixturesDir}`);

@@ -1,6 +1,6 @@
 //! Sidebar project grouping: port of
-//! `packages/client-runtime/src/state/projectGrouping.ts` plus the
-//! snapshot-building half of `apps/web/src/sidebarProjectGrouping.ts`.
+//! T3 Code's `packages/client-runtime/src/state/projectGrouping.ts` plus the
+//! snapshot-building half of T3 Code's `apps/web/src/sidebarProjectGrouping.ts`.
 //!
 //! Two projects that check out the same repository — a worktree and its main
 //! tree, or two clones — collapse into one sidebar row. The row's identity is

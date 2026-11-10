@@ -133,10 +133,6 @@ function isMuslLibc(): boolean {
   }
 }
 
-export function claudePlatformPackageName(platformKey: string): string {
-  return `@anthropic-ai/claude-agent-sdk-${platformKey}`;
-}
-
 export function claudeNpmTarballUrl(
   registryBaseUrl: string,
   platformKey: string,

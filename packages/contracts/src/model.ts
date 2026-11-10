@@ -214,11 +214,3 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Partial<
 };
 
 // ── Provider display names ────────────────────────────────────────────
-
-export const PROVIDER_DISPLAY_NAMES: Partial<Record<ProviderDriverKind, string>> = {
-  [CODEX_DRIVER_KIND]: "Codex",
-  [CLAUDE_DRIVER_KIND]: "Claude",
-  [CURSOR_DRIVER_KIND]: "Cursor",
-  [GROK_DRIVER_KIND]: "Grok",
-  [OPENCODE_DRIVER_KIND]: "OpenCode",
-};

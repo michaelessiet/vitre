@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off - Dev entrypoint that only chooses arguments and supervises one child.
+// @effect-diagnostics nodeBuiltinImport:off globalConsole:off - Dev entrypoint that only chooses arguments and supervises one child.
 /**
  * `vp run dev:server`: run the server from source in watch mode. Inside a
  * linked git worktree the server's data defaults to that worktree's gitignored

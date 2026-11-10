@@ -41,7 +41,7 @@ pub const DEFAULT_GLASS_OPACITY: u32 = 80;
 /// Which palette the window paints with.
 ///
 /// Electron keeps this out of `ClientSettings` entirely — it is a raw
-/// `"t3code:theme"` string in `localStorage` (`apps/web/src/hooks/useTheme.ts`)
+/// `"t3code:theme"` string in `localStorage` (T3 Code's `apps/web/src/hooks/useTheme.ts`)
 /// mirrored to the shell — but the values and the `system` default are its
 /// values, and one file is friendlier than two.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

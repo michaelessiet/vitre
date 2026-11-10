@@ -38,14 +38,6 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
 
     return handlers
       .handle(
-        "transfer",
-        Effect.fn("environment.orchestration.transfer")(function* (args) {
-          yield* annotateEnvironmentRequest(args.endpoint.name);
-          yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
-          return yield* failEnvironmentInvalidRequest("invalid_command");
-        }),
-      )
-      .handle(
         "snapshot",
         Effect.fn("environment.orchestration.snapshot")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);

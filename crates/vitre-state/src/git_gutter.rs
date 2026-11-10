@@ -1,5 +1,5 @@
 //! Git diff gutter model: the pure half of Electron's
-//! `apps/web/src/components/files/codemirror/gitDiffGutter.ts`.
+//! T3 Code's `apps/web/src/components/files/codemirror/gitDiffGutter.ts`.
 //!
 //! The buffer is diffed live against the HEAD baseline (debounced, capped at
 //! [`MAX_DIFF_LINES`], so markers track *unsaved* edits); the index baseline

@@ -2,7 +2,7 @@
 //! sidecar supervisor (`vitre-sidecar`), the RPC session supervisor
 //! (`vitre-rpc`), and the pure projections (`vitre-state`) into long-running
 //! tokio tasks that publish render-ready state over watch channels — the
-//! Rust counterpart of `packages/client-runtime/src/state/{shell,threads}.ts`
+//! Rust counterpart of T3 Code's `packages/client-runtime/src/state/{shell,threads}.ts`
 //! with the UI (gpui) kept out of this crate entirely.
 //!
 //! Durable-subscription semantics (`subscribeDynamic` in the TS client):
@@ -10,7 +10,6 @@
 //! the supervisor to publish the next session, then re-issues the
 //! subscription with the projection's `afterSequence` resume cursor.
 
-pub mod cloud;
 mod requests;
 use std::sync::Arc;
 use std::time::Duration;
@@ -68,6 +67,9 @@ const RESUBSCRIBE_AFTER_COMPLETION: Duration = Duration::from_secs(2);
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum InitialThreadSnapshot {
     Http,
+    /// Seed from the stream's own snapshot instead of an HTTP read. Only the
+    /// unit tests use it, so they can run without an HTTP server.
+    #[cfg(test)]
     Subscription,
 }
 
@@ -83,23 +85,6 @@ pub struct EnvironmentClient {
 }
 
 impl EnvironmentClient {
-    /// Independent remote environment state. The supplied preparation function
-    /// resolves fresh cloud credentials on reconnect; no local sidecar is used.
-    pub fn start_remote(prepare: PrepareFn) -> Self {
-        let runtime = tokio::runtime::Handle::current();
-        let supervisor = Arc::new(EnvironmentSupervisor::spawn(prepare));
-        let (shell_tx, shell_rx) = watch::channel(ShellState::default());
-        let shell = runtime.spawn(run_shell(supervisor.sessions(), shell_tx));
-        Self {
-            requests: Arc::new(requests::Requests::default()),
-            supervisor,
-            shell_rx,
-            runtime,
-            initial_thread_snapshot: InitialThreadSnapshot::Subscription,
-            tasks: vec![shell],
-        }
-    }
-
     /// Start against a supervised local sidecar. Credentials re-resolve from
     /// the sidecar's status channel on every connection attempt, so restarts
     /// (new port and/or bootstrap token) reconnect automatically.

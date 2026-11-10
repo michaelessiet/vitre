@@ -26,7 +26,6 @@ export default defineConfig({
       "third_party/gpui-frost/gpui_apple/**",
       "third_party/gpui-frost/gpui_macos/**",
       "third_party/gpui-frost/gpui_platform/**",
-      ".plans",
       "dist",
       "node_modules",
       "pnpm-lock.yaml",

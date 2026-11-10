@@ -52,4 +52,4 @@ positions. The reference includes both running and stopped devices.
 These samples are generated from the native theme file. Actual glass appearance
 also depends on the backdrop and transparency setting.
 
-Lens and native inline visualizations use the [content and metric patterns](components.md#lens-overview-and-inline-visuals). See [Lens behavior and QA](../lens.md).
+Native inline visualizations use the [content and metric patterns](components.md#inline-visuals).

@@ -1,7 +1,6 @@
 .git
 .repos
 .t3
-.plans
 .reference
 release
 **/node_modules

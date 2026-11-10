@@ -13,7 +13,7 @@ const DEFAULT_BACKEND_PORT: u16 = 3773;
 const READINESS_PATH: &str = "/.well-known/t3/environment";
 
 /// Env vars nulled out before spawning, mirroring `backendChildEnvPatch` in
-/// apps/desktop/src/backend/DesktopBackendConfiguration.ts — leaked values
+/// T3 Code's apps/desktop/src/backend/DesktopBackendConfiguration.ts — leaked values
 /// from a parent dev runner would override the bootstrap envelope.
 const T3CODE_ENV_NAMES: [&str; 10] = [
     "T3CODE_PORT",
@@ -85,21 +85,6 @@ pub(crate) fn spawn_backend(
     }
     command.env_remove("ELECTRON_RUN_AS_NODE");
     command.env("VITRE_READY_SIGNAL", "1");
-    let isolated_verification = std::env::vars_os().any(|(key, _)| {
-        let key = key.to_string_lossy();
-        key.starts_with("VITRE_VERIFY_") || key == "VITRE_SELFTEST"
-    });
-    if !isolated_verification
-        && std::env::var_os("VITRE_CLOUD_SHARED_AUTH_DIR").is_none()
-        && let Some(home) = std::env::var_os("HOME")
-    {
-        // Only the cloud account token is shared; projects, threads and every
-        // other secret remain in this instance's own data directory.
-        command.env(
-            "VITRE_CLOUD_SHARED_AUTH_DIR",
-            PathBuf::from(home).join(".vitre/userdata/secrets"),
-        );
-    }
 
     command
         .current_dir(

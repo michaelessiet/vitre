@@ -14,7 +14,7 @@ const ENVIRONMENT_BOOTSTRAP_TOKEN_TYPE: &str =
     "urn:t3:params:oauth:token-type:environment-bootstrap";
 
 /// Requests carry their own authentication. Sharing only the transport lets
-/// relay polling and bootstrap/ticket/snapshot calls reuse established TLS
+/// bootstrap, ticket and snapshot calls reuse established TLS
 /// connections without retaining an account's token in default headers.
 pub(crate) fn pooled_client() -> reqwest::Client {
     static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();

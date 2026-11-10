@@ -1,19 +1,6 @@
 import * as Schema from "effect/Schema";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
-import {
-  CloudDesktopAuthError,
-  CloudStartProgress,
-  CloudDesktopSession,
-  CloudStartConversationInput,
-  CloudContinueConversationInput,
-  CloudStartConversationResult,
-  CloudSwitchInput,
-  CloudSwitchStatusInput,
-  CloudSwitchCancelInput,
-  CloudSwitchResolveInput,
-  CloudSwitchStatus,
-} from "./cloud.ts";
 
 import { ExternalLauncherError, LaunchEditorInput } from "./editor.ts";
 import {
@@ -77,11 +64,6 @@ import {
   OrchestrationRpcSchemas,
 } from "./orchestration.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
-import {
-  RelayClientInstallFailedError,
-  RelayClientInstallProgressEventSchema,
-  RelayClientStatusSchema,
-} from "./relayClient.ts";
 import {
   ClaudeBinaryInstallFailedError,
   ClaudeBinaryInstallProgressEventSchema,
@@ -335,18 +317,6 @@ export const WS_METHODS = {
   serverGetProcessResourceHistory: "server.getProcessResourceHistory",
   serverSignalProcess: "server.signalProcess",
 
-  // Cloud environment methods
-  cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
-  cloudInstallRelayClient: "cloud.installRelayClient",
-  cloudGetDesktopSession: "cloud.getDesktopSession",
-  cloudStartConversation: "cloud.startConversation",
-  cloudStartProgress: "cloud.startProgress",
-  cloudContinueConversation: "cloud.continueConversation",
-  cloudSwitchConversation: "cloud.switchConversation",
-  cloudSwitchStatus: "cloud.switchStatus",
-  cloudCancelSwitch: "cloud.cancelSwitch",
-  cloudResolveSwitch: "cloud.resolveSwitch",
-
   // Claude managed binary methods
   claudeGetBinaryStatus: "claude.getBinaryStatus",
   claudeInstallBinary: "claude.installBinary",
@@ -502,61 +472,6 @@ export const WsServerSignalProcessRpc = Rpc.make(WS_METHODS.serverSignalProcess,
   error: EnvironmentAuthorizationError,
 });
 
-export const WsCloudGetRelayClientStatusRpc = Rpc.make(WS_METHODS.cloudGetRelayClientStatus, {
-  payload: Schema.Struct({}),
-  success: RelayClientStatusSchema,
-  error: EnvironmentAuthorizationError,
-});
-
-export const WsCloudContinueConversationRpc = Rpc.make(WS_METHODS.cloudContinueConversation, {
-  payload: CloudContinueConversationInput,
-  success: CloudStartConversationResult,
-  error: CloudDesktopAuthError,
-});
-export const WsCloudSwitchConversationRpc = Rpc.make(WS_METHODS.cloudSwitchConversation, {
-  payload: CloudSwitchInput,
-  success: CloudSwitchStatus,
-  error: CloudDesktopAuthError,
-});
-export const WsCloudSwitchStatusRpc = Rpc.make(WS_METHODS.cloudSwitchStatus, {
-  payload: CloudSwitchStatusInput,
-  success: CloudSwitchStatus,
-  error: CloudDesktopAuthError,
-});
-export const WsCloudResolveSwitchRpc = Rpc.make(WS_METHODS.cloudResolveSwitch, {
-  payload: CloudSwitchResolveInput,
-  success: CloudSwitchStatus,
-  error: CloudDesktopAuthError,
-});
-export const WsCloudCancelSwitchRpc = Rpc.make(WS_METHODS.cloudCancelSwitch, {
-  payload: CloudSwitchCancelInput,
-  success: CloudSwitchStatus,
-  error: CloudDesktopAuthError,
-});
-export const WsCloudStartConversationRpc = Rpc.make(WS_METHODS.cloudStartConversation, {
-  payload: CloudStartConversationInput,
-  success: CloudStartConversationResult,
-  error: Schema.Union([CloudDesktopAuthError, EnvironmentAuthorizationError]),
-});
-export const WsCloudStartProgressRpc = Rpc.make(WS_METHODS.cloudStartProgress, {
-  payload: Schema.Struct({ idempotencyKey: Schema.String, cancel: Schema.Boolean }),
-  success: CloudStartProgress,
-  error: CloudDesktopAuthError,
-});
-
-export const WsCloudGetDesktopSessionRpc = Rpc.make(WS_METHODS.cloudGetDesktopSession, {
-  payload: Schema.Struct({ authorize: Schema.Boolean, cancel: Schema.optionalKey(Schema.Boolean) }),
-  success: CloudDesktopSession,
-  error: Schema.Union([CloudDesktopAuthError, EnvironmentAuthorizationError]),
-});
-
-export const WsCloudInstallRelayClientRpc = Rpc.make(WS_METHODS.cloudInstallRelayClient, {
-  payload: Schema.Struct({}),
-  success: RelayClientInstallProgressEventSchema,
-  error: Schema.Union([RelayClientInstallFailedError, EnvironmentAuthorizationError]),
-  stream: true,
-});
-
 export const WsClaudeGetBinaryStatusRpc = Rpc.make(WS_METHODS.claudeGetBinaryStatus, {
   payload: Schema.Struct({}),
   success: ClaudeBinaryStatusSchema,
@@ -566,7 +481,7 @@ export const WsClaudeGetBinaryStatusRpc = Rpc.make(WS_METHODS.claudeGetBinarySta
 /**
  * Streams install stages plus download byte counts: the CLI download is
  * ~120MB compressed and a non-streaming call would show an unresolving
- * spinner. Mirrors `cloud.installRelayClient`.
+ * spinner.
  */
 export const WsClaudeInstallBinaryRpc = Rpc.make(WS_METHODS.claudeInstallBinary, {
   payload: Schema.Struct({}),
@@ -588,7 +503,7 @@ export const WsGraphRuntimeStatusRpc = Rpc.make(WS_METHODS.graphRuntimeStatus, {
 
 /**
  * Streams install stages: a `pip install` runs for minutes and a non-streaming
- * call would show an unresolving spinner. Mirrors `cloud.installRelayClient`.
+ * call would show an unresolving spinner.
  */
 export const WsGraphInstallRuntimeRpc = Rpc.make(WS_METHODS.graphInstallRuntime, {
   payload: GraphInstallRuntimeInput,
@@ -1183,16 +1098,6 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetProcessDiagnosticsRpc,
   WsServerGetProcessResourceHistoryRpc,
   WsServerSignalProcessRpc,
-  WsCloudGetRelayClientStatusRpc,
-  WsCloudGetDesktopSessionRpc,
-  WsCloudStartConversationRpc,
-  WsCloudStartProgressRpc,
-  WsCloudSwitchConversationRpc,
-  WsCloudSwitchStatusRpc,
-  WsCloudCancelSwitchRpc,
-  WsCloudResolveSwitchRpc,
-  WsCloudContinueConversationRpc,
-  WsCloudInstallRelayClientRpc,
   WsClaudeGetBinaryStatusRpc,
   WsClaudeInstallBinaryRpc,
   WsGraphRuntimeStatusRpc,

@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off - Pure native-path boundary for managed cloud returns.
+// @effect-diagnostics nodeBuiltinImport:off - Pure native-path boundary for workspaces returned from the former Vitre Cloud.
 import * as NodePath from "node:path";
 
 /** Shared provider processes may later run a shell in any conversation directory. */

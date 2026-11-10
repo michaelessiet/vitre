@@ -1,7 +1,7 @@
 //! Changed-files tree + presentation logic for the chat turn-diff card.
 //!
-//! Ports `apps/web/src/lib/turnDiffTree.ts`,
-//! `apps/web/src/components/chat/changedFilesPresentation.ts`, the compact
+//! Ports T3 Code's `apps/web/src/lib/turnDiffTree.ts`,
+//! T3 Code's `apps/web/src/components/chat/changedFilesPresentation.ts`, the compact
 //! count formatting from `DiffStatLabel.tsx`, and the auto-expand rule from
 //! `ChangedFilesTree.tsx`. Pure functions over the checkpoint summary's file
 //! list — no I/O, no gpui.

@@ -1,6 +1,6 @@
 //! Terminal-context serialization: term-for-term port of
-//! `apps/web/src/lib/terminalContext.ts`, plus the timeline-side helpers from
-//! `apps/web/src/components/chat/userMessageTerminalContexts.ts` and the
+//! T3 Code's `apps/web/src/lib/terminalContext.ts`, plus the timeline-side helpers from
+//! T3 Code's `apps/web/src/components/chat/userMessageTerminalContexts.ts` and the
 //! trailing `<element_context>` extraction from `lib/elementContext.ts` that
 //! `deriveDisplayedUserMessageState` depends on.
 //!

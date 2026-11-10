@@ -1,4 +1,4 @@
-//! Port of `packages/client-runtime/src/state/shellReducer.ts`.
+//! Port of T3 Code's `packages/client-runtime/src/state/shellReducer.ts`.
 
 use vitre_contracts::{OrchestrationShellSnapshot, OrchestrationShellStreamEvent};
 

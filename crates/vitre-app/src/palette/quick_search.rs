@@ -2,7 +2,7 @@
 //!
 //! `Open` (⌘P) ranks open threads and workspace file paths; `Content` (⌘⇧F)
 //! searches chat messages and file contents. Both are the same dialog with a
-//! different corpus, which is how `apps/web/src/components/QuickSearch.tsx`
+//! different corpus, which is how T3 Code's `apps/web/src/components/QuickSearch.tsx`
 //! models it too.
 //!
 //! The overlay itself is gpui-component's [`Command`] hosted in a

@@ -1,7 +1,7 @@
 //! File-tree projection: flat `projects.listEntries` paths → renderable rows.
 //!
 //! Port of the tree model the Electron app gets from @pierre/trees as
-//! configured in `apps/web/src/components/files/FileBrowserPanel.tsx`
+//! configured in T3 Code's `apps/web/src/components/files/FileBrowserPanel.tsx`
 //! (`flattenEmptyDirectories: true`, `initialExpansion: "closed"`, directory
 //! paths marked with a trailing slash). This is the pure model only: the
 //! caller owns the expanded set and passes it into [`FileTreeModel::visible_rows`].

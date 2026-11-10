@@ -203,7 +203,7 @@ fn main() {
             eprintln!("[vitre] failed to load bundled fonts: {error:#}");
         }
         // Vitre themes transcribe the Electron app's design tokens
-        // (apps/web/src/index.css); the dark palette is the pure-black
+        // (T3 Code's apps/web/src/index.css); the dark palette is the pure-black
         // `data-sidebar-version` variant the shell actually runs with. Their
         // `highlight` block is the editor half, transcribed from the
         // CodeMirror theme (codemirror/theme.ts) — without it the editor keeps
@@ -374,7 +374,7 @@ fn main() {
                 window_bounds: Some(bounds),
                 window_min_size: Some(size(px(640.), px(480.))),
                 // Electron parity: hiddenInset titlebar, traffic lights at
-                // (16, 18) (apps/desktop/src/window/DesktopWindow.ts).
+                // (16, 18) (T3 Code's apps/desktop/src/window/DesktopWindow.ts).
                 titlebar: Some(TitlebarOptions {
                     title: Some("Vitre".into()),
                     appears_transparent: true,

@@ -80,7 +80,7 @@ use crate::vim::{self, ToggleVimMode, VimKeystroke, VimSession};
 const RESUBSCRIBE_AFTER_COMPLETION: Duration = Duration::from_secs(2);
 
 /// codemirror-vim's `.cm-fat-cursor` default, which is what Electron paints:
-/// T3 never overrides it (`apps/web/src/components/files/codemirror/theme.ts`
+/// T3 never overrides it (T3 Code's `apps/web/src/components/files/codemirror/theme.ts`
 /// restyles `.cm-cursor` only). Deliberately not a theme token — a modal caret
 /// that borrows the foreground or selection colour is exactly the caret that
 /// disappears into a visual selection.
@@ -531,8 +531,6 @@ impl FilesPanel {
         panel.spawn_diagnostics_loop(cx);
         panel
     }
-
-    /// Which workspace this panel browses (ChatApp recreates on change).
 
     pub fn uses_client(&self, client: &Arc<EnvironmentClient>) -> bool {
         Arc::ptr_eq(&self.client, client)

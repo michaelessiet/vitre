@@ -9,8 +9,8 @@
  * subprocesses.
  *
  * The install path mirrors `providerMaintenanceRunner` (bounded subprocess,
- * capped output, serialized behind a lock) and `relayClient` (staged progress
- * reported through a callback so the RPC can stream it).
+ * capped output, serialized behind a lock) and reports staged progress through a
+ * callback so the RPC can stream it.
  *
  * @module GraphifyRuntime
  */

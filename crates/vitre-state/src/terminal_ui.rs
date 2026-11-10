@@ -1,5 +1,5 @@
 //! Per-thread terminal drawer UI state: a pure port of
-//! `apps/web/src/terminalUiStateStore.ts` (zustand store, storage key
+//! T3 Code's `apps/web/src/terminalUiStateStore.ts` (zustand store, storage key
 //! `t3code:terminal-state:v1`, version 4).
 //!
 //! Thread keys are Electron's scoped `${environmentId}:${threadId}`. Entries

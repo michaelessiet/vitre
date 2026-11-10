@@ -181,15 +181,6 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
     }),
   );
 
-  it.effect("reports that the background service has been removed", () =>
-    Effect.gen(function* () {
-      const { output } = yield* captureStdout(runCli(["service", "--help"]));
-
-      assert.include(output, "background service has been removed");
-      assert.include(output, "desktop app");
-    }),
-  );
-
   it.effect("executes auth pairing subcommands and redacts secrets from list output", () =>
     Effect.gen(function* () {
       const baseDir = NodeFS.mkdtempSync(

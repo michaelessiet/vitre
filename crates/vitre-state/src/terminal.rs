@@ -1,8 +1,8 @@
 //! Terminal client state: the pure reducers behind the terminal drawer.
 //!
-//! Ports `packages/client-runtime/src/state/terminalSession.ts`
+//! Ports T3 Code's `packages/client-runtime/src/state/terminalSession.ts`
 //! (`applyTerminalAttachStreamEvent` over `TerminalBufferState`) and the
-//! metadata fold from `packages/client-runtime/src/state/terminal.ts`
+//! metadata fold from T3 Code's `packages/client-runtime/src/state/terminal.ts`
 //! (`applyTerminalMetadataStreamEvent`), plus `getTerminalLabel` from
 //! `packages/shared/src/terminalLabels.ts`.
 //!

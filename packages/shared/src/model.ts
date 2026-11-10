@@ -1,6 +1,4 @@
 import {
-  DEFAULT_MODEL,
-  DEFAULT_MODEL_BY_PROVIDER,
   MODEL_SLUG_ALIASES_BY_PROVIDER,
   type ModelCapabilities,
   type ModelSelection,
@@ -11,11 +9,6 @@ import {
 } from "@t3tools/contracts";
 
 const DEFAULT_PROVIDER_DRIVER_KIND = ProviderDriverKind.make("codex");
-
-export interface SelectableModelOption {
-  slug: string;
-  name: string;
-}
 
 export function createModelCapabilities(input: {
   optionDescriptors: ReadonlyArray<ProviderOptionDescriptor>;
@@ -54,13 +47,6 @@ export function getProviderOptionBooleanSelectionValue(
 ): boolean | undefined {
   const value = getProviderOptionSelectionValue(selections, id);
   return typeof value === "boolean" ? value : undefined;
-}
-
-export function getModelSelectionOptionValue(
-  modelSelection: ModelSelection | null | undefined,
-  id: string,
-): string | boolean | undefined {
-  return getProviderOptionSelectionValue(modelSelection?.options, id);
 }
 
 export function getModelSelectionStringOptionValue(
@@ -173,26 +159,6 @@ export function getProviderOptionCurrentValue(
   return descriptor.options.find((option) => option.isDefault)?.id;
 }
 
-export function getProviderOptionCurrentLabel(
-  descriptor: ProviderOptionDescriptor | null | undefined,
-): string | undefined {
-  if (!descriptor) {
-    return undefined;
-  }
-  if (descriptor.type === "boolean") {
-    return typeof descriptor.currentValue === "boolean"
-      ? descriptor.currentValue
-        ? "On"
-        : "Off"
-      : undefined;
-  }
-  const currentValue = getProviderOptionCurrentValue(descriptor);
-  if (typeof currentValue !== "string") {
-    return undefined;
-  }
-  return descriptor.options.find((option) => option.id === currentValue)?.label;
-}
-
 export function buildProviderOptionSelectionsFromDescriptors(
   descriptors: ReadonlyArray<ProviderOptionDescriptor> | null | undefined,
 ): Array<ProviderOptionSelection> | undefined {
@@ -210,26 +176,6 @@ export function buildProviderOptionSelectionsFromDescriptors(
   }
 
   return nextSelections.length > 0 ? nextSelections : undefined;
-}
-
-export function getModelSelectionOptionDescriptors(
-  modelSelection: ModelSelection | null | undefined,
-  caps?: ModelCapabilities | null | undefined,
-): ReadonlyArray<ProviderOptionDescriptor> {
-  if (!modelSelection) {
-    return [];
-  }
-  if (!caps) {
-    return [];
-  }
-  return getProviderOptionDescriptors({
-    caps,
-    selections: modelSelection.options,
-  });
-}
-
-export function isClaudeUltrathinkPrompt(text: string | null | undefined): boolean {
-  return typeof text === "string" && /\bultrathink\b/i.test(text);
 }
 
 export function normalizeModelSlug(
@@ -255,54 +201,6 @@ export function normalizeCustomModelSlug(model: string | null | undefined): stri
   }
 
   return model.trim() || null;
-}
-
-export function resolveSelectableModel(
-  provider: ProviderDriverKind,
-  value: string | null | undefined,
-  options: ReadonlyArray<SelectableModelOption>,
-): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  const direct = options.find((option) => option.slug === trimmed);
-  if (direct) {
-    return direct.slug;
-  }
-
-  const byName = options.find((option) => option.name.toLowerCase() === trimmed.toLowerCase());
-  if (byName) {
-    return byName.slug;
-  }
-
-  const normalized = normalizeModelSlug(trimmed, provider);
-  if (!normalized) {
-    return null;
-  }
-
-  const resolved = options.find((option) => option.slug === normalized);
-  return resolved ? resolved.slug : null;
-}
-
-function resolveModelSlug(model: string | null | undefined, provider: ProviderDriverKind): string {
-  const normalized = normalizeModelSlug(model, provider);
-  if (!normalized) {
-    return DEFAULT_MODEL_BY_PROVIDER[provider] ?? DEFAULT_MODEL;
-  }
-  return normalized;
-}
-
-export function resolveModelSlugForProvider(
-  provider: ProviderDriverKind,
-  model: string | null | undefined,
-): string {
-  return resolveModelSlug(model, provider);
 }
 
 /** Trim a string, returning null for empty/missing values. */

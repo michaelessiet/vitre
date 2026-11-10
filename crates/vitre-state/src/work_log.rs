@@ -1,12 +1,12 @@
 //! Work-log and chat-timeline derivations over raw thread activities.
 //!
 //! Port of the Electron chat timeline's activity pipeline:
-//! - `apps/web/src/session-logic.ts` — `deriveWorkLogEntries` and its
+//! - T3 Code's `apps/web/src/session-logic.ts` — `deriveWorkLogEntries` and its
 //!   extraction/collapse helpers, the tool status predicates, and
 //!   `formatDuration` / `deriveTimelineEntries`.
-//! - `apps/web/src/components/chat/MessagesTimeline.logic.ts` —
+//! - T3 Code's `apps/web/src/components/chat/MessagesTimeline.logic.ts` —
 //!   `deriveMessagesTimelineRows` (turn folds + work-run grouping).
-//! - `apps/web/src/components/chat/MessagesTimeline.tsx` — row rendering
+//! - T3 Code's `apps/web/src/components/chat/MessagesTimeline.tsx` — row rendering
 //!   helpers (icon name, preview, heading, expanded body).
 //!
 //! Deviations from the TS sources (all deliberate):
@@ -1866,8 +1866,8 @@ pub fn work_entry_icon_name(entry: &WorkLogEntry) -> &'static str {
 }
 
 // ---------------------------------------------------------------------------
-// Workspace-relative paths (apps/web/src/filePathDisplay.ts +
-// apps/web/src/terminal-links.ts `splitPathAndPosition`)
+// Workspace-relative paths (T3 Code's apps/web/src/filePathDisplay.ts +
+// T3 Code's apps/web/src/terminal-links.ts `splitPathAndPosition`)
 // ---------------------------------------------------------------------------
 
 struct PathPosition<'a> {

@@ -263,7 +263,7 @@ export const PreviewAutomationResizeResult = Schema.Struct({
 });
 export type PreviewAutomationResizeResult = typeof PreviewAutomationResizeResult.Type;
 
-/** Mirrors DesktopPreviewColorScheme; declared here to keep this module free of ipc.ts imports. */
+/** The preview color scheme a page is rendered with. */
 export const PreviewAutomationColorScheme = Schema.Literals(["system", "light", "dark"]);
 export type PreviewAutomationColorScheme = typeof PreviewAutomationColorScheme.Type;
 

@@ -1,6 +1,6 @@
 # Observability
 
-T3 Code has one server-side observability model:
+Vitre has one server-side observability model:
 
 - pretty logs go to stdout for humans
 - completed spans go to a local NDJSON trace file
@@ -65,11 +65,7 @@ You do not need any extra env vars. Just run the app normally and inspect `serve
 Examples:
 
 ```bash
-npx t3
-```
-
-```bash
-node --run dev
+vp run dev:server
 ```
 
 ```bash
@@ -113,22 +109,16 @@ export T3CODE_TRACE_TIMING_ENABLED=true
 
 #### 3. Launch the app from that same shell
 
-CLI:
-
-```bash
-npx t3
-```
-
-Monorepo web/server dev:
-
-```bash
-node --run dev
-```
-
-Monorepo desktop dev:
+Backend only:
 
 ```bash
 vp run dev:server
+```
+
+Native app in development:
+
+```bash
+vp run dev:vitre
 ```
 
 Packaged desktop app:
@@ -140,8 +130,8 @@ macOS app bundle example:
 ```bash
 T3CODE_OTLP_TRACES_URL=http://localhost:4318/v1/traces \
 T3CODE_OTLP_METRICS_URL=http://localhost:4318/v1/metrics \
-T3CODE_OTLP_SERVICE_NAME=t3-desktop \
-"/Applications/T3 Code.app/Contents/MacOS/T3 Code"
+T3CODE_OTLP_SERVICE_NAME=vitre \
+"/Applications/Vitre.app/Contents/MacOS/Vitre"
 ```
 
 Direct binary example:
@@ -149,7 +139,7 @@ Direct binary example:
 ```bash
 T3CODE_OTLP_TRACES_URL=http://localhost:4318/v1/traces \
 T3CODE_OTLP_METRICS_URL=http://localhost:4318/v1/metrics \
-T3CODE_OTLP_SERVICE_NAME=t3-desktop \
+T3CODE_OTLP_SERVICE_NAME=vitre \
 ./path/to/your/desktop-app-binary
 ```
 

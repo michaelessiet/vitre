@@ -1,7 +1,7 @@
 //! Persisted chat UI state: the changed-files card expansion map and the
 //! per-project last-invoked script.
 //!
-//! Ports the relevant slices of Electron's `apps/web/src/uiStateStore.ts`
+//! Ports the relevant slices of Electron's T3 Code's `apps/web/src/uiStateStore.ts`
 //! (localStorage key `t3code:ui-state:v1`): per-thread, per-turn expansion
 //! choices for the changed-files card, plus the separate
 //! `lastInvokedScriptByProjectId` localStorage record backing the scripts

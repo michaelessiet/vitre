@@ -1,6 +1,6 @@
 //! The changed-files card under assistant messages (M3 slice 2.4).
 //!
-//! Ports `apps/web/src/components/chat/ChangedFilesTree.tsx`
+//! Ports T3 Code's `apps/web/src/components/chat/ChangedFilesTree.tsx`
 //! (`ChangedFilesCard` + `ChangedFilesTree`) and its call site in
 //! `MessagesTimeline.tsx` (`AssistantChangedFilesSection`). Pure derivations
 //! live in `vitre_state::turn_diff_tree`; persisted expansion in

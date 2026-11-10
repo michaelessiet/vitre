@@ -1,6 +1,6 @@
 //! The add-project flow's model: sources, provider readiness, and the stage
 //! machine, ported from the add-project half of
-//! `apps/web/src/components/CommandPalette.tsx`.
+//! T3 Code's `apps/web/src/components/CommandPalette.tsx`.
 //!
 //! Electron layers this flow over its command palette's view stack; the view
 //! itself lives in [`super::command_palette`]. What Electron spreads over an

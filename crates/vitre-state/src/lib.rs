@@ -1,7 +1,7 @@
 //! Pure state reducers over the generated contract types.
 //!
 //! These are line-for-line ports of the shared TypeScript reducers in
-//! `packages/client-runtime/src/state/` (`shellReducer.ts`, `threadReducer.ts`)
+//! T3 Code's `packages/client-runtime/src/state/` (`shellReducer.ts`, `threadReducer.ts`)
 //! and must keep the exact same semantics — both apps reduce the same
 //! orchestration event stream. UI-specific mapping (attachment preview URLs,
 //! model-slug normalisation, scoped fields) is the caller's responsibility,

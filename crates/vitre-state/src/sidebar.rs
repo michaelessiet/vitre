@@ -1,8 +1,8 @@
 //! The sidebar's derived model: thread/project ordering, per-thread status
 //! pills, and the preview window a collapsed project shows.
 //!
-//! Port of `packages/client-runtime/src/state/threadSort.ts` plus the
-//! sidebar-status half of `apps/web/src/components/Sidebar.logic.ts`
+//! Port of T3 Code's `packages/client-runtime/src/state/threadSort.ts` plus the
+//! sidebar-status half of T3 Code's `apps/web/src/components/Sidebar.logic.ts`
 //! (`resolveThreadStatusPill`, `resolveProjectStatusIndicator`,
 //! `sortProjectsForSidebar`) and the windowing `useMemo` in
 //! `SidebarProjectItem`.

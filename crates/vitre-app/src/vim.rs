@@ -4,7 +4,7 @@
 //! Electron gets this from `@replit/codemirror-vim`, switched on by the
 //! `vimMode` client setting (default off,
 //! `packages/contracts/src/settings.ts:144`) and configured in
-//! `apps/web/src/components/files/codemirror/CodeMirrorFileEditor.tsx`, which
+//! T3 Code's `apps/web/src/components/files/codemirror/CodeMirrorFileEditor.tsx`, which
 //! adds three mappings on top of the stock command set: `gh` → LSP hover,
 //! `gd`/`<C-]>` → LSP definition, and `:w` → the host's save coordinator.
 //! Those three live in [`vitre_state::vim`] as effects; this module turns them

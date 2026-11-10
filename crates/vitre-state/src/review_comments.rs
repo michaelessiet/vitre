@@ -1,6 +1,6 @@
 //! Review-comment context blocks for the composer and timeline.
 //!
-//! Ports `apps/web/src/reviewCommentContext.ts` term-for-term: pending review
+//! Ports T3 Code's `apps/web/src/reviewCommentContext.ts` term-for-term: pending review
 //! comments serialize into `<review_comment …>` blocks appended to the outgoing
 //! prompt, and sent user messages parse back into text / review-comment
 //! segments for timeline rendering. The Electron module drives its parsers

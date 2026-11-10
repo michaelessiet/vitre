@@ -1,4 +1,4 @@
-//! Port of `packages/client-runtime/src/state/threadReducer.ts`.
+//! Port of T3 Code's `packages/client-runtime/src/state/threadReducer.ts`.
 
 use std::cmp::Ordering;
 use std::collections::HashSet;

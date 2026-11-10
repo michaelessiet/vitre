@@ -1,6 +1,6 @@
 //! Session supervisor: keeps one live [`RpcSession`] against an environment,
 //! reconnecting with backoff. The connection half of
-//! `packages/client-runtime/src/connection/supervisor.ts` for the local
+//! T3 Code's `packages/client-runtime/src/connection/supervisor.ts` for the local
 //! driver — the multi-connection catalog and remote drivers come with M5.
 //!
 //! There is deliberately no transport-level retry of individual requests
@@ -201,32 +201,12 @@ async fn run(
 async fn connect_once(
     prepare: &mut PrepareFn,
 ) -> Result<(RpcSession, PreparedTarget, ServerConfig), RpcError> {
-    static NEXT_ATTEMPT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-    let attempt_id = Some(NEXT_ATTEMPT.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
-    let started = Instant::now();
-    crate::cloud::trace_connection_phase("prepare_start", None, attempt_id, started.elapsed());
     let mut target = prepare().await?;
-    crate::cloud::trace_connection_phase("prepare_ready", None, attempt_id, started.elapsed());
     let http = EnvironmentHttp::new(target.base_url.clone());
-    let started = Instant::now();
     let ticket = http
         .initial_websocket_ticket(&target.access_token, &mut target.initial_websocket_ticket)
         .await?;
-    crate::cloud::trace_connection_phase(
-        "websocket_ticket_ready",
-        None,
-        attempt_id,
-        started.elapsed(),
-    );
-    let started = Instant::now();
     let session = RpcSession::connect(&http.ws_url(&ticket)).await?;
-    crate::cloud::trace_connection_phase(
-        "websocket_connected",
-        None,
-        attempt_id,
-        started.elapsed(),
-    );
-    let started = Instant::now();
     let config = session
         .call_typed::<ServerGetConfig>(&serde_json::Value::Object(Default::default()))
         .await
@@ -236,12 +216,6 @@ async fn connect_once(
                 RpcError::Transport(format!("server.getConfig failed: {typed:?}"))
             }
         })?;
-    crate::cloud::trace_connection_phase(
-        "session_config_ready",
-        None,
-        attempt_id,
-        started.elapsed(),
-    );
     Ok((session, target, config))
 }
 

@@ -1,6 +1,6 @@
 //! Worktree cleanup on thread deletion.
 //!
-//! Ports `apps/web/src/worktreeCleanup.ts` and the fallback-selection half of
+//! Ports T3 Code's `apps/web/src/worktreeCleanup.ts` and the fallback-selection half of
 //! `Sidebar.logic.ts::getFallbackThreadIdAfterDelete`: deleting the last
 //! thread linked to a worktree offers to remove the worktree too, and the
 //! sidebar selection falls back to the deleted thread's project.

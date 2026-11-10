@@ -8,7 +8,7 @@ pub mod preview;
 pub mod quick_search;
 pub mod rank;
 
-/// Electron's `formatRelativeTimeLabel` (`apps/web/src/timestampFormat.ts`),
+/// Electron's `formatRelativeTimeLabel` (T3 Code's `apps/web/src/timestampFormat.ts`),
 /// which spells out "ago" unlike the sidebar's compact form. Both palettes
 /// stamp their rows with it.
 pub fn relative_time(iso: &str) -> Option<String> {

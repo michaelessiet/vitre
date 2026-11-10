@@ -1,6 +1,6 @@
 //! Chat presentation derivations over raw thread activities.
 //!
-//! Port of the relevant parts of `apps/web/src/session-logic.ts`: pending
+//! Port of the relevant parts of T3 Code's `apps/web/src/session-logic.ts`: pending
 //! approvals, pending user-input requests, and the active (TodoWrite) plan
 //! are NOT part of the thread projection — the reducer deliberately ignores
 //! their request events — so both apps derive them from the activity log.

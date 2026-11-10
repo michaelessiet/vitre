@@ -1213,7 +1213,7 @@ fn arrow_sequence(up: bool, app_cursor: bool) -> String {
 
 /// Keystroke → PTY bytes. Runs only for keystrokes gpui's binding dispatch
 /// left unclaimed, which is exactly Electron's passthrough set. Ports the
-/// arbitration order of `apps/web/src/keybindings.ts` §2.5: word/line
+/// arbitration order of T3 Code's `apps/web/src/keybindings.ts` §2.5: word/line
 /// navigation, cmd+backspace delete-to-start, ctrl+l / cmd+k clear — then
 /// standard xterm encoding.
 fn encode_keystroke(keystroke: &Keystroke, mode: TermMode, mac: bool) -> Option<TerminalInput> {

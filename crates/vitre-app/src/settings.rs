@@ -3,7 +3,7 @@
 //! Electron's settings is a *route*, not a dialog: the sidebar swaps its body
 //! for a section nav, the content area renders the page, and Escape (or the
 //! nav's Back row) returns to where you were
-//! (`apps/web/src/components/settings/SettingsSidebarNav.tsx`). Vitre does the
+//! (T3 Code's `apps/web/src/components/settings/SettingsSidebarNav.tsx`). Vitre does the
 //! same thing at the workspace level — [`crate::chat::ChatApp`] renders this
 //! view *instead of* the sidebar/chat/dock split — so no chat state is torn
 //! down while you are in here.

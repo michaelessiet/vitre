@@ -2,10 +2,10 @@
 //!
 //! Ports of two pure predicates from the Electron app:
 //! - `completionAnchor` / `COMPLETION_TRIGGER_CHARS` in
-//!   `apps/web/src/components/files/codemirror/lspBridge.ts`
+//!   T3 Code's `apps/web/src/components/files/codemirror/lspBridge.ts`
 //! - `isLspSupportedPath` in `packages/shared/src/lspSupport.ts`, plus the
 //!   server-reported-extensions override in
-//!   `apps/web/src/components/files/codemirror/useLspBridge.ts`
+//!   T3 Code's `apps/web/src/components/files/codemirror/useLspBridge.ts`
 //!
 //! Both must keep the exact JS semantics (including the quirks documented on
 //! each function) so the two apps gate identically against the same server.

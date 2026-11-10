@@ -33,7 +33,6 @@
     "@vtsls/language-server": "^0.3.0",
     "effect": "catalog:",
     "node-pty": "^1.1.0",
-    "playwright-core": "1.60.0",
     "typescript": "catalog:",
     "vscode-jsonrpc": "8.2.0",
     "vscode-languageserver-protocol": "3.17.5",

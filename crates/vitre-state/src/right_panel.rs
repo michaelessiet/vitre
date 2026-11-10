@@ -1,5 +1,5 @@
 //! Right-panel dock state: a line-for-line port of the Electron app's
-//! `apps/web/src/rightPanelStore.ts` (persisted-state version 10).
+//! T3 Code's `apps/web/src/rightPanelStore.ts` (persisted-state version 10).
 //!
 //! The dock keeps one `{isOpen, activeSurfaceId, surfaces[]}` record per
 //! thread, keyed by `${environmentId}:${threadId}`. Three invariants carry
