@@ -16,6 +16,8 @@ import {
   buildCommitMessagePrompt,
   buildPrContentPrompt,
   buildThreadTitlePrompt,
+  buildSubagentSummaryPrompt,
+  sanitizeSubagentSummary,
 } from "./TextGenerationPrompts.ts";
 import {
   sanitizeCommitSubject,
@@ -54,7 +56,8 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle";
+      | "generateThreadTitle"
+      | "generateSubagentSummary";
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
@@ -255,10 +258,27 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
       } satisfies TextGeneration.ThreadTitleGenerationResult;
     });
 
+  const generateSubagentSummary: TextGeneration.TextGeneration["Service"]["generateSubagentSummary"] =
+    Effect.fn("CursorTextGeneration.generateSubagentSummary")(function* (input) {
+      const { prompt, outputSchema } = buildSubagentSummaryPrompt({
+        task: input.task,
+        transcript: input.transcript,
+      });
+      const generated = yield* runCursorJson({
+        operation: "generateSubagentSummary",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson: outputSchema,
+        modelSelection: input.modelSelection,
+      });
+      return { summary: sanitizeSubagentSummary(generated.summary) };
+    });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    generateSubagentSummary,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

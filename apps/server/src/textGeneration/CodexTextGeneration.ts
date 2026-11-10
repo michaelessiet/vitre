@@ -22,6 +22,8 @@ import {
   buildCommitMessagePrompt,
   buildPrContentPrompt,
   buildThreadTitlePrompt,
+  buildSubagentSummaryPrompt,
+  sanitizeSubagentSummary,
 } from "./TextGenerationPrompts.ts";
 import {
   normalizeCliError,
@@ -98,7 +100,8 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle",
+      | "generateThreadTitle"
+      | "generateSubagentSummary",
     value: unknown,
   ): Effect.Effect<string, TextGenerationError> =>
     encodeJsonString(value).pipe(
@@ -117,7 +120,8 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle",
+      | "generateThreadTitle"
+      | "generateSubagentSummary",
     attachments: TextGeneration.BranchNameGenerationInput["attachments"],
   ): Effect.fn.Return<MaterializedImageAttachments, TextGenerationError> {
     if (!attachments || attachments.length === 0) {
@@ -159,7 +163,8 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle";
+      | "generateThreadTitle"
+      | "generateSubagentSummary";
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
@@ -398,10 +403,28 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       } satisfies TextGeneration.ThreadTitleGenerationResult;
     });
 
+  const generateSubagentSummary: TextGeneration.TextGeneration["Service"]["generateSubagentSummary"] =
+    Effect.fn("CodexTextGeneration.generateSubagentSummary")(function* (input) {
+      const { prompt, outputSchema } = buildSubagentSummaryPrompt({
+        task: input.task,
+        transcript: input.transcript,
+      });
+      const generated = yield* runCodexJson({
+        operation: "generateSubagentSummary",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson: outputSchema,
+        imagePaths: [],
+        modelSelection: input.modelSelection,
+      });
+      return { summary: sanitizeSubagentSummary(generated.summary) };
+    });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    generateSubagentSummary,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

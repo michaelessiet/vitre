@@ -59,6 +59,7 @@ import { layer as AssistantStreamBusLayer } from "./orchestration/AssistantStrea
 import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRuntimeIngestion.ts";
 import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderCommandReactor.ts";
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor.ts";
+import { SubagentSummaryReactorLive } from "./orchestration/Layers/SubagentSummaryReactor.ts";
 import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletionReactor.ts";
 import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
 import * as ServerSettings from "./serverSettings.ts";
@@ -172,6 +173,7 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(ProviderCommandReactorLive),
   Layer.provideMerge(CheckpointReactorLive),
   Layer.provideMerge(ThreadDeletionReactorLive),
+  Layer.provideMerge(SubagentSummaryReactorLive),
   Layer.provideMerge(RuntimeReceiptBusLive),
   // Shared by ProviderRuntimeIngestion (publisher) and the websocket thread
   // subscriptions (subscribers); provided once so both see the same PubSub.

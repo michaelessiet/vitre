@@ -65,6 +65,20 @@ export interface ThreadTitleGenerationResult {
   title: string;
 }
 
+export interface SubagentSummaryGenerationInput {
+  cwd: string;
+  /** What the subagent was asked to do. */
+  task: string;
+  /** The subagent's recent transcript as text lines, oldest first. */
+  transcript: string;
+  /** A small, inexpensive model: summaries run every few seconds per agent. */
+  modelSelection: ModelSelection;
+}
+
+export interface SubagentSummaryGenerationResult {
+  summary: string;
+}
+
 /**
  * TextGeneration - Service tag for commit and PR text generation.
  */
@@ -98,6 +112,13 @@ export class TextGeneration extends Context.Service<
     readonly generateThreadTitle: (
       input: ThreadTitleGenerationInput,
     ) => Effect.Effect<ThreadTitleGenerationResult, TextGenerationError>;
+
+    /**
+     * Summarize what a running subagent is doing, in one line.
+     */
+    readonly generateSubagentSummary: (
+      input: SubagentSummaryGenerationInput,
+    ) => Effect.Effect<SubagentSummaryGenerationResult, TextGenerationError>;
   }
 >()("t3/textGeneration/TextGeneration") {}
 
@@ -108,7 +129,8 @@ type TextGenerationOp =
   | "generateCommitMessage"
   | "generatePrContent"
   | "generateBranchName"
-  | "generateThreadTitle";
+  | "generateThreadTitle"
+  | "generateSubagentSummary";
 
 const resolveInstance = (
   registry: ProviderInstanceRegistry.ProviderInstanceRegistry["Service"],
@@ -147,6 +169,10 @@ export const makeTextGenerationFromRegistry = (
     generateThreadTitle: (input) =>
       resolveInstance(registry, "generateThreadTitle", input.modelSelection.instanceId).pipe(
         Effect.flatMap((textGeneration) => textGeneration.generateThreadTitle(input)),
+      ),
+    generateSubagentSummary: (input) =>
+      resolveInstance(registry, "generateSubagentSummary", input.modelSelection.instanceId).pipe(
+        Effect.flatMap((textGeneration) => textGeneration.generateSubagentSummary(input)),
       ),
   });
 
