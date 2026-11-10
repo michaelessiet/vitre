@@ -732,7 +732,7 @@ impl ChatApp {
                 self.right_panel.map.open(&key, SurfaceKind::Diff);
                 self.after_dock_change(false, window, cx);
             }
-            SurfaceKind::Search | SurfaceKind::Graph => {
+            SurfaceKind::Search | SurfaceKind::Graph | SurfaceKind::Agents => {
                 let Some(key) = self.dock_thread_key() else {
                     return;
                 };
@@ -1154,6 +1154,15 @@ impl ChatApp {
                 })
                 .is_some();
         let mut offers = Vec::new();
+        if !self.subagents.is_empty() {
+            offers.push(SurfaceOffer {
+                kind: SurfaceKind::Agents,
+                label: "Agents",
+                description: "Follow subagents and background tasks.",
+                icon: || Icon::new(IconName::Bot),
+                disabled: None,
+            });
+        }
         if plan_available {
             offers.push(SurfaceOffer {
                 kind: SurfaceKind::Plan,
@@ -1544,6 +1553,7 @@ impl ChatApp {
                     .into_any_element(),
             },
             SurfaceKind::Plan => self.render_dock_plan(cx),
+            SurfaceKind::Agents => self.render_dock_agents(cx),
         }
     }
 
@@ -1744,6 +1754,7 @@ fn surface_title(surface: &RightPanelSurface) -> SharedString {
         RightPanelSurface::Plan { .. } => "Plan".into(),
         RightPanelSurface::Graph { .. } => "Graph".into(),
         RightPanelSurface::Devices { .. } => "Devices".into(),
+        RightPanelSurface::Agents { .. } => "Agents".into(),
         RightPanelSurface::Preview { .. } => "Browser".into(),
         RightPanelSurface::Terminal {
             active_terminal_id, ..
@@ -1765,6 +1776,7 @@ fn surface_icon(surface: &RightPanelSurface) -> Icon {
         SurfaceKind::Plan => Icon::new(IconName::BookOpen),
         SurfaceKind::Graph => Icon::new(IconName::Network),
         SurfaceKind::Devices => Icon::new(IconName::Globe),
+        SurfaceKind::Agents => Icon::new(IconName::Bot),
         SurfaceKind::Preview => Icon::new(IconName::Globe),
         SurfaceKind::Terminal => Icon::new(IconName::SquareTerminal),
         SurfaceKind::File => Icon::new(IconName::File),

@@ -51,6 +51,7 @@ mod review_comments;
 mod right_panel;
 mod sidebar;
 mod sidebar_beta;
+mod subagents_ui;
 mod terminal_contexts;
 mod terminal_drawer;
 mod terminal_links;
@@ -323,6 +324,13 @@ pub struct ChatApp {
     /// `deriveWorkLogEntries`: started/context-window rows dropped, tool
     /// lifecycle merged) — rebuilt with the timeline.
     work_entries: Vec<WorkLogEntry>,
+    /// Subagents and background tasks, rebuilt with the timeline; drawn as
+    /// cards at their launching tool call and in the dock's Agents surface.
+    subagents: Vec<vitre_state::subagents::Subagent>,
+    /// Agent cards expanded in the dock (timeline cards use `expanded_work_entries`).
+    expanded_dock_agents: HashSet<String>,
+    /// Task ids with a stop request in flight.
+    stopping_subagents: HashSet<String>,
     /// Side tables for the non-`Copy` timeline row kinds.
     work_toggles: Vec<WorkToggleData>,
     turn_folds: Vec<TurnFoldData>,
@@ -2028,6 +2036,7 @@ fn row_content_hash(
     turn_folds: &[TurnFoldData],
     expanded_plans: &HashSet<String>,
     workspace_root: Option<&str>,
+    subagents: &[vitre_state::subagents::Subagent],
 ) -> u64 {
     let mut hasher = DefaultHasher::new();
     match row {
@@ -2087,6 +2096,13 @@ fn row_content_hash(
             };
             1u8.hash(&mut hasher);
             entry.id.hash(&mut hasher);
+            if let Some(tool_call_id) = entry.tool_call_id.as_deref() {
+                let agents: Vec<&vitre_state::subagents::Subagent> = subagents
+                    .iter()
+                    .filter(|agent| agent.tool_use_id.as_deref() == Some(tool_call_id))
+                    .collect();
+                subagents_ui::hash_agents(&agents, expanded_work_entries, &mut hasher);
+            }
             work_log::work_entry_heading(entry).hash(&mut hasher);
             work_log::work_entry_preview(entry).hash(&mut hasher);
             let expanded = expanded_work_entries.contains(&entry.id);
@@ -2427,6 +2443,9 @@ impl ChatApp {
             reverting: false,
             expanded_work_entries: HashSet::new(),
             work_entries: Vec::new(),
+            subagents: Vec::new(),
+            expanded_dock_agents: HashSet::new(),
+            stopping_subagents: HashSet::new(),
             work_toggles: Vec::new(),
             turn_folds: Vec::new(),
             expanded_turn_ids: HashSet::new(),
@@ -5833,6 +5852,8 @@ impl ChatApp {
             self.pending_timeline_anchor = None;
             self.revert_turn_counts = HashMap::new();
             self.work_entries = Vec::new();
+            self.subagents = Vec::new();
+            self.stopping_subagents.clear();
             self.work_toggles = Vec::new();
             self.turn_folds = Vec::new();
             self.working_tick = None;
@@ -5896,6 +5917,17 @@ impl ChatApp {
             .into_iter()
             .filter(|entry| !conversation_status::infrastructure_activity(&entry.kind))
             .collect();
+        self.subagents = vitre_state::subagents::derive_subagents(&view.activities);
+        // A stop is settled once the provider reports the agent's end.
+        let ended: Vec<String> = self
+            .subagents
+            .iter()
+            .filter(|agent| !agent.status.is_active())
+            .map(|agent| agent.task_id.clone())
+            .collect();
+        for task_id in ended {
+            self.stopping_subagents.remove(&task_id);
+        }
         let running_turn_id: Option<String> = view
             .session
             .as_ref()
@@ -6028,6 +6060,7 @@ impl ChatApp {
                     &self.turn_folds,
                     &self.expanded_plans,
                     workspace_root.as_deref(),
+                    &self.subagents,
                 )
             })
             .collect();
@@ -6107,6 +6140,7 @@ impl ChatApp {
                     &self.turn_folds,
                     &self.expanded_plans,
                     workspace_root.as_deref(),
+                    &self.subagents,
                 )
             });
         if let Some(hash) = hash {
@@ -6722,6 +6756,13 @@ impl ChatApp {
                     let Some(entry) = self.work_entries.get(entry_index) else {
                         return div().into_any_element();
                     };
+                    // A tool call that launched subagents renders as their cards.
+                    if let Some(tool_call_id) = entry.tool_call_id.as_deref() {
+                        let agents = self.subagents_for_tool_call(tool_call_id);
+                        if !agents.is_empty() {
+                            return self.render_subagent_cards(index, &agents, cx);
+                        }
+                    }
                     let heading = work_log::work_entry_heading(entry);
                     let preview = work_log::work_entry_preview(entry)
                         .filter(|preview| !preview.eq_ignore_ascii_case(&heading));
@@ -7009,6 +7050,7 @@ impl ChatApp {
                             format!("Working for {}", work_log::format_duration(elapsed))
                         })
                         .unwrap_or_else(|| "Working…".into());
+                    let agents = self.active_subagent_count();
                     (h_flex()
                         .gap_1p5()
                         .items_center()
@@ -7025,7 +7067,33 @@ impl ChatApp {
                                 .text_size(px(11.))
                                 .text_color(cx.theme().muted_foreground.opacity(0.7))
                                 .child(SharedString::from(label)),
-                        ))
+                        )
+                        // Running subagents, linking to the dock's Agents surface.
+                        .when(agents > 0, |row| {
+                            row.child(
+                                h_flex()
+                                    .id("working-agents")
+                                    .gap_1()
+                                    .items_center()
+                                    .cursor_pointer()
+                                    .text_size(px(11.))
+                                    .text_color(cx.theme().muted_foreground.opacity(0.7))
+                                    .hover(|style| style.text_color(cx.theme().foreground))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.open_workspace_surface(
+                                            vitre_state::right_panel::SurfaceKind::Agents,
+                                            window,
+                                            cx,
+                                        );
+                                    }))
+                                    .child("·")
+                                    .child(Icon::new(IconName::Bot).size_3())
+                                    .child(SharedString::from(format!(
+                                        "{agents} agent{} running",
+                                        if agents == 1 { "" } else { "s" }
+                                    ))),
+                            )
+                        }))
                     .into_any_element()
                 }
             }

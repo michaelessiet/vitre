@@ -11,6 +11,7 @@
 | Edit settings or submit a form         | Shared input/form controls in the existing settings/dialog layout | [settings/forms.rs](../../crates/vitre-app/src/settings/forms.rs)                                                              |
 | Explain an action or report its result | Shared tooltip or notification                                    | [polish.rs](../../crates/vitre-app/src/chat/polish.rs)                                                                         |
 | Keep work alongside chat               | Dock surface with the shared tab strip                            | [right_panel.rs](../../crates/vitre-app/src/chat/right_panel.rs)                                                               |
+| Follow a subagent or background task   | Agent card (inline and in the Agents dock surface)                | [subagents_ui.rs](../../crates/vitre-app/src/chat/subagents_ui.rs)                                                             |
 
 ## Searchable picker
 
@@ -84,6 +85,30 @@ buttons that need an active connection stay disabled during startup.
 The chat composer owns typing whenever it is focused. Embedded native views must
 release keyboard focus when a picker or text input is selected. Verify this in
 the native application because a static image cannot establish input routing.
+
+## Agent cards
+
+A subagent or background task is one card, drawn in place of the tool call
+that launched it and again in the dock's **Agents** surface. State comes from
+`vitre_state::subagents`.
+
+**Anatomy:** outline icon (`Bot` for an agent, terminal for a background
+task) → title (`Type · task`) over a muted meta line (status glyph, status,
+elapsed, tools, tokens) → trailing extra-small ghost **Stop** while active →
+chevron. One muted live line sits under the header: the small-model summary
+while running, the result once finished. Several agents launched by one call
+stack under a quiet `Running N of M agents` label.
+
+**Expanded:** the task prompt, then the transcript on the work-row guide line
+(`border-l`, `ml_6`): text and reasoning as short labelled paragraphs, tool
+calls as icon + name + mono detail + result glyph. Only the latest steps show;
+`Show N earlier steps` reveals the rest.
+
+**States:** Stop changes to a disabled **Stopping…** until the provider
+reports the end; a failed stop request restores the button and reports the
+error. The Agents surface splits **Running** from **Finished** and has an empty
+state. Colors are semantic: primary while running, warning when queued or
+paused, success, danger, and muted when stopped.
 
 ## Inline visuals
 

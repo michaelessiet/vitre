@@ -45,6 +45,8 @@ pub enum SurfaceKind {
     Search,
     Graph,
     Devices,
+    /// The thread's subagents and background tasks.
+    Agents,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -79,6 +81,9 @@ pub enum RightPanelSurface {
         id: String,
     },
     Devices {
+        id: String,
+    },
+    Agents {
         id: String,
     },
     /// A browser tab. `resource_id` is the preview session's tab id; `None`
@@ -120,7 +125,8 @@ impl RightPanelSurface {
             | Self::Files { id }
             | Self::Search { id }
             | Self::Graph { id }
-            | Self::Devices { id } => id,
+            | Self::Devices { id }
+            | Self::Agents { id } => id,
             Self::Preview { id, .. } | Self::Terminal { id, .. } | Self::File { id, .. } => id,
         }
     }
@@ -133,6 +139,7 @@ impl RightPanelSurface {
             Self::Search { .. } => SurfaceKind::Search,
             Self::Graph { .. } => SurfaceKind::Graph,
             Self::Devices { .. } => SurfaceKind::Devices,
+            Self::Agents { .. } => SurfaceKind::Agents,
             Self::Preview { .. } => SurfaceKind::Preview,
             Self::Terminal { .. } => SurfaceKind::Terminal,
             Self::File { .. } => SurfaceKind::File,
@@ -147,6 +154,7 @@ impl RightPanelSurface {
             SurfaceKind::Search => "search",
             SurfaceKind::Graph => "graph",
             SurfaceKind::Devices => "devices",
+            SurfaceKind::Agents => "agents",
             _ => return None,
         };
         Some(match kind {
@@ -156,6 +164,7 @@ impl RightPanelSurface {
             SurfaceKind::Search => Self::Search { id: id.into() },
             SurfaceKind::Graph => Self::Graph { id: id.into() },
             SurfaceKind::Devices => Self::Devices { id: id.into() },
+            SurfaceKind::Agents => Self::Agents { id: id.into() },
             _ => unreachable!(),
         })
     }
