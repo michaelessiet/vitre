@@ -9,3 +9,6 @@ third_party/gpui-frost/gpui_macos/** linguist-vendored -whitespace
 third_party/gpui-frost/gpui_platform/** linguist-vendored -whitespace
 # Unified diffs use a single space for empty context lines.
 third_party/gpui-frost/scene-capture.patch whitespace=-blank-at-eol
+# Generated tree-sitter parser, vendored verbatim; see its VENDOR.md.
+third_party/tree-sitter-uni/src/parser.c linguist-generated -whitespace
+third_party/tree-sitter-uni/src/tree_sitter/** linguist-generated -whitespace
