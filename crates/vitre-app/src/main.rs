@@ -190,6 +190,8 @@ fn main() {
     app.run(move |cx: &mut App| {
         gpui_tokio::init(cx);
         gpui_component::init(cx);
+        // Before any editor, preview or chat code block asks for a grammar.
+        files::uni::register();
         glass::install_popup_effect(cx);
 
         // T3 parity: the Electron app renders in DM Sans (OFL, vendored).

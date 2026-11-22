@@ -85,6 +85,55 @@ fn defaults(language: &str) -> Vec<Snippet> {
             "func",
             "func ${1:Name}(${2:args}) ${3:error} {\n\t$0\n}",
         )],
+        // The Uni editor extensions' snippets, at `uni fmt`'s four spaces.
+        "uni" => &[
+            (
+                "Function",
+                "fn",
+                "fn ${1:name}(${2}): ${3:void} {\n    $0\n}",
+            ),
+            (
+                "Async function",
+                "async fn",
+                "async fn ${1:name}(${2}): ${3:Result<void>} {\n    $0\n}",
+            ),
+            (
+                "Exported function",
+                "export fn",
+                "export fn ${1:name}(${2}): ${3:void} {\n    $0\n}",
+            ),
+            ("Main entry point", "main", "fn main() {\n    $0\n}"),
+            (
+                "Struct",
+                "struct",
+                "struct ${1:Name} {\n    ${2:field}: ${3:i64}\n\n    fn ${4:method}(self) {\n        $0\n    }\n}",
+            ),
+            (
+                "Enum",
+                "enum",
+                "enum ${1:Name} {\n    ${2:First}\n    ${3:Second}(${4:value}: ${5:i64})\n}",
+            ),
+            (
+                "Match statement",
+                "match",
+                "match ${1:value} {\n    ${2:Pattern} => ${3:result}\n    _ => $0\n}",
+            ),
+            (
+                "Test block",
+                "test",
+                "test \"${1:what it checks}\" {\n    assert $0\n}",
+            ),
+            (
+                "For loop",
+                "for",
+                "for ${1:item} in ${2:items} {\n    $0\n}",
+            ),
+            (
+                "If const",
+                "if const",
+                "if const ${1:value} = ${2:optional} {\n    $0\n}",
+            ),
+        ],
         _ => &[("TODO comment", "todo", "${1:TODO}: $0")],
     };
     rows.iter()
@@ -241,6 +290,50 @@ impl FilesPanel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every Uni built-in, with its defaults in place, is a Uni program.
+    #[test]
+    fn uni_snippets_expand_to_valid_source() {
+        use gpui_component::highlighter::SyntaxHighlighter;
+        uni::register();
+        let placeholder = regex::Regex::new(r"\$\{\d+(?::([^}]*))?\}").unwrap();
+        let items = defaults(&language_for_path("src/main.uni"));
+        for prefix in [
+            "fn",
+            "async fn",
+            "export fn",
+            "main",
+            "struct",
+            "enum",
+            "match",
+            "test",
+            "for",
+            "if const",
+        ] {
+            let item = items
+                .iter()
+                .find(|item| item.prefix == prefix)
+                .unwrap_or_else(|| panic!("missing Uni snippet {prefix:?}"));
+            let source = placeholder
+                .replace_all(&item.body, "$1")
+                .replace("$0", "true");
+            assert!(!source.contains('\t'), "{prefix}: Uni indents with spaces");
+            // Statements only parse inside a function.
+            let source = if source.starts_with("match")
+                || source.starts_with("for")
+                || source.starts_with("if")
+            {
+                format!("fn probe(value: i64, items: List<i64>, optional: i64) {{\n{source}\n}}\n")
+            } else {
+                format!("{source}\n")
+            };
+            let mut parser = SyntaxHighlighter::try_new(uni::LANGUAGE).unwrap();
+            parser.update(None, &ropey::Rope::from(source.as_str()), None);
+            let root = parser.tree().unwrap().root_node();
+            assert!(!root.has_error(), "{prefix}: {source}\n{}", root.to_sexp());
+        }
+    }
+
     #[test]
     fn custom_snippets_filter_language_and_accept_multiline_bodies() {
         let items = custom_snippets(r#"{"test":{"prefix":"t","scope":"rust,tsx","body":["${1:name}","$0"]},"python":{"scope":"python","body":"def $0"}}"#, "tsx").unwrap();
@@ -253,6 +346,7 @@ mod tests {
             ("main.rs", "Function"),
             ("main.py", "Function"),
             ("App.tsx", "Export React component"),
+            ("main.uni", "If const"),
         ] {
             assert!(
                 defaults(&language_for_path(path))

@@ -1885,7 +1885,7 @@ fn infer_attachment_mime_type(name: &str) -> &'static str {
         Some("json") => "application/json",
         Some("jsx") => "text/jsx",
         Some("kt") => "text/x-kotlin",
-        Some("log") | Some("txt") | Some("svelte") | Some("vue") => "text/plain",
+        Some("log") | Some("txt") | Some("svelte") | Some("vue") | Some("uni") => "text/plain",
         Some("md") | Some("markdown") => "text/markdown",
         Some("pdf") => "application/pdf",
         Some("php") => "text/x-php",

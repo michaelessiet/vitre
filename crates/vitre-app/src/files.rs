@@ -20,6 +20,7 @@ mod language_tools;
 mod language_verification;
 mod refactor;
 mod snippets;
+pub(crate) mod uni;
 pub use extras::{FileContext, FilesEvent};
 pub(crate) mod commands;
 #[cfg(test)]
@@ -3761,6 +3762,7 @@ mod tests {
     #[test]
     fn language_for_path_uses_extension_and_known_names() {
         assert_eq!(language_for_path("src/main.rs"), "rs");
+        assert_eq!(language_for_path("examples/01_hello.UNI"), "uni");
         assert_eq!(language_for_path("a/b/Component.TSX"), "tsx");
         assert_eq!(language_for_path("Makefile"), "make");
         assert_eq!(language_for_path("LICENSE"), "text");

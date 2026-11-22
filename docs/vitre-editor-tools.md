@@ -34,6 +34,15 @@ stale responses are discarded. Availability depends on the configured language
 server. The bundled TypeScript service supports TS/JS/TSX/JSX; other semantic
 services need an installed/configured server.
 
+Uni (`.uni`) is highlighted by a vendored Tree-sitter grammar
+(`third_party/tree-sitter-uni`) that Vitre registers at start-up, in the
+editor, quick-search preview and fenced `uni` code blocks. When no configured
+server claims `.uni`, the sidecar starts the compiler's own server, `uni lsp`,
+from `PATH` (language id `uni`); diagnostics, completion, hover, navigation,
+rename, code actions and Shift+Alt+F formatting (`uni fmt` through the server)
+then work as for any other language. Without `uni` installed the files still
+highlight and the server reports as not installed.
+
 Document changes follow the server's negotiated full/incremental sync mode.
 The incremental replacement range uses the previous buffer's UTF-16 extent,
 including CRLF and emoji. This fixes a TypeScript server crash when snippets
@@ -76,7 +85,7 @@ literals and choice placeholders (initial choice). Tab/Shift+Tab select stops;
 edits to mirrored placeholders update together. Multi-line insertion inherits
 indentation. Nested placeholders, variables, regex transformations and a choice
 selection UI are not implemented; unsupported expressions produce an error.
-Scope names use native grammar IDs, e.g. `tsx`, `typescript`, `javascript`, `rust`.
+Scope names use native grammar IDs, e.g. `tsx`, `typescript`, `javascript`, `rust`, `uni`.
 
 Multiple selections support typing, paste, deletion and atomic undo. Copy/cut
 join selected text with newlines; paste repeats the clipboard at every cursor.
