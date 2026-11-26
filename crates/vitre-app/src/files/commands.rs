@@ -231,7 +231,7 @@ fn transform(text: &str, selection: Range<usize>, path: &str, command: EditLines
                 "css" | "scss" | "sass" => ("/*", " */"),
                 "rs" | "ts" | "mts" | "cts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "go" | "c"
                 | "h" | "cpp" | "cc" | "cxx" | "hh" | "hxx" | "hpp" | "java" | "kt" | "kts"
-                | "ktm" | "swift" | "cs" | "dart" | "jsonc" => ("//", ""),
+                | "ktm" | "swift" | "cs" | "dart" | "jsonc" | "uni" => ("//", ""),
                 // Don't introduce invalid comments into JSON or unknown formats.
                 _ => return None,
             };
@@ -526,6 +526,7 @@ mod tests {
             ("a.py", "# value"),
             ("Main.kt", "// value"),
             ("build.gradle.kts", "// value"),
+            ("main.uni", "// value"),
             ("a.sql", "-- value"),
             ("a.css", "/* value */"),
             ("a.html", "<!-- value -->"),

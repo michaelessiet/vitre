@@ -1,0 +1,27 @@
+[package]
+name = "tree-sitter-uni"
+description = "Uni grammar for tree-sitter (vendored; see VENDOR.md)"
+version = "0.1.0"
+authors = ["The Uni authors"]
+license = "MIT"
+repository = "https://github.com/michaelessiet/uni-lang"
+edition = "2021"
+publish = false
+autoexamples = false
+
+build = "bindings/rust/build.rs"
+
+[lib]
+path = "bindings/rust/lib.rs"
+
+[dependencies]
+tree-sitter-language = "0.1"
+
+[build-dependencies]
+# The workspace resolves `cc 1.4` (gpui's `embed-resource` requires it).
+cc = "1.2"
+
+[dev-dependencies]
+# Same major line as the vendored gpui-component fork, so the tests load the
+# grammar with the runtime the editor highlights with.
+tree-sitter = "0.26"

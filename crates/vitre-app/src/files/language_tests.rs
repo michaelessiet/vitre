@@ -99,6 +99,8 @@ fn language_support_common_extensions_and_named_files_resolve() {
 
 #[test]
 fn language_support_bundled_queries_compile() {
+    // Uni is registered by the app rather than built into the registry.
+    super::uni::register();
     let registry = LanguageRegistry::singleton();
     for language in registry.languages() {
         let config = registry.language(&language).unwrap();
@@ -179,4 +181,80 @@ fn language_support_kotlin_source_and_scripts() {
             assert_token_style(&language, source, token, category);
         }
     }
+}
+
+const UNI_SOURCE: &str = "// A service\nimport math\n\n/// What to say.\nstruct Greeting {\n    name: str\n\n    fn text(self): str {\n        return \"Hello, {self.name}\"\n    }\n}\n\nenum Mood { Calm, Loud }\n\npub fn shout(name: str): str {\n    return name\n}\n\nexport fn greet(name: str, times: i64): Greeting {\n    const count = 42\n    return Greeting { name: name }\n}\n\ntest \"greets by name\" {\n    assert greet(\"Ada\", 1).text() == \"Hello, Ada\"\n}\n";
+
+#[test]
+fn language_support_uni_source_and_fences() {
+    super::uni::register();
+    let registry = LanguageRegistry::singleton();
+    // A path's extension and a Markdown fence's info string both arrive as "uni".
+    for name in [
+        language_for_path("examples/01_hello.uni"),
+        language_for_path(r"src\Main.UNI"),
+        "uni".to_string(),
+    ] {
+        let config = registry
+            .language(&name)
+            .unwrap_or_else(|| panic!("missing grammar for {name}"));
+        assert_eq!(config.name.as_ref(), "uni");
+        assert!(config.has_grammar());
+        assert!(!config.highlights.is_empty());
+        for (token, category) in [
+            ("// A service", "comment"),
+            ("/// What to say.", "comment"),
+            ("import", "keyword"),
+            ("struct", "keyword"),
+            ("Greeting", "type"),
+            ("fn", "keyword"),
+            ("text", "function"),
+            ("return", "keyword"),
+            ("\"Hello", "string"),
+            ("enum", "keyword"),
+            // Both spellings of the visibility modifier.
+            ("pub", "keyword"),
+            ("export", "keyword"),
+            ("greet", "function"),
+            ("i64", "type"),
+            ("const", "keyword"),
+            ("42", "number"),
+            ("test", "keyword"),
+            ("assert", "keyword"),
+            ("\"Ada\"", "string"),
+        ] {
+            assert_token_style(&name, UNI_SOURCE, token, category);
+        }
+    }
+}
+
+/// A capture the theme has no key for paints nothing, silently: every name in
+/// the Uni query must be a theme key or a dotted child of one.
+#[test]
+fn language_support_uni_captures_are_theme_categories() {
+    let keys = serde_json::to_value(gpui_component::highlighter::SyntaxColors::default()).unwrap();
+    let keys = keys.as_object().expect("syntax colors serialize as a map");
+    assert!(keys.contains_key("keyword") && keys.contains_key("comment.doc"));
+    let query = include_str!("../../languages/uni/highlights.scm");
+    let capture = regex::Regex::new(r"@([a-z_]+(?:\.[a-z_]+)*)").unwrap();
+    let mut seen = 0;
+    for line in query
+        .lines()
+        .filter(|line| !line.trim_start().starts_with(';'))
+    {
+        for name in capture
+            .captures_iter(line)
+            .map(|found| found[1].to_string())
+        {
+            seen += 1;
+            let mut candidate = name.as_str();
+            while !keys.contains_key(candidate) {
+                candidate = candidate
+                    .rsplit_once('.')
+                    .unwrap_or_else(|| panic!("@{name} is not a theme category"))
+                    .0;
+            }
+        }
+    }
+    assert!(seen > 50, "the query lost its captures");
 }

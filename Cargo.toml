@@ -11,6 +11,7 @@ members = [
   "third_party/ztracing",
   "third_party/ztracing-macro",
   "third_party/bezel-orbs",
+  "third_party/tree-sitter-uni",
 ]
 default-members = ["crates/vitre-app"]
 # Vendored fork with its own inner workspace (see third_party/gpui-component/VENDOR.md);
@@ -95,6 +96,10 @@ gpui-wry = { path = "third_party/gpui-component/crates/webview" }
 gpui-component-assets = { path = "third_party/gpui-component/crates/assets" }
 gpui-base = { path = "third_party/gpui-component/crates/base" }
 vitre-bezel-orbs = { path = "third_party/bezel-orbs" }
+# Grammar for the Uni language (MIT), vendored because it is not yet on the
+# default branch of michaelessiet/uni-lang; see its VENDOR.md. Registered with
+# the highlighter at start-up rather than added to the gpui-component fork.
+tree-sitter-uni = { path = "third_party/tree-sitter-uni" }
 raw-window-handle = "0.6.2"
 # Same wry fork gpui-wry builds against; needed to construct the child webview.
 wry = { version = "0.53.3", package = "lb-wry" }

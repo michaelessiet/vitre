@@ -20,10 +20,10 @@ describe("LanguageServers", () => {
   });
 
   describe("resolveRegistry", () => {
-    it("includes the optional Kotlin default when no custom servers are configured", () => {
+    it("includes the optional Kotlin and Uni defaults when no custom servers are configured", () => {
       const registry = resolveRegistry([]);
       expect(new Set(registry.supportedExtensions)).toEqual(
-        new Set([...BUILTIN_EXTENSIONS, ".kt", ".kts"]),
+        new Set([...BUILTIN_EXTENSIONS, ".kt", ".kts", ".uni"]),
       );
       expect(registry.bindingForPath("src/index.ts")?.languageId).toBe("typescript");
       expect(registry.bindingForPath("README.md")).toBe(null);
@@ -32,6 +32,34 @@ describe("LanguageServers", () => {
           languageId: "kotlin",
           server: { command: "kotlin-language-server", args: [], bundled: false },
         });
+      }
+    });
+
+    it("binds Uni sources to the compiler's own language server", () => {
+      const registry = resolveRegistry([]);
+      for (const path of ["examples/01_hello.uni", "src/Main.UNI"]) {
+        expect(registry.bindingForPath(path)).toMatchObject({
+          languageId: "uni",
+          server: { serverId: "uni", command: "uni", args: ["lsp"], bundled: false },
+        });
+      }
+      expect(registry.bindingForPath("uni.toml")).toBe(null);
+    });
+
+    it("preserves a custom Uni server command and its extension ownership", () => {
+      for (const serverId of ["uni", "uni-nightly"]) {
+        const registry = resolveRegistry([
+          {
+            serverId,
+            displayName: "Custom Uni",
+            command: "/opt/uni/bin/uni",
+            args: ["lsp", "--log"],
+            languageId: "uni",
+            extensions: [".uni"],
+          },
+        ]);
+        expect(registry.bindingForPath("main.uni")?.server.command).toBe("/opt/uni/bin/uni");
+        expect(registry.servers.filter((server) => server.command === "uni")).toHaveLength(0);
       }
     });
 
