@@ -237,9 +237,19 @@ impl DraftStore {
     }
 }
 
+/// The composer shell's 22px radius inside its 1px border.
+const SUGGESTION_SHELL_RADIUS: gpui::Pixels = px(21.);
+/// Concentric with the shell: rows sit `p_1p5` (6px) in from its 21px inner
+/// edge, so 21 - 6 keeps the gap around the highlight even at the corners.
+const SUGGESTION_ROW_RADIUS: gpui::Pixels = px(15.);
+
 impl ChatApp {
+    /// `at_top` rounds the popover's top to the composer shell's radius:
+    /// gpui clips `overflow_hidden` to a rectangle, so a square background
+    /// would poke out past the shell's rounded corners.
     pub(super) fn render_composer_suggestions(
         &self,
+        at_top: bool,
         cx: &mut Context<Self>,
     ) -> (Option<AnyElement>, Option<AnyElement>) {
         // @-mention autocomplete rows (top of the composer shell). Rows are
@@ -251,10 +261,12 @@ impl ChatApp {
             .map(|mention| {
                 let mut list = v_flex()
                     .w_full()
-                    .py_1()
+                    .p_1p5()
+                    .gap_0p5()
                     .border_b_1()
                     .border_color(cx.theme().border)
-                    .bg(cx.theme().secondary);
+                    .bg(cx.theme().secondary)
+                    .when(at_top, |list| list.rounded_t(SUGGESTION_SHELL_RADIUS));
                 if mention.loading {
                     list = list.child(
                         h_flex()
@@ -276,6 +288,7 @@ impl ChatApp {
                     list = list.child(
                         h_flex()
                             .id(("mention", index))
+                            .rounded(SUGGESTION_ROW_RADIUS)
                             .px_3()
                             .py_1()
                             .gap_2()
@@ -300,17 +313,25 @@ impl ChatApp {
                 list.into_any_element()
             });
         let command_list: Option<gpui::AnyElement> = self.composer_menu.as_ref().map(|menu| {
+            // A plain gpui scroll container: the gpui-component `Scrollable`
+            // wrapper sizes its scroll area at 100% of an auto-height parent,
+            // so inside the composer shell it clipped at `max_h` without ever
+            // scrolling. Rows must stay direct children so `scroll_to_item`
+            // indices match `menu.selected`, and must not shrink: their
+            // `truncate()` labels zero the flex min-height, so the column
+            // would squash them to fit `max_h` instead of overflowing.
             let mut list = v_flex()
+                .id("composer-command-list")
+                .track_scroll(&self.composer_menu_scroll)
                 .w_full()
                 .max_h(px(300.))
-                .overflow_y_scrollbar()
-                .py_1()
-                .border_b_1()
-                .border_color(cx.theme().border)
-                .bg(cx.theme().secondary);
+                .overflow_y_scroll()
+                .p_1p5()
+                .gap_0p5();
             if menu.items.is_empty() {
                 list = list.child(
                     div()
+                        .flex_shrink_0()
                         .px_3()
                         .py_2()
                         .text_xs()
@@ -355,6 +376,8 @@ impl ChatApp {
                 list = list.child(
                     h_flex()
                         .id(("composer-command", index))
+                        .flex_shrink_0()
+                        .rounded(SUGGESTION_ROW_RADIUS)
                         .px_3()
                         .py_1p5()
                         .gap_2()
@@ -388,7 +411,16 @@ impl ChatApp {
                         })),
                 );
             }
-            list.into_any_element()
+            div()
+                .relative()
+                .w_full()
+                .border_b_1()
+                .border_color(cx.theme().border)
+                .bg(cx.theme().secondary)
+                .when(at_top, |wrapper| wrapper.rounded_t(SUGGESTION_SHELL_RADIUS))
+                .child(list)
+                .vertical_scrollbar(&self.composer_menu_scroll)
+                .into_any_element()
         });
         (mention_list, command_list)
     }
@@ -470,7 +502,7 @@ impl ChatApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let (mentions, commands) = self.render_composer_suggestions(cx);
+        let (mentions, commands) = self.render_composer_suggestions(true, cx);
         let projects = self
             .shell
             .snapshot
